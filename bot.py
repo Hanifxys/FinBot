@@ -186,6 +186,11 @@ async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    
+    if not ocr.enabled:
+        await update.message.reply_text("Maaf, fitur baca struk (OCR) sedang dinonaktifkan di server untuk menghemat memori. Kamu bisa catat manual ya!")
+        return
+
     user_db = db.get_or_create_user(user_id, update.effective_user.username)
     
     # Download photo

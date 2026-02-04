@@ -1,16 +1,21 @@
-import easyocr
 import re
 import os
 
 class OCRProcessor:
     def __init__(self):
-        # Initialize with Indonesian and English support
-        self.reader = easyocr.Reader(['id', 'en'])
+        self.enabled = False
+        try:
+            import easyocr
+            self.reader = easyocr.Reader(['id', 'en'])
+            self.enabled = True
+        except ImportError:
+            print("OCR disabled: easyocr not installed")
 
     def process_receipt(self, image_path):
-        """
-        Processes an image and returns the total amount found.
-        """
+        if not self.enabled:
+            return 0.0
+        
+        import easyocr
         results = self.reader.readtext(image_path)
         full_text = " ".join([res[1] for res in results])
         
