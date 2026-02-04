@@ -39,7 +39,7 @@ jobs:
     
     - name: Install Koyeb CLI
       run: |
-        curl https://app.koyeb.com/static/koyeb_install.sh | sh
+        curl -fsSL https://raw.githubusercontent.com/koyeb/koyeb-cli/master/install.sh | sh
         echo "$HOME/.koyeb/bin" >> $GITHUB_PATH
 
     - name: Trigger Koyeb Redeploy
