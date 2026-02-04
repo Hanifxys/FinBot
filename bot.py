@@ -53,18 +53,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_db = db.get_or_create_user(user_id, update.effective_user.username)
     
+    # AI-Powered Intent Detection & Text Normalization
+    intent, confidence, suggestions = nlp.detect_intent(text)
+    
+    if intent == "greeting":
+        msg = f"Halo {update.effective_user.first_name}! Ada yang bisa kubantu catat hari ini?"
+        keyboard = [[InlineKeyboardButton(s, callback_data=f"suggest_{s.lower()}") for s in suggestions]]
+        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+        
+    elif intent == "help":
+        msg = "Aku bisa bantu catat pengeluaran (misal: 'kopi 25rb'), set budget, atau buat laporan bulanan."
+        keyboard = [[InlineKeyboardButton(s, callback_data=f"suggest_{s.lower()}") for s in suggestions]]
+        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
     # NLP Processing
-    amount, category, type_ = nlp.process_text(text)
-    merchant = nlp.extract_merchant(text)
+    result = nlp.process_text(text)
     
     if amount > 0:
-        # Store temporary transaction data in context for confirmation
-        context.user_data['pending_tx'] = {
-            'amount': amount,
-            'category': category,
-            'merchant': merchant,
-            'type': type_
-        }
+        # Determine merchant (description minus amount)
+        merchant = nlp.extract_merchant(text)
+        
+        context.user_data['pending_tx'] = {'amount': amount, 'category': category, 'merchant': merchant}
         
         # Principle 4.1: Clean Transaction Detection
         msg = f"Rp{amount:,.0f} · {category}\n{merchant if merchant else ''}"
@@ -78,22 +89,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard))
     else:
-        # Handle non-transaction queries (report, budget, analysis)
-        if any(kw in text.lower() for kw in ["laporan", "rekap", "summary"]):
-            await send_report(update, context)
-        elif any(kw in text.lower() for kw in ["budget", "anggaran", "sisa"]):
-            # Get general budget summary
+        # Handle non-transaction queries or unknown input
+        if intent == "query_budget":
             await send_budget_summary(update, context)
-        elif any(kw in text.lower() for kw in ["analisis", "saran", "tips"]):
-            insight = analyzer.analyze_patterns(user_db.id)
-            score = analyzer.calculate_health_score(user_db.id)
-            if insight:
-                await update.message.reply_text(f"{insight}\n\nSkor bulan ini: {score}/100")
-            else:
-                await update.message.reply_text("Belum ada data cukup untuk aku analisis.")
+        elif intent == "get_report":
+            await send_report(update, context)
         else:
-            # Silence if not recognized (Principle #1)
-            pass
+            # Final fallback: Polite rejection for truly unknown input
+            msg = "Maaf, aku belum paham maksudmu. Coba ketik 'halo' atau langsung catat (misal: 'kopi 25rb')."
+            await update.message.reply_text(msg)
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -175,6 +179,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
         ]
         await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
+        
+    elif action.startswith("suggest_"):
+        suggested_cmd = action.split("_")[1]
+        if suggested_cmd == "/setgaji":
+            await query.edit_message_text("Ketik `/setgaji [jumlah]` untuk mulai. Contoh: `/setgaji 7.5jt`", parse_mode='Markdown')
+        elif suggested_cmd == "/setbudget":
+            await query.edit_message_text("Ketik `/setbudget [Kategori] [Jumlah]` untuk atur limit.", parse_mode='Markdown')
+        elif suggested_cmd == "laporan":
+            await send_report(update, context)
+        else:
+            await query.edit_message_text(f"Kamu memilih: {suggested_cmd}")
 
 async def send_budget_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id

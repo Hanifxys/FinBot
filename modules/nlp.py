@@ -76,22 +76,65 @@ class NLPProcessor:
 
         return {"intent": "unknown"}
 
-    def _extract_amount(self, text):
-        # Matches 50rb, 50k, 50000, 50.000
-        # 1. Look for numbers followed by 'rb' or 'k'
-        match_rb = re.search(r'(\d+)\s*(rb|k)', text)
-        if match_rb:
-            return float(match_rb.group(1)) * 1000
+    def normalize_text(self, text):
+        """
+        Normalizes informal text like '2jt' -> '2000000', '50rb' -> '50000', etc.
+        Also handles slang and common abbreviations.
+        """
+        text = text.lower().strip()
         
-        # 2. Look for plain numbers with optional dots
-        match_num = re.findall(r'(\d+[\d\.]*)', text)
+        # 1. Normalize Million (jt -> 000000)
+        text = re.sub(r'(\d+)\s*jt', lambda m: str(int(m.group(1)) * 1000000), text)
+        
+        # 2. Normalize Thousand (rb/k -> 000)
+        text = re.sub(r'(\d+)\s*(rb|k)', lambda m: str(int(m.group(1)) * 1000), text)
+        
+        # 3. Handle 'setengah' or 'set' for fractions (optional, but good for AI feel)
+        text = text.replace('setengah', '0.5').replace('set ', '0.5 ')
+        
+        return text
+
+    def detect_intent(self, text):
+        """
+        Detects user intent and returns (intent_name, confidence, suggestions)
+        """
+        text = self.normalize_text(text)
+        
+        # Greeting Intent
+        if any(kw in text for kw in ["halo", "hi", "hai", "p", "siang", "pagi", "malam", "halo bot"]):
+            return "greeting", 1.0, ["/setgaji", "/setbudget", "Laporan"]
+
+        # Help Intent
+        if any(kw in text for kw in ["bantuan", "help", "tolong", "bisa apa", "cara pakai"]):
+            return "help", 1.0, ["/setgaji", "/setbudget", "Laporan"]
+
+        # Transaction Intent (already has amount)
+        amount = self._extract_amount(text)
+        if amount > 0:
+            return "add_transaction", 0.9, ["Simpan", "Edit", "Abaikan"]
+
+        # Query Budget Intent
+        if any(kw in text for kw in ["sisa", "budget", "anggaran", "limit", "sisa saldo"]):
+            return "query_budget", 0.8, ["Laporan", "Analisis"]
+
+        # Report Intent
+        if any(kw in text for kw in ["laporan", "report", "rekap", "pengeluaran saya"]):
+            return "get_report", 0.8, ["Mingguan", "Bulanan"]
+
+        return "unknown", 0.0, ["/setgaji", "kopi 25rb"]
+
+    def _extract_amount(self, text):
+        # 1. Normalize first to handle jt, rb, k
+        normalized = self.normalize_text(text)
+        
+        # 2. Look for numbers (including those with dots like 2.000.000)
+        match_num = re.findall(r'(\d+[\d\.]*)', normalized)
         if match_num:
-            # Get the one that looks most like an amount (usually the longest or last)
             for num in reversed(match_num):
                 cleaned = num.replace('.', '')
                 try:
                     val = float(cleaned)
-                    if val > 100: # Filter out small numbers
+                    if val >= 100: # Standard threshold
                         return val
                 except:
                     continue
