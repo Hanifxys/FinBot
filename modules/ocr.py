@@ -14,8 +14,8 @@ class OCRProcessor:
             try:
                 import easyocr
                 # Disable downloading inside the instance to prevent OOM
-                # We expect models to be pre-downloaded or cached
-                self._reader = easyocr.Reader(['id', 'en'], gpu=False, download_enabled=True)
+                # We pre-downloaded models in Dockerfile
+                self._reader = easyocr.Reader(['id', 'en'], gpu=False, download_enabled=False)
                 print("OCR Reader initialized (CPU mode)")
             except Exception as e:
                 print(f"OCR Reader Warning: {e}")
