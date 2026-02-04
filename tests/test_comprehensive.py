@@ -42,6 +42,29 @@ def test_nlp_intent_classification():
 
 def test_nlp_parsing_full():
     nlp = NLPProcessor()
+    
+    # Test process_text
+    amt, cat, typ = nlp.process_text("makan 50rb")
+    assert amt == 50000
+    assert cat == "Makanan"
+    assert typ == "expense"
+
+    amt2, cat2, typ2 = nlp.process_text("gaji 10jt")
+    assert amt2 == 10000000
+    assert cat2 == "Gaji"
+    assert typ2 == "income"
+
+    # Test parse_message
+    res = nlp.parse_message("sisa budget makan")
+    assert res["intent"] == "query_budget"
+    assert res["category"] == "Makanan"
+
+    res_report = nlp.parse_message("minta laporan")
+    assert res_report["intent"] == "get_report"
+
+    res_unknown = nlp.parse_message("apa ya")
+    assert res_unknown["intent"] == "unknown"
+
     # Test extract_transaction_data
     data = nlp.extract_transaction_data("beli kopi 25k")
     assert data["amount"] == 25000
@@ -52,6 +75,19 @@ def test_nlp_parsing_full():
     assert nlp.validate_edit("amount", "50rb")["valid"] is True
     assert nlp.validate_edit("category", "makan")["valid"] is True
     assert nlp.validate_edit("invalid", "something")["valid"] is False
+
+def test_nlp_llm_mock():
+    nlp = NLPProcessor()
+    nlp.groq_enabled = True
+    nlp.client = MagicMock()
+    
+    # Mock LLM response
+    mock_choice = MagicMock()
+    mock_choice.message.content = '{"intent": "ADD_TRANSACTION", "confidence": 0.85}'
+    nlp.client.chat.completions.create.return_value = MagicMock(choices=[mock_choice])
+    
+    result = nlp.classify_intent("beli sesuatu yang aneh")
+    assert result["intent"] == "ADD_TRANSACTION"
 
 def test_nlp_merchant_extraction():
     nlp = NLPProcessor()
@@ -98,6 +134,42 @@ def test_budget_manager_logic():
     assert "WARNING" in status
     assert "85%" in status
 
+    # Test 100% usage
+    budget_full = MagicMock(category="Makanan", limit_amount=1000000, current_usage=1000000)
+    db_mock.get_user_budgets.return_value = [budget_full]
+    status_full = bm.check_budget_status(1, "Makanan")
+    assert "LIMIT" in status_full
+
+    # Test detailed status
+    detailed = bm.get_detailed_budget_status(1, "Makanan")
+    assert "Limit: Rp 1,000,000" in detailed
+    
+    # Test detailed status empty
+    db_mock.get_user_budgets.return_value = []
+    detailed_empty = bm.get_detailed_budget_status(1, "Hiburan")
+    assert "Limit: Rp 0" in detailed_empty
+
+    # Test report generation
+    t1 = MagicMock(amount=50000, category="Makan", type="expense")
+    t2 = MagicMock(amount=100000, category="Gaji", type="income")
+    db_mock.get_monthly_report.return_value = [t1, t2]
+    report = bm.generate_report(1, "monthly")
+    assert "Laporan Keuangan" in report
+    assert "Makan: Rp 50,000" in report
+    assert "Gaji: Rp 100,000" in report
+
+    # Test report 7days and 30days
+    db_mock.get_sliding_window_transactions.return_value = [t1]
+    report_7d = bm.generate_report(1, "7days")
+    assert "7 Hari Terakhir" in report_7d
+    report_30d = bm.generate_report(1, "30days")
+    assert "30 Hari Terakhir" in report_30d
+    
+    # Test empty report
+    db_mock.get_monthly_report.return_value = []
+    report_empty = bm.generate_report(1, "monthly")
+    assert "Belum ada transaksi" in report_empty
+
     # Mock allocation recommendation
     msg, alloc = bm.get_allocation_recommendation(10000000)
     assert alloc["Kebutuhan Pokok"] == 5000000
@@ -113,12 +185,25 @@ def test_budget_manager_logic():
         db_mock.get_user_budgets.return_value = [budget_fast]
         burn_msg = bm.get_burn_rate(1, "Makanan")
         assert "lebih cepat" in burn_msg
+        
+        # Test burn rate normal
+        budget_normal = MagicMock(category="Makanan", limit_amount=1000000, current_usage=400000)
+        db_mock.get_user_budgets.return_value = [budget_normal]
+        assert bm.get_burn_rate(1, "Makanan") is None
+
+        # Test burn rate no budget
+        db_mock.get_user_budgets.return_value = []
+        assert bm.get_burn_rate(1, "Makanan") is None
 
 # 4. Comprehensive Expense Analyzer Tests
 def test_analyzer_insights_and_health():
     db_mock = MagicMock()
     analyzer = ExpenseAnalyzer(db_mock)
     
+    # Test patterns empty
+    db_mock.get_monthly_report.return_value = []
+    assert analyzer.analyze_patterns(1) == ""
+
     # Mock transactions for patterns
     # 60% spending at night
     t1 = MagicMock(amount=60000, category="Makanan", date=datetime(2026, 2, 5, 20, 0), type="expense")
@@ -132,6 +217,7 @@ def test_analyzer_insights_and_health():
     # Test health score
     db_mock.get_latest_income.return_value = MagicMock(amount=5000000)
     db_mock.get_user_budgets.return_value = [] # No over budget
+    db_mock.get_monthly_report.return_value = []
     score = analyzer.calculate_health_score(1)
     assert score == 100 # Perfect score for no over budget and no impulse
 
@@ -142,8 +228,15 @@ def test_analyzer_insights_and_health():
     # Impulse spending at night (-5 each)
     t_impulse = MagicMock(amount=60000, category="Makanan", date=datetime(2026, 2, 5, 23, 0), type="expense")
     db_mock.get_monthly_report.return_value = [t_impulse]
+    # Total expense > income (-20)
+    db_mock.get_latest_income.return_value = MagicMock(amount=10000)
+    
     score_low = analyzer.calculate_health_score(1)
     assert score_low < 100
+    
+    # Test health score no income
+    db_mock.get_latest_income.return_value = None
+    assert analyzer.calculate_health_score(1) == 50
 
 # 5. DB Handler Tests
 def test_db_handler_full():
