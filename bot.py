@@ -14,6 +14,7 @@ from modules.nlp import NLPProcessor
 from modules.budget import BudgetManager
 from modules.analysis import ExpenseAnalyzer
 from modules.rules import RuleEngine
+from modules.ai_engine import AIEngine
 from utils.visuals import VisualReporter
 
 # Logging setup
@@ -26,6 +27,7 @@ logging.basicConfig(
 db = DBHandler()
 ocr = OCRProcessor()
 nlp = NLPProcessor()
+ai = AIEngine()
 budget_mgr = BudgetManager(db)
 analyzer = ExpenseAnalyzer(db)
 rules = RuleEngine()
@@ -136,8 +138,13 @@ async def get_ai_insight(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_db = db.get_user(user_id)
     if not user_db: return
     
-    insight = analyzer.analyze_patterns(user_db.id)
-    await update.message.reply_text(insight, parse_mode='Markdown')
+    # 1. Get raw analytical data
+    raw_insight = analyzer.analyze_patterns(user_db.id)
+    
+    # 2. Enhance with Groq AI
+    ai_insight = ai.generate_smart_insight(raw_insight)
+    
+    await update.message.reply_text(f"🤖 **FINBOT AI ADVISOR**\n\n{ai_insight}", parse_mode='Markdown')
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -157,7 +164,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data = context.user_data
     state = user_data.get('state', 'IDLE')
     
-    # AI-Powered Intent Detection with State Awareness
+    # --- AI POWERED PARSING (GROQ) ---
+    ai_data = ai.parse_transaction(text)
+    
+    if ai_data and ai_data.get('is_transaction'):
+        user_db = db.get_or_create_user(user_id, update.effective_user.username)
+        user_data['pending_tx'] = ai_data
+        
+        icon = "💰" if ai_data['type'] == "income" else "💸"
+        msg = f"{icon} **Deteksi Transaksi AI**\n\n"
+        msg += f"💵 **Nominal:** Rp{ai_data['amount']:,.0f}\n"
+        msg += f"📂 **Kategori:** {ai_data['category']}\n"
+        msg += f"📝 **Keterangan:** {ai_data['description']}\n"
+        msg += f"🏷️ **Tipe:** {ai_data['type'].capitalize()}\n\n"
+        msg += "Simpan transaksi ini?"
+
+        keyboard = [
+            [
+                InlineKeyboardButton("✓ Simpan", callback_data="tx_confirm"),
+                InlineKeyboardButton("✎ Edit", callback_data="tx_edit"),
+                InlineKeyboardButton("✕ Abaikan", callback_data="tx_ignore")
+            ]
+        ]
+        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+        return
+
+    # --- FALLBACK TO REGULAR NLP IF AI FAILS OR IS NOT A TRANSACTION ---
     intent_data = nlp.classify_intent(text, state)
     intent = intent_data['intent']
     confidence = intent_data['confidence']
