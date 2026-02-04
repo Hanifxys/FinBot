@@ -44,7 +44,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text
+    user_data = context.user_data
     
+    # Check if user is in an active state (like EDIT_MODE)
+    if user_data.get('state') == 'WAITING_EDIT_VALUE':
+        await update.message.reply_text("Pilih dari tombol di atas untuk lanjut atau batalkan.")
+        return
+
     user_db = db.get_or_create_user(user_id, update.effective_user.username)
     
     # NLP Processing
@@ -60,7 +66,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'type': type_
         }
         
-        # Principle 2.1 & 3.1: Minimalist Template with Buttons
+        # Principle 4.1: Clean Transaction Detection
+        msg = f"Rp{amount:,.0f} · {category}\n{merchant if merchant else ''}"
+        
         keyboard = [
             [
                 InlineKeyboardButton("✓ Simpan", callback_data="tx_save"),
@@ -68,11 +76,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton("✕ Abaikan", callback_data="tx_ignore")
             ]
         ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        # Template: Rp{amount} · {category} \n {merchant}
-        msg = f"Rp {amount:,.0f} · {category}\n{merchant}"
-        await update.message.reply_text(msg, reply_markup=reply_markup)
+        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard))
     else:
         # Handle non-transaction queries (report, budget, analysis)
         if any(kw in text.lower() for kw in ["laporan", "rekap", "summary"]):
@@ -101,7 +105,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = query.data
     pending = context.user_data.get('pending_tx')
     
-    if action == "tx_save" and pending:
+    if action == "tx_confirm" and pending:
         # Evaluate rules before saving
         from datetime import datetime
         hour = datetime.now().hour
@@ -119,27 +123,23 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_id=user_db.id,
             amount=pending['amount'],
             category=pending['category'],
-            type=pending['type'],
+            type='expense',
             description=description
         )
         
         # Check budget status after saving
         budget_msg = budget_mgr.check_budget_status(user_db.id, pending['category'])
-        burn_rate = budget_mgr.get_burn_rate(user_db.id, pending['category'])
         
         # Principle 2.1: Simple response (Confirmation + Sisa Budget)
-        final_msg = f"Rp {pending['amount']:,.0f} · {pending['category']}"
+        final_msg = f"Rp{pending['amount']:,.0f} · {pending['category']}"
         if budget_msg:
             final_msg += f"\n{budget_msg}"
             
         await query.edit_message_text(final_msg)
-        
-        # Risk notification (Burn rate) as a separate minimalist message if exists
-        if burn_rate:
-            await context.bot.send_message(chat_id=user_id, text=burn_rate)
         context.user_data.pop('pending_tx', None)
         
     elif action == "tx_edit":
+        user_data['state'] = 'WAITING_EDIT_VALUE'
         keyboard = [
             [
                 InlineKeyboardButton("Nominal", callback_data="edit_amount"),
@@ -149,9 +149,32 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         await query.edit_message_text("Edit apa?", reply_markup=InlineKeyboardMarkup(keyboard))
         
+    elif action == "view_salary_summary":
+        user_id = update.effective_user.id
+        user_db = db.get_user(user_id)
+        # Get the latest income for this month
+        income = db.get_monthly_income(user_db.id)
+        if income:
+            msg, _ = budget_mgr.get_allocation_recommendation(income)
+            await query.edit_message_text(msg)
+        else:
+            await query.edit_message_text("Data gaji belum ada.")
+
     elif action == "tx_ignore":
+        user_data = context.user_data
+        user_data.pop('state', None)
         await query.edit_message_text("Transaksi diabaikan.")
-        context.user_data.pop('pending_tx', None)
+        user_data.pop('pending_tx', None)
+
+    elif action == "show_budget_menu":
+        await query.edit_message_text("Mau ubah alokasi?")
+        keyboard = [
+            [
+                InlineKeyboardButton("Ubah persentase", callback_data="change_allocation"),
+                InlineKeyboardButton("Biarkan", callback_data="tx_ignore")
+            ]
+        ]
+        await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def send_budget_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -240,15 +263,23 @@ async def set_salary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         if not context.args:
-            await update.message.reply_text("Cara pakai: `/setgaji [jumlah]`\nContoh: `/setgaji 5000000`", parse_mode='Markdown')
+            await update.message.reply_text("Cara pakai: `/setgaji [jumlah]`\nContoh: `/setgaji 7300000`", parse_mode='Markdown')
             return
             
         amount = float(context.args[0].replace('.', '').replace(',', ''))
         db.add_monthly_income(user_db.id, amount)
         
-        # Give automatic recommendation immediately
-        msg, _ = budget_mgr.get_allocation_recommendation(amount)
-        await update.message.reply_text(f"✅ Gaji berhasil dicatat!\n\n{msg}", parse_mode='Markdown')
+        # Principle 3.1: Ringkas
+        keyboard = [
+            [
+                InlineKeyboardButton("Lihat ringkasan", callback_data="view_salary_summary"),
+                InlineKeyboardButton("Atur budget", callback_data="show_budget_menu")
+            ]
+        ]
+        await update.message.reply_text(
+            f"Gaji dicatat: Rp{amount:,.0f}",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         
     except ValueError:
         await update.message.reply_text("Format nominal salah. Gunakan angka saja.")

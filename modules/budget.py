@@ -82,21 +82,28 @@ class BudgetManager:
             
         return report_text
 
-    def get_allocation_recommendation(self, salary_amount):
-        """
-        Calculates recommended budget allocation based on custom rules.
-        """
-        recommendations = {}
-        for category, percentage in ALLOCATION_RULES.items():
-            recommendations[category] = salary_amount * percentage
-            
-        msg = f"💡 **Alokasi Gaji (Rp {salary_amount:,.0f})**\n\n"
-        for cat, amt in recommendations.items():
-            msg += f"- {cat}: Rp {amt:,.0f}\n"
+    def get_allocation_recommendation(self, total_income):
+        # Professional & Clean formatting
+        # No excessive emojis, clear numbers
+        p_pokok = total_income * 0.5
+        p_tabungan = total_income * 0.2
+        p_investasi = total_income * 0.1
+        p_fleksibel = total_income * 0.2
         
-        msg += "\nAtur budget sekarang? Klik tombol di bawah."
+        msg = (
+            "Ringkasan gaji bulan ini\n\n"
+            f"Pokok: Rp{p_pokok:,.0f}\n"
+            f"Tabungan: Rp{p_tabungan:,.0f}\n"
+            f"Investasi: Rp{p_investasi:,.0f}\n"
+            f"Fleksibel: Rp{p_fleksibel:,.0f}"
+        )
         
-        return msg, recommendations
+        return msg, {
+            'pokok': p_pokok,
+            'tabungan': p_tabungan,
+            'investasi': p_investasi,
+            'fleksibel': p_fleksibel
+        }
 
     def get_burn_rate(self, user_id, category):
         """
