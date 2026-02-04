@@ -1,4 +1,4 @@
-from .models import SessionLocal, User, Transaction, Budget, MonthlyIncome, init_db
+from .models import SessionLocal, User, Transaction, Budget, MonthlyIncome, SavingGoal, init_db
 from datetime import datetime, timedelta
 from sqlalchemy import extract, and_
 
@@ -49,6 +49,15 @@ class DBHandler:
                 ("monthly_incomes", "month", "INTEGER"),
                 ("monthly_incomes", "year", "INTEGER"),
                 ("monthly_incomes", "created_at", "TIMESTAMP"),
+
+                # Saving Goals table
+                ("saving_goals", "user_id", "INTEGER"),
+                ("saving_goals", "name", "VARCHAR"),
+                ("saving_goals", "target_amount", "FLOAT"),
+                ("saving_goals", "current_amount", "FLOAT"),
+                ("saving_goals", "target_date", "TIMESTAMP"),
+                ("saving_goals", "is_active", "INTEGER"),
+                ("saving_goals", "created_at", "TIMESTAMP"),
             ]
             
             for table, column, data_type in migrations:
@@ -248,6 +257,53 @@ class DBHandler:
             Transaction.user_id == user_id,
             Transaction.date >= datetime(year, month, 1)
         ).all()
+
+    # --- SAVING GOALS ---
+    def add_saving_goal(self, user_id, name, target_amount, target_date=None):
+        goal = SavingGoal(
+            user_id=user_id,
+            name=name,
+            target_amount=target_amount,
+            target_date=target_date
+        )
+        self.session.add(goal)
+        self.session.commit()
+        return goal
+
+    def get_user_saving_goals(self, user_id, active_only=True):
+        query = self.session.query(SavingGoal).filter_by(user_id=user_id)
+        if active_only:
+            query = query.filter_by(is_active=1)
+        return query.all()
+
+    def update_saving_progress(self, user_id, goal_id, amount):
+        goal = self.session.query(SavingGoal).filter_by(id=goal_id, user_id=user_id).first()
+        if goal:
+            goal.current_amount += amount
+            if goal.current_amount >= goal.target_amount:
+                goal.is_active = 0 # Completed
+            self.session.commit()
+            return goal
+        return None
+
+    # --- EXPORT ---
+    def export_transactions_to_csv(self, user_id, filepath):
+        import csv
+        txs = self.session.query(Transaction).filter_by(user_id=user_id).order_by(Transaction.date.desc()).all()
+        
+        with open(filepath, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['ID', 'Tanggal', 'Kategori', 'Nominal', 'Tipe', 'Deskripsi'])
+            for tx in txs:
+                writer.writerow([
+                    tx.id, 
+                    tx.date.strftime('%Y-%m-%d %H:%M'), 
+                    tx.category, 
+                    tx.amount, 
+                    tx.type, 
+                    tx.description
+                ])
+        return filepath
 
     def add_monthly_income(self, user_id, amount):
         now = datetime.now()

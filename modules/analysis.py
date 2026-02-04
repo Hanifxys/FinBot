@@ -7,7 +7,7 @@ class ExpenseAnalyzer:
 
     def analyze_patterns(self, user_id):
         """
-        Observasi jujur tentang pola pengeluaran.
+        Observasi jujur tentang pola pengeluaran dengan AI Smart Insights.
         """
         now = datetime.now()
         transactions = self.db.get_monthly_report(user_id, now.month, now.year)
@@ -26,20 +26,43 @@ class ExpenseAnalyzer:
 
         expenses = df[df['type'] == 'expense']
         if expenses.empty:
-            return ""
+            return "Belum ada data pengeluaran bulan ini untuk dianalisis."
 
-        # Analysis: Time Pattern
+        insight = "🧠 **AI SMART INSIGHTS**\n"
+        
+        # 1. Time Analysis (Night Spending)
         night_spending = expenses[expenses['hour'] >= 19]
-        night_percent = (night_spending['amount'].sum() / expenses['amount'].sum()) * 100 if not expenses.empty else 0
+        night_percent = (night_spending['amount'].sum() / expenses['amount'].sum()) * 100
+        if night_percent > 40:
+            insight += f"• **Peringatan Malam**: {night_percent:.0f}% uangmu keluar setelah jam 7 malam. Hati-hati lapar mata!\n"
         
-        # Analysis: Boros Day
-        boros_day = expenses.groupby('day')['amount'].sum().idxmax()
+        # 2. Boros Day
+        day_counts = expenses.groupby('day')['amount'].sum()
+        boros_day = day_counts.idxmax()
+        insight += f"• **Hari Boros**: Kamu paling banyak belanja di hari {boros_day}.\n"
 
-        insight = "Aku amati ini:\n"
-        if night_percent > 50:
-            insight += f"• {night_percent:.0f}% pengeluaran kamu terjadi di malam hari (jam 19-22).\n"
-        
-        insight += f"• Kamu paling boros di hari {boros_day}.\n"
+        # 3. Anomaly Detection (Single transaction > 3x average)
+        avg_tx = expenses['amount'].mean()
+        big_tx = expenses[expenses['amount'] > (avg_tx * 3)]
+        if not big_tx.empty:
+            insight += f"• **Deteksi Anomali**: Ada transaksi besar yang di atas rata-rata. Perlu dikontrol?\n"
+
+        # 4. Trend Analysis (vs Last Week)
+        last_week = now - timedelta(days=7)
+        lw_tx = [t for t in transactions if t.date >= last_week]
+        if lw_tx:
+            lw_total = sum(t.amount for t in lw_tx if t.type == 'expense')
+            daily_avg = lw_total / 7
+            insight += f"• **Tren**: Rata-rata pengeluaran harianmu seminggu terakhir adalah Rp{daily_avg:,.0f}.\n"
+
+        # 5. Suggestion
+        income = self.db.get_latest_income(user_id)
+        if income:
+            savings_rate = ((income.amount - expenses['amount'].sum()) / income.amount) * 100
+            if savings_rate < 10:
+                insight += "• **Saran**: Tabunganmu bulan ini di bawah 10%. Coba kurangi kategori non-primer.\n"
+            else:
+                insight += f"• **Saran**: Kamu sudah menabung {savings_rate:.0f}% gaji. Pertahankan!\n"
         
         return insight
 

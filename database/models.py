@@ -52,6 +52,17 @@ class Budget(Base):
     month = Column(Integer) # 1-12
     year = Column(Integer)
 
+class SavingGoal(Base):
+    __tablename__ = 'saving_goals'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'))
+    name = Column(String, nullable=False)
+    target_amount = Column(Float, nullable=False)
+    current_amount = Column(Float, default=0.0)
+    target_date = Column(DateTime, nullable=True)
+    is_active = Column(Integer, default=1) # 1 for active, 0 for completed/cancelled
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

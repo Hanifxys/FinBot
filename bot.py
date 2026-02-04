@@ -31,6 +31,114 @@ analyzer = ExpenseAnalyzer(db)
 rules = RuleEngine()
 visual_reporter = VisualReporter()
 
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    help_text = (
+        "🚀 **FINBOT PRO - COMMAND CENTER**\n\n"
+        "**💸 PENCATATAN**\n"
+        "- Langsung ketik: `kopi 25rb` atau `gaji 10jt`\n"
+        "- Kirim foto struk 📸 untuk scan otomatis\n"
+        "- `/undo`: Batal transaksi terakhir\n"
+        "- `/hapus [ID]`: Hapus transaksi spesifik\n\n"
+        "**🎯 SAVING GOALS**\n"
+        "- `/target [Nama] [Nominal]`: Buat target baru\n"
+        "- `/nabung [ID] [Nominal]`: Tambah tabungan ke target\n"
+        "- `/list_target`: Lihat semua target menabung\n\n"
+        "**📊 LAPORAN & EXPORT**\n"
+        "- `/history`: Riwayat transaksi (bisa filter `cat:`, `min:`)\n"
+        "- `/insight`: Analisis cerdas pola pengeluaran 🧠\n"
+        "- `/export`: Download data transaksi ke CSV/Excel 📥\n\n"
+        "**⚙️ PENGATURAN**\n"
+        "- `/setgaji [Nominal]`: Atur pendapatan bulanan\n"
+        "- `/setbudget [Kategori] [Nominal]`: Atur limit budget\n\n"
+        "💡 *Tips: Dashboard terupdate otomatis di pesan yang di-pin!*"
+    )
+    await update.message.reply_text(help_text, parse_mode='Markdown')
+
+async def set_target(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_db = db.get_user(user_id)
+    if not user_db: return
+
+    if len(context.args) < 2:
+        await update.message.reply_text("Cara pakai: `/target [Nama Barang] [Nominal]`\nContoh: `/target Laptop 10000000`", parse_mode='Markdown')
+        return
+
+    try:
+        name = " ".join(context.args[:-1])
+        amount = float(context.args[-1].replace('.', '').replace(',', '').replace('rb', '000').replace('jt', '000000'))
+        db.add_saving_goal(user_db.id, name, amount)
+        await update.message.reply_text(f"✅ Target **{name}** sebesar Rp{amount:,.0f} berhasil dibuat! Ayo menabung! 🚀", parse_mode='Markdown')
+    except ValueError:
+        await update.message.reply_text("Format nominal salah. Gunakan angka saja.")
+
+async def add_savings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_db = db.get_user(user_id)
+    if not user_db: return
+
+    if len(context.args) < 2:
+        await update.message.reply_text("Cara pakai: `/nabung [ID_Target] [Nominal]`\nCek ID di `/list_target`", parse_mode='Markdown')
+        return
+
+    try:
+        goal_id = int(context.args[0])
+        amount = float(context.args[1].replace('.', '').replace(',', '').replace('rb', '000').replace('jt', '000000'))
+        goal = db.update_saving_progress(user_db.id, goal_id, amount)
+        
+        if goal:
+            progress = (goal.current_amount / goal.target_amount) * 100
+            msg = f"💰 **Tabungan Ditambah!**\n\nTarget: {goal.name}\nProgres: Rp{goal.current_amount:,.0f} / Rp{goal.target_amount:,.0f} ({progress:.1f}%)\n"
+            if progress >= 100:
+                msg += "\n🎉 **SELAMAT!** Target kamu sudah tercapai! Silakan beli barang impianmu!"
+            else:
+                msg += f"🔥 Sedikit lagi! Butuh Rp{goal.target_amount - goal.current_amount:,.0f} lagi."
+            await update.message.reply_text(msg, parse_mode='Markdown')
+            await update_pinned_dashboard(context, user_id)
+        else:
+            await update.message.reply_text("❌ Target tidak ditemukan.")
+    except ValueError:
+        await update.message.reply_text("Format ID atau nominal salah.")
+
+async def list_targets(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_db = db.get_user(user_id)
+    if not user_db: return
+
+    goals = db.get_user_saving_goals(user_db.id)
+    if not goals:
+        await update.message.reply_text("Kamu belum punya target menabung. Buat dengan `/target`")
+        return
+
+    msg = "🎯 **DAFTAR TARGET MENABUNG**\n\n"
+    for g in goals:
+        progress = (g.current_amount / g.target_amount) * 100
+        msg += f"`#{g.id}` **{g.name}**\n   Rp{g.current_amount:,.0f} / Rp{g.target_amount:,.0f} ({progress:.1f}%)\n"
+    
+    await update.message.reply_text(msg, parse_mode='Markdown')
+
+async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_db = db.get_user(user_id)
+    if not user_db: return
+
+    filename = f"export_transaksi_{user_id}_{datetime.now().strftime('%Y%m%d')}.csv"
+    filepath = os.path.join(os.getcwd(), filename)
+    
+    try:
+        db.export_transactions_to_csv(user_db.id, filepath)
+        await update.message.reply_document(document=open(filepath, 'rb'), filename=filename, caption="📊 Ini data transaksi kamu dalam format CSV.")
+        os.remove(filepath)
+    except Exception as e:
+        await update.message.reply_text(f"Gagal mengekspor data: {e}")
+
+async def get_ai_insight(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_db = db.get_user(user_id)
+    if not user_db: return
+    
+    insight = analyzer.analyze_patterns(user_db.id)
+    await update.message.reply_text(insight, parse_mode='Markdown')
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db.get_or_create_user(user.id, user.username)
@@ -176,10 +284,17 @@ async def update_pinned_dashboard(context: ContextTypes.DEFAULT_TYPE, user_id: i
     report = budget_mgr.generate_report(user_db.id, period='monthly')
     budgets = db.get_user_budgets(user_db.id)
     balance = db.get_current_balance(user_db.id)
+    goals = db.get_user_saving_goals(user_db.id)
     
-    summary = f"📌 **DASHBOARD KEUANGAN**\n"
+    summary = f"📌 **DASHBOARD KEUANGAN PRO**\n"
     summary += f"💰 **Saldo Saat Ini: Rp{balance:,.0f}**\n\n"
     summary += f"{report}\n"
+
+    if goals:
+        summary += "\n🎯 **Saving Goals:**\n"
+        for g in goals:
+            prog = (g.current_amount / g.target_amount) * 100
+            summary += f"• {g.name}: {prog:.1f}% (Rp{g.current_amount:,.0f}/Rp{g.target_amount:,.0f})\n"
     if budgets:
         summary += "\n📊 **Budget Utilization:**\n"
         for b in budgets:
@@ -723,11 +838,17 @@ if __name__ == '__main__':
     
     # Handlers
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("setgaji", set_gaji))
     application.add_handler(CommandHandler("setbudget", set_budget))
     application.add_handler(CommandHandler("undo", undo))
     application.add_handler(CommandHandler("hapus", hapus_transaksi))
     application.add_handler(CommandHandler("history", history))
+    application.add_handler(CommandHandler("target", set_target))
+    application.add_handler(CommandHandler("nabung", add_savings))
+    application.add_handler(CommandHandler("list_target", list_targets))
+    application.add_handler(CommandHandler("export", export_data))
+    application.add_handler(CommandHandler("insight", get_ai_insight))
     application.add_handler(CommandHandler("rekomendasi", set_gaji))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
