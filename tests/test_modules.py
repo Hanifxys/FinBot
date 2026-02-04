@@ -35,7 +35,7 @@ def test_nlp_process_text():
 
 def test_nlp_extract_merchant():
     nlp = NLPProcessor()
-    assert nlp.extract_merchant("ngopi di mixue 48rb") == "Di Mixue"
+    assert nlp.extract_merchant("ngopi di mixue 48rb") == "Mixue"
     assert nlp.extract_merchant("beli bensin pertamina 100k") == "Pertamina"
 
 # --- OCR TESTS ---

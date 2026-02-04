@@ -298,7 +298,7 @@ class NLPProcessor:
         stopwords = [
             "beli", "bayar", "untuk", "ke", "di", "makan", "minum", "transaksi", "transfer", 
             "ngopi", "buat", "pembayaran", "tagihan", "biaya", "topup", "saldo", "isi", "pemasukan",
-            "gaji", "bonus", "duit", "uang"
+            "gaji", "bonus", "duit", "uang", "bensin", "kopi", "makan", "sarapan", "lunch", "dinner"
         ]
         for word in stopwords:
             clean_text = re.sub(r'\b' + word + r'\b', '', clean_text.lower())

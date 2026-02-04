@@ -117,10 +117,10 @@ class BudgetManager:
         )
         
         return msg, {
-            'pokok': p_pokok,
-            'tabungan': p_tabungan,
-            'investasi': p_investasi,
-            'fleksibel': p_fleksibel
+            'Kebutuhan Pokok': p_pokok,
+            'Tabungan': p_tabungan,
+            'Investasi': p_investasi,
+            'Hiburan/Fleksibel': p_fleksibel
         }
 
     def get_burn_rate(self, user_id, category):
