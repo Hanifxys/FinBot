@@ -109,6 +109,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_report(update, context)
         return
 
+async def send_budget_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_db = db.get_or_create_user(user_id, update.effective_user.username)
+    budgets = db.get_user_budgets(user_db.id)
+    
+    if not budgets:
+        await update.message.reply_text("Belum ada budget yang diset. Pakai `/setgaji` untuk memulai.")
+        return
+        
+    msg = "📊 Status Budget Bulan Ini:\n\n"
+    for b in budgets:
+        remaining = b.limit_amount - b.current_usage
+        msg += f"- {b.category}: Sisa Rp{remaining:,.0f}\n"
+    
+    await update.message.reply_text(msg)
+
     # Fallback for unknown/low confidence
     if any(kw in text.lower() for kw in ["halo", "hi", "hai", "p"]):
         msg = f"Halo {update.effective_user.first_name}! Ada yang bisa kubantu catat?"
@@ -120,16 +136,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("Maaf, aku tidak mengerti. Coba: 'kopi 25rb' atau 'sisa budget'.")
 
+async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_db = db.get_or_create_user(user_id, update.effective_user.username)
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("Bulan Ini", callback_data="report_monthly"),
+            InlineKeyboardButton("7 Hari Terakhir", callback_data="report_7days"),
+            InlineKeyboardButton("30 Hari Terakhir", callback_data="report_30days")
+        ]
+    ]
+    await update.message.reply_text("Pilih periode laporan:", reply_markup=InlineKeyboardMarkup(keyboard))
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = update.effective_user.id
     user_db = db.get_or_create_user(user_id, update.effective_user.username)
+    user_data = context.user_data
     
     await query.answer()
     
     action = query.data
-    pending = context.user_data.get('pending_tx')
+    pending = user_data.get('pending_tx')
     
+    if action.startswith("report_"):
+        period = action.replace("report_", "")
+        report_msg = budget_mgr.generate_report(user_db.id, period=period)
+        await query.edit_message_text(report_msg)
+        return
+
     if action == "tx_confirm" and pending:
         # Evaluate rules before saving
         from datetime import datetime

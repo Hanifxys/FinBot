@@ -49,12 +49,22 @@ class BudgetManager:
     def generate_report(self, user_id, period='monthly'):
         """
         Generates a summary report of transactions.
+        Supports 'monthly', '7days', and '30days' (sliding windows).
         """
         now = datetime.now()
-        transactions = self.db.get_monthly_report(user_id, now.month, now.year)
+        
+        if period == '7days':
+            transactions = self.db.get_sliding_window_transactions(user_id, days=7)
+            title = "Ringkasan 7 Hari Terakhir"
+        elif period == '30days':
+            transactions = self.db.get_sliding_window_transactions(user_id, days=30)
+            title = "Ringkasan 30 Hari Terakhir"
+        else:
+            transactions = self.db.get_monthly_report(user_id, now.month, now.year)
+            title = f"Laporan Keuangan {now.strftime('%B %Y')}"
         
         if not transactions:
-            return "Belum ada transaksi di bulan ini."
+            return f"Belum ada transaksi untuk periode {title.lower()}."
             
         df = pd.DataFrame([{
             'amount': t.amount,
@@ -64,7 +74,7 @@ class BudgetManager:
         
         summary = df.groupby(['type', 'category'])['amount'].sum().reset_index()
         
-        report_text = f"📊 Laporan Keuangan {now.strftime('%B %Y')}\n\n"
+        report_text = f"📊 {title}\n\n"
         
         incomes = summary[summary['type'] == 'income']
         if not incomes.empty:
