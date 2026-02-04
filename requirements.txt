@@ -1,3 +1,4 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
 python-telegram-bot[job-queue]==20.8
 pillow==10.2.0
 pandas==2.2.0
@@ -7,5 +8,7 @@ sqlalchemy==2.0.25
 matplotlib==3.8.2
 psycopg2-binary==2.9.9
 groq==0.4.2
+torch==2.2.1+cpu
+torchvision==0.17.1+cpu
 easyocr==1.7.1
 opencv-python-headless==4.9.0.80
