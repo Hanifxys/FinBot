@@ -24,9 +24,9 @@ jobs:
         
     - name: Run tests
       env:
-        TELEGRAM_BOT_TOKEN: dummy_token
-        GROQ_API_KEY: dummy_key
-        DATABASE_URL: sqlite:///test.db
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        DATABASE_URL: ${{ secrets.DATABASE_URL }}
       run: |
         pytest tests/
 

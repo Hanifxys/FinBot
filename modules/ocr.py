@@ -13,9 +13,9 @@ class OCRProcessor:
         if self._reader is None and self.enabled:
             try:
                 import easyocr
-                # gpu=False ensures we don't load CUDA libs into memory
-                # model_storage_directory can be specified if needed
-                self._reader = easyocr.Reader(['id', 'en'], gpu=False)
+                # Disable downloading inside the instance to prevent OOM
+                # We expect models to be pre-downloaded or cached
+                self._reader = easyocr.Reader(['id', 'en'], gpu=False, download_enabled=True)
                 print("OCR Reader initialized (CPU mode)")
             except Exception as e:
                 print(f"OCR Reader Warning: {e}")
