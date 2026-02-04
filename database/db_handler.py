@@ -12,17 +12,62 @@ class DBHandler:
 
     def _migrate_db(self):
         """
-        Simple migration to add missing columns.
-        init_db() only creates tables, it doesn't add new columns to existing tables.
+        Comprehensive migration to ensure all columns from models exist in the database.
+        This is a preventive measure to handle cases where models change but database doesn't.
         """
         try:
             from sqlalchemy import text
-            # Check if pinned_message_id exists in users table
-            self.session.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS pinned_message_id INTEGER"))
+            import logging
+            
+            # List of all required columns across all tables
+            migrations = [
+                # Users table
+                ("users", "telegram_id", "BIGINT"), # Use BIGINT for safety with telegram IDs
+                ("users", "username", "VARCHAR"),
+                ("users", "pinned_message_id", "INTEGER"),
+                ("users", "created_at", "TIMESTAMP"),
+                
+                # Transactions table
+                ("transactions", "user_id", "INTEGER"),
+                ("transactions", "amount", "FLOAT"),
+                ("transactions", "category", "VARCHAR"),
+                ("transactions", "description", "VARCHAR"),
+                ("transactions", "type", "VARCHAR"),
+                ("transactions", "date", "TIMESTAMP"),
+                
+                # Budgets table
+                ("budgets", "user_id", "INTEGER"),
+                ("budgets", "category", "VARCHAR"),
+                ("budgets", "limit_amount", "FLOAT"),
+                ("budgets", "current_usage", "FLOAT"),
+                ("budgets", "month", "INTEGER"),
+                ("budgets", "year", "INTEGER"),
+                
+                # Monthly Incomes table
+                ("monthly_incomes", "user_id", "INTEGER"),
+                ("monthly_incomes", "amount", "FLOAT"),
+                ("monthly_incomes", "month", "INTEGER"),
+                ("monthly_incomes", "year", "INTEGER"),
+                ("monthly_incomes", "created_at", "TIMESTAMP"),
+            ]
+            
+            for table, column, data_type in migrations:
+                try:
+                    # Using PostgreSQL syntax for IF NOT EXISTS column addition
+                    # Note: ALTER TABLE ... ADD COLUMN IF NOT EXISTS is supported in PostgreSQL 9.6+
+                    query = text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {data_type}")
+                    self.session.execute(query)
+                except Exception as col_e:
+                    logging.warning(f"Could not migrate {table}.{column}: {col_e}")
+                    self.session.rollback()
+                    continue
+            
             self.session.commit()
+            logging.info("Database migration check completed successfully.")
+            
         except Exception as e:
             self.session.rollback()
-            print(f"Migration Error: {e}")
+            logging.error(f"Global Migration Error: {e}")
 
     def get_effective_date(self, dt=None):
         """
