@@ -1,0 +1,8 @@
+.env
+database/*.db
+__pycache__/
+*.pyc
+.DS_Store
+tests/
+.vscode/
+.idea/

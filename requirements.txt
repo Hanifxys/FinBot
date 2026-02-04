@@ -1,0 +1,10 @@
+python-telegram-bot==20.8
+pytesseract==0.3.10
+pillow==10.2.0
+pandas==2.2.0
+python-dotenv==1.0.1
+easyocr==1.7.1
+pytest==8.0.0
+sqlalchemy==2.0.25
+matplotlib==3.8.2
+psycopg2-binary==2.9.9
