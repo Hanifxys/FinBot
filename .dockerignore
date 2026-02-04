@@ -1,7 +1,17 @@
 __pycache__/
 *.pyc
 .env
+.venv/
+venv/
 database/*.db
+database/*.db-journal
 tests/
 .git/
 .gitignore
+.github/
+.coverage
+htmlcov/
+*.log
+Dockerfile
+.dockerignore
+sonar-project.properties
