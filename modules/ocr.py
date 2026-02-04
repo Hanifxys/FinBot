@@ -77,16 +77,47 @@ class OCRProcessor:
             gc.collect()
 
     def _clean_amount(self, amount_str):
-        # Remove dots and commas, but keep decimal if it exists
-        # In Indonesia, dot is thousands separator, comma is decimal
-        # We'll normalize it to float
-        cleaned = amount_str.replace('.', '').replace(',', '.')
+        # 1. Clean common noise but keep digits, comma and dot
+        cleaned = re.sub(r'[^\d,\.]', '', amount_str)
+        
+        # 2. Heuristic for Indonesian format (dot=thousand, comma=decimal)
+        if ',' in cleaned and '.' in cleaned:
+            # Both separators present: e.g., 1.250.000,00 or 1,250,000.00
+            if cleaned.find('.') < cleaned.find(','):
+                # dot is thousand, comma is decimal
+                val_str = cleaned.replace('.', '').replace(',', '.')
+            else:
+                # comma is thousand, dot is decimal
+                val_str = cleaned.replace(',', '')
+        elif ',' in cleaned:
+            # Only comma present
+            parts = cleaned.split(',')
+            if len(parts[-1]) == 3:
+                # Likely thousand separator: 1,250,000
+                val_str = cleaned.replace(',', '')
+            else:
+                # Likely decimal: 50,00
+                val_str = cleaned.replace(',', '.')
+        elif '.' in cleaned:
+            # Only dot present
+            parts = cleaned.split('.')
+            if len(parts[-1]) == 3:
+                # Likely thousand: 50.000
+                val_str = cleaned.replace('.', '')
+            else:
+                # Likely decimal: 50.00
+                val_str = cleaned
+        else:
+            val_str = cleaned
+
         try:
-            return float(cleaned)
+            return float(val_str)
         except ValueError:
-            # Try removing any non-numeric chars
-            cleaned = re.sub(r'[^\d]', '', amount_str)
+            # Fallback: just digits, but try to handle trailing zeros if they look like decimals
+            digits_only = re.sub(r'[^\d]', '', amount_str)
+            if digits_only.endswith('00') and len(digits_only) > 4:
+                return float(digits_only[:-2])
             try:
-                return float(cleaned)
+                return float(digits_only)
             except:
                 return 0.0

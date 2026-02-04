@@ -622,6 +622,17 @@ def run_health_check_server():
     print(f"Health check server running on port {port}")
     server.serve_forever()
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log the error and send a telegram message to notify the developer."""
+    logging.error(f"Exception while handling an update: {context.error}")
+    
+    # Check for conflict error
+    from telegram.error import Conflict
+    if isinstance(context.error, Conflict):
+        logging.error("CRITICAL: Conflict error detected! Another instance is running with the same token.")
+        # We don't exit here as run_polling will handle retries, 
+        # but this helps in identifying the issue in logs.
+
 if __name__ == '__main__':
     if not TELEGRAM_BOT_TOKEN:
         print("Error: TELEGRAM_BOT_TOKEN tidak ditemukan di .env")
@@ -632,6 +643,9 @@ if __name__ == '__main__':
     health_thread.start()
 
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    
+    # Add global error handler
+    application.add_error_handler(error_handler)
     
     # Scheduler for daily digest (Every night at 21:00 WIB)
     job_queue = application.job_queue
@@ -648,4 +662,5 @@ if __name__ == '__main__':
     application.add_handler(CallbackQueryHandler(handle_callback))
     
     print("FinBot sedang berjalan...")
-    application.run_polling()
+    # drop_pending_updates=True will clear old updates and help resolve conflict issues faster
+    application.run_polling(drop_pending_updates=True)

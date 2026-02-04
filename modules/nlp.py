@@ -112,7 +112,7 @@ class NLPProcessor:
         text = text.lower().strip()
         
         # 1. Standardize separators: change comma to dot for decimal parsing
-        # But only if it looks like a decimal (e.g., 1,5jt)
+        # But only if it looks like a decimal (e.g., 1,5jt or 1.5jt)
         text = re.sub(r'(\d+),(\d+)\s*(jt|mio|rb|k|ribu)', r'\1.\2\3', text)
         
         # 2. Normalize Million (jt/mio -> 000000)
@@ -121,8 +121,12 @@ class NLPProcessor:
         # 3. Normalize Thousand (rb/k -> 000)
         text = re.sub(r'([\d\.]+)\s*(rb|k|ribu|rebu)', lambda m: str(int(float(m.group(1)) * 1000)), text)
         
-        # 4. Clean common Indonesian currency prefix
+        # 4. Clean common Indonesian currency prefix and trailing zeros/separators
         text = text.replace('rp', '').replace('rupiah', '')
+        
+        # 5. Handle cases like 100,000 or 100.000 (treat as 100000)
+        # If it matches \d{1,3}([,.]\d{3})+ it's likely a thousand separator
+        text = re.sub(r'(\d{1,3})([,\.]\d{3})+(?!\d)', lambda m: m.group(0).replace(',', '').replace('.', ''), text)
         
         return text
 

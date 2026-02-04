@@ -81,6 +81,9 @@ class DBHandler:
             return (dt - timedelta(days=1)).date()
         return dt.date()
 
+    def get_user(self, telegram_id):
+        return self.session.query(User).filter_by(telegram_id=telegram_id).first()
+
     def get_all_users(self):
         return self.session.query(User).all()
 
