@@ -46,5 +46,9 @@ jobs:
       env:
         KOYEB_TOKEN: ${{ secrets.KOYEB_TOKEN }}
       run: |
+        # List services for debugging if redeploy fails
+        koyeb app list
+        koyeb service list
         # Menggunakan CLI untuk trigger redeploy
+        # Ganti 'finbot/finbot' dengan 'NAMA_APP/NAMA_SERVICE' sesuai dashboard Koyeb Anda
         koyeb service redeploy finbot/finbot
