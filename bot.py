@@ -45,59 +45,80 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text
     user_data = context.user_data
+    state = user_data.get('state', 'IDLE')
     
-    # Check if user is in an active state (like EDIT_MODE)
-    if user_data.get('state') == 'WAITING_EDIT_VALUE':
-        await update.message.reply_text("Pilih dari tombol di atas untuk lanjut atau batalkan.")
+    # AI-Powered Intent Detection with State Awareness
+    intent_data = nlp.classify_intent(text, state)
+    intent = intent_data['intent']
+    confidence = intent_data['confidence']
+
+    # Handle EDIT_TRANSACTION state strictly
+    if state.startswith('WAITING_EDIT'):
+        field = state.split('_')[-1].lower() # e.g., WAITING_EDIT_AMOUNT -> amount
+        
+        if intent == "CANCEL":
+            user_data.pop('state', None)
+            await update.message.reply_text("Edit dibatalkan.")
+            return
+            
+        validation = nlp.validate_edit(field, text)
+        if validation['valid']:
+            # Update pending transaction
+            pending = user_data.get('pending_tx')
+            if pending:
+                pending[field] = validation['new_value']
+                user_data.pop('state', None)
+                
+                # Show updated transaction
+                msg = f"Rp{pending['amount']:,.0f} · {pending['category']}\n{pending.get('merchant', '')}"
+                keyboard = [
+                    [
+                        InlineKeyboardButton("✓ Simpan", callback_data="tx_confirm"),
+                        InlineKeyboardButton("✎ Edit", callback_data="tx_edit"),
+                        InlineKeyboardButton("✕ Abaikan", callback_data="tx_ignore")
+                    ]
+                ]
+                await update.message.reply_text(f"Berhasil diubah:\n{msg}", reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            await update.message.reply_text(f"Gagal: {validation['reason']}. Pilih tombol di atas atau ketik 'batal'.")
         return
 
     user_db = db.get_or_create_user(user_id, update.effective_user.username)
     
-    # AI-Powered Intent Detection & Text Normalization
-    intent, confidence, suggestions = nlp.detect_intent(text)
-    
-    if intent == "greeting":
-        msg = f"Halo {update.effective_user.first_name}! Ada yang bisa kubantu catat hari ini?"
-        keyboard = [[InlineKeyboardButton(s, callback_data=f"suggest_{s.lower()}") for s in suggestions]]
-        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard))
+    # Handle Global Intents
+    if intent == "ADD_TRANSACTION":
+        tx_data = nlp.extract_transaction_data(text)
+        if tx_data['confidence'] >= 0.7:
+            user_data['pending_tx'] = tx_data
+            msg = f"Rp{tx_data['amount']:,.0f} · {tx_data['category']}\n{tx_data['merchant'] if tx_data['merchant'] else ''}"
+            keyboard = [
+                [
+                    InlineKeyboardButton("✓ Simpan", callback_data="tx_confirm"),
+                    InlineKeyboardButton("✎ Edit", callback_data="tx_edit"),
+                    InlineKeyboardButton("✕ Abaikan", callback_data="tx_ignore")
+                ]
+            ]
+            await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard))
         return
         
-    elif intent == "help":
-        msg = "Aku bisa bantu catat pengeluaran (misal: 'kopi 25rb'), set budget, atau buat laporan bulanan."
-        keyboard = [[InlineKeyboardButton(s, callback_data=f"suggest_{s.lower()}") for s in suggestions]]
-        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard))
+    elif intent == "CHECK_BUDGET":
+        await send_budget_summary(update, context)
+        return
+        
+    elif intent == "QUERY_SUMMARY":
+        await send_report(update, context)
         return
 
-    # NLP Processing
-    result = nlp.process_text(text)
-    
-    if amount > 0:
-        # Determine merchant (description minus amount)
-        merchant = nlp.extract_merchant(text)
-        
-        context.user_data['pending_tx'] = {'amount': amount, 'category': category, 'merchant': merchant}
-        
-        # Principle 4.1: Clean Transaction Detection
-        msg = f"Rp{amount:,.0f} · {category}\n{merchant if merchant else ''}"
-        
-        keyboard = [
-            [
-                InlineKeyboardButton("✓ Simpan", callback_data="tx_save"),
-                InlineKeyboardButton("✎ Edit", callback_data="tx_edit"),
-                InlineKeyboardButton("✕ Abaikan", callback_data="tx_ignore")
-            ]
-        ]
+    # Fallback for unknown/low confidence
+    if any(kw in text.lower() for kw in ["halo", "hi", "hai", "p"]):
+        msg = f"Halo {update.effective_user.first_name}! Ada yang bisa kubantu catat?"
+        keyboard = [[
+            InlineKeyboardButton("/setgaji", callback_data="suggest_/setgaji"),
+            InlineKeyboardButton("Laporan", callback_data="suggest_laporan")
+        ]]
         await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard))
     else:
-        # Handle non-transaction queries or unknown input
-        if intent == "query_budget":
-            await send_budget_summary(update, context)
-        elif intent == "get_report":
-            await send_report(update, context)
-        else:
-            # Final fallback: Polite rejection for truly unknown input
-            msg = "Maaf, aku belum paham maksudmu. Coba ketik 'halo' atau langsung catat (misal: 'kopi 25rb')."
-            await update.message.reply_text(msg)
+        await update.message.reply_text("Maaf, aku tidak mengerti. Coba: 'kopi 25rb' atau 'sisa budget'.")
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -143,7 +164,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop('pending_tx', None)
         
     elif action == "tx_edit":
-        user_data['state'] = 'WAITING_EDIT_VALUE'
+        user_data['state'] = 'WAITING_EDIT_CHOICE'
         keyboard = [
             [
                 InlineKeyboardButton("Nominal", callback_data="edit_amount"),
@@ -152,6 +173,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
         ]
         await query.edit_message_text("Edit apa?", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif action == "edit_amount":
+        user_data['state'] = 'WAITING_EDIT_AMOUNT'
+        await query.edit_message_text("Ketik nominal baru (contoh: 50rb atau 50000):")
+        
+    elif action == "edit_category":
+        user_data['state'] = 'WAITING_EDIT_CATEGORY'
+        await query.edit_message_text("Ketik kategori baru (contoh: Makan, Transport, Belanja):")
         
     elif action == "view_salary_summary":
         user_id = update.effective_user.id

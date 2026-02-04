@@ -94,34 +94,97 @@ class NLPProcessor:
         
         return text
 
-    def detect_intent(self, text):
+    def classify_intent(self, text, state="IDLE"):
         """
-        Detects user intent and returns (intent_name, confidence, suggestions)
+        Classifies user message into ONE intent based on text and current state.
+        Returns: {"intent": "...", "confidence": 0.0-1.0}
         """
         text = self.normalize_text(text)
         
-        # Greeting Intent
-        if any(kw in text for kw in ["halo", "hi", "hai", "p", "siang", "pagi", "malam", "halo bot"]):
-            return "greeting", 1.0, ["/setgaji", "/setbudget", "Laporan"]
+        # If in EDIT MODE, the only valid intent is processing the edit or cancelling
+        if state.startswith("WAITING_EDIT"):
+            if any(kw in text for kw in ["batal", "cancel", "gak jadi", "stop"]):
+                return {"intent": "CANCEL", "confidence": 1.0}
+            return {"intent": "EDIT_TRANSACTION", "confidence": 0.9}
 
-        # Help Intent
-        if any(kw in text for kw in ["bantuan", "help", "tolong", "bisa apa", "cara pakai"]):
-            return "help", 1.0, ["/setgaji", "/setbudget", "Laporan"]
+        # CHECK_BUDGET
+        if any(kw in text for kw in ["sisa", "budget", "anggaran", "limit", "sisa saldo"]):
+            return {"intent": "CHECK_BUDGET", "confidence": 0.9}
 
-        # Transaction Intent (already has amount)
+        # QUERY_SUMMARY / REPORT
+        if any(kw in text for kw in ["laporan", "report", "rekap", "summary", "pengeluaran saya"]):
+            return {"intent": "QUERY_SUMMARY", "confidence": 0.9}
+
+        # SET_SALARY
+        if text.startswith("/setgaji") or "gaji saya" in text:
+            return {"intent": "SET_SALARY", "confidence": 1.0}
+
+        # SET_BUDGET
+        if text.startswith("/setbudget") or "atur budget" in text:
+            return {"intent": "SET_BUDGET", "confidence": 1.0}
+
+        # ADD_TRANSACTION (has amount)
         amount = self._extract_amount(text)
         if amount > 0:
-            return "add_transaction", 0.9, ["Simpan", "Edit", "Abaikan"]
+            return {"intent": "ADD_TRANSACTION", "confidence": 0.9}
 
-        # Query Budget Intent
-        if any(kw in text for kw in ["sisa", "budget", "anggaran", "limit", "sisa saldo"]):
-            return "query_budget", 0.8, ["Laporan", "Analisis"]
+        return {"intent": "UNKNOWN", "confidence": 0.0}
 
-        # Report Intent
-        if any(kw in text for kw in ["laporan", "report", "rekap", "pengeluaran saya"]):
-            return "get_report", 0.8, ["Mingguan", "Bulanan"]
+    def extract_transaction_data(self, text):
+        """
+        Extracts structured financial transaction data.
+        Returns JSON-like dict.
+        """
+        text = self.normalize_text(text)
+        amount = self._extract_amount(text)
+        category = self._detect_category(text)
+        merchant = self.extract_merchant(text)
+        
+        # Mapping categories to allowed list
+        category_map = {
+            "Makanan": "Makan",
+            "Transportasi": "Transport",
+            "Belanja": "Belanja",
+            "Tagihan": "Tagihan",
+            "Gaji": "Gaji",
+            "Investasi": "Investasi",
+            "Lain-lain": "Lainnya"
+        }
+        mapped_cat = category_map.get(category, "Lainnya")
+        
+        # Determine type
+        type_ = "income" if mapped_cat == "Gaji" else "expense"
+        
+        from datetime import datetime
+        
+        return {
+            "amount": amount if amount > 0 else None,
+            "type": type_ if amount > 0 else None,
+            "category": mapped_cat if amount > 0 else None,
+            "merchant": merchant if merchant != "Transaksi" else None,
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "confidence": 0.9 if amount > 0 else 0.0
+        }
 
-        return "unknown", 0.0, ["/setgaji", "kopi 25rb"]
+    def validate_edit(self, field, user_message):
+        """
+        Validates input for EDIT MODE.
+        """
+        user_message = self.normalize_text(user_message)
+        
+        if field == "amount":
+            amount = self._extract_amount(user_message)
+            if amount > 0:
+                return {"new_value": amount, "valid": True, "reason": None}
+            return {"new_value": None, "valid": False, "reason": "Nominal tidak valid"}
+            
+        if field == "category":
+            category = self._detect_category(user_message)
+            if category != "Lain-lain":
+                return {"new_value": category, "valid": True, "reason": None}
+            return {"new_value": None, "valid": False, "reason": "Kategori tidak dikenal"}
+            
+        return {"new_value": None, "valid": False, "reason": "Field tidak valid"}
 
     def _extract_amount(self, text):
         # 1. Normalize first to handle jt, rb, k
