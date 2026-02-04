@@ -6,8 +6,23 @@ class DBHandler:
     def __init__(self):
         init_db()
         self.session = SessionLocal()
+        self._migrate_db()
         # Principle 3.1: User-defined day cutoff (Default 04:00 AM)
         self.cutoff_hour = 4
+
+    def _migrate_db(self):
+        """
+        Simple migration to add missing columns.
+        init_db() only creates tables, it doesn't add new columns to existing tables.
+        """
+        try:
+            from sqlalchemy import text
+            # Check if pinned_message_id exists in users table
+            self.session.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS pinned_message_id INTEGER"))
+            self.session.commit()
+        except Exception as e:
+            self.session.rollback()
+            print(f"Migration Error: {e}")
 
     def get_effective_date(self, dt=None):
         """
