@@ -14,6 +14,7 @@ class BudgetManager:
     def check_budget_status(self, user_id, category):
         """
         Returns a minimalist message about the budget status for a category.
+        Includes dual-threshold warnings (80% and 100%).
         """
         now = datetime.now()
         budgets = self.db.get_user_budgets(user_id)
@@ -26,8 +27,15 @@ class BudgetManager:
         remaining = target_budget.limit_amount - target_budget.current_usage
         percent = (target_budget.current_usage / target_budget.limit_amount) * 100
         
-        # Principle #2: Minimalist, Angka dulu
-        return (f"Sisa budget {category}: Rp {remaining:,.0f}")
+        msg = f"Sisa budget {category}: Rp {remaining:,.0f}"
+        
+        # Dual-threshold warnings
+        if percent >= 100:
+            msg = f"🔴 LIMIT! Budget {category} sudah 100% terpakai.\nSisa: Rp 0"
+        elif percent >= 80:
+            msg = f"⚠️ WARNING! Budget {category} sudah {percent:.0f}% terpakai.\nSisa: Rp {remaining:,.0f}"
+            
+        return msg
 
     def get_detailed_budget_status(self, user_id, category):
         """

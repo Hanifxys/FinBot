@@ -16,6 +16,7 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     telegram_id = Column(Integer, unique=True, nullable=False)
     username = Column(String)
+    pinned_message_id = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     
 class MonthlyIncome(Base):

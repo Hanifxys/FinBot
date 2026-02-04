@@ -3,7 +3,9 @@ import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes, JobQueue
+from datetime import time, datetime, timedelta
+import pytz
 
 from config import TELEGRAM_BOT_TOKEN, CATEGORIES
 from database.db_handler import DBHandler
@@ -109,32 +111,48 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_report(update, context)
         return
 
-async def send_budget_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_db = db.get_or_create_user(user_id, update.effective_user.username)
-    budgets = db.get_user_budgets(user_db.id)
-    
-    if not budgets:
-        await update.message.reply_text("Belum ada budget yang diset. Pakai `/setgaji` untuk memulai.")
+    elif intent == "HELP":
+        help_msg = (
+            "🚀 **FinBot Command Center**\n\n"
+            "**Catat Transaksi:**\n"
+            "- 'kopi 25rb'\n"
+            "- 'gaji 10jt'\n"
+            "- Kirim foto struk/invoice 📸\n\n"
+            "**Manajemen Budget:**\n"
+            "- `/setgaji [jumlah]`\n"
+            "- `/setbudget [kategori] [jumlah]`\n"
+            "- 'sisa budget'\n\n"
+            "**Laporan & Analisis:**\n"
+            "- 'laporan'\n"
+            "- 'rekap 30 hari'\n\n"
+            "Bot ini pro-level! Coba ketik asal, aku akan beri saran pintar."
+        )
+        await update.message.reply_text(help_msg, parse_mode='Markdown')
         return
-        
-    msg = "📊 Status Budget Bulan Ini:\n\n"
-    for b in budgets:
-        remaining = b.limit_amount - b.current_usage
-        msg += f"- {b.category}: Sisa Rp{remaining:,.0f}\n"
-    
-    await update.message.reply_text(msg)
+
+    elif intent == "GREETING":
+        msg = f"Halo {update.effective_user.first_name}! 👋\nAku asisten finansial pribadimu. Mau catat apa hari ini?"
+        keyboard = [
+            [
+                InlineKeyboardButton("📊 Status Budget", callback_data="suggest_budget"),
+                InlineKeyboardButton("📈 Laporan", callback_data="report_monthly")
+            ],
+            [
+                InlineKeyboardButton("⚙️ Perintah", callback_data="suggest_help")
+            ]
+        ]
+        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
 
     # Fallback for unknown/low confidence
-    if any(kw in text.lower() for kw in ["halo", "hi", "hai", "p"]):
-        msg = f"Halo {update.effective_user.first_name}! Ada yang bisa kubantu catat?"
-        keyboard = [[
-            InlineKeyboardButton("/setgaji", callback_data="suggest_/setgaji"),
-            InlineKeyboardButton("Laporan", callback_data="suggest_laporan")
-        ]]
-        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard))
-    else:
-        await update.message.reply_text("Maaf, aku tidak mengerti. Coba: 'kopi 25rb' atau 'sisa budget'.")
+    fallback_msg = "Maaf, aku tidak mengerti. Coba ketik 'help' untuk daftar perintah atau kirim foto struk."
+    keyboard = [
+        [
+            InlineKeyboardButton("Bantuan", callback_data="suggest_help"),
+            InlineKeyboardButton("Contoh: 'kopi 20k'", callback_data="suggest_example")
+        ]
+    ]
+    await update.message.reply_text(fallback_msg, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -148,6 +166,87 @@ async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
     ]
     await update.message.reply_text("Pilih periode laporan:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def update_pinned_dashboard(context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    user_db = db.get_user(user_id)
+    if not user_db:
+        return
+        
+    report = budget_mgr.generate_report(user_db.id, period='monthly')
+    budgets = db.get_user_budgets(user_db.id)
+    
+    summary = f"📌 **DASHBOARD KEUANGAN**\n\n{report}\n"
+    if budgets:
+        summary += "\n📊 **Budget Utilization:**\n"
+        for b in budgets:
+            percent = (b.current_usage / b.limit_amount) * 100
+            bar = "▓" * int(percent/10) + "░" * (10 - int(percent/10))
+            summary += f"{b.category}: {bar} {percent:.0f}%\n"
+
+    try:
+        if user_db.pinned_message_id:
+            await context.bot.edit_message_text(
+                chat_id=user_db.telegram_id,
+                message_id=user_db.pinned_message_id,
+                text=summary,
+                parse_mode='Markdown'
+            )
+        else:
+            msg = await context.bot.send_message(
+                chat_id=user_db.telegram_id,
+                text=summary,
+                parse_mode='Markdown'
+            )
+            await context.bot.pin_chat_message(chat_id=user_db.telegram_id, message_id=msg.message_id)
+            user_db.pinned_message_id = msg.message_id
+            db.session.commit()
+    except Exception as e:
+        logging.error(f"Error updating pinned dashboard: {e}")
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_db = db.get_or_create_user(user_id, update.effective_user.username)
+    
+    # Download photo
+    photo_file = await update.message.photo[-1].get_file()
+    file_path = f"temp_{user_id}.jpg"
+    await photo_file.download_to_drive(file_path)
+    
+    await update.message.reply_text("Sedang memproses struk... ⏳")
+    
+    try:
+        amount = ocr.process_receipt(file_path)
+        if amount > 0:
+            category = "Belanja"
+            merchant = "Struk Belanja"
+            
+            # Store temporary transaction data for confirmation
+            context.user_data['pending_tx'] = {
+                'amount': amount,
+                'category': category,
+                'merchant': merchant,
+                'type': 'expense'
+            }
+            
+            keyboard = [
+                [
+                    InlineKeyboardButton("✓ Simpan", callback_data="tx_confirm"),
+                    InlineKeyboardButton("✎ Edit", callback_data="tx_edit"),
+                    InlineKeyboardButton("✕ Abaikan", callback_data="tx_ignore")
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            msg = f"Rp {amount:,.0f} · {category}\n{merchant}"
+            await update.message.reply_text(msg, reply_markup=reply_markup)
+        else:
+            await update.message.reply_text("Maaf, aku nggak nemu total harganya. Bisa coba foto lagi atau ketik manual?")
+    except Exception as e:
+        logging.error(f"OCR Error: {e}")
+        await update.message.reply_text("Terjadi kesalahan saat memproses gambar.")
+    finally:
+        if os.path.exists(file_path):
+            os.remove(file_path)
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -169,14 +268,27 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == "tx_confirm" and pending:
         # Evaluate rules before saving
         from datetime import datetime
-        hour = datetime.now().hour
+        
+        # Parse date from pending or use today
+        tx_date = datetime.now()
+        if pending.get('date'):
+            try:
+                # Handle various date formats from OCR
+                date_clean = pending['date'].replace('/', '-')
+                if len(date_clean.split('-')[0]) == 4: # YYYY-MM-DD
+                    tx_date = datetime.strptime(date_clean, "%Y-%m-%d")
+                else: # DD-MM-YYYY
+                    tx_date = datetime.strptime(date_clean, "%d-%m-%Y")
+            except:
+                tx_date = datetime.now()
+
         tags = rules.evaluate({
             "amount": pending['amount'],
             "category": pending['category'],
-            "hour": hour
+            "hour": tx_date.hour
         })
         
-        description = pending['merchant']
+        description = pending.get('merchant', 'Transaksi')
         if tags:
             description += f" ({', '.join(tags)})"
 
@@ -184,31 +296,37 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_id=user_db.id,
             amount=pending['amount'],
             category=pending['category'],
-            type='expense',
-            description=description
+            trans_type='expense',
+            description=description,
+            trans_date=tx_date
         )
         
         # Check budget status after saving
         budget_msg = budget_mgr.check_budget_status(user_db.id, pending['category'])
         
-        # Principle 2.1: Simple response (Confirmation + Sisa Budget)
-        final_msg = f"Rp{pending['amount']:,.0f} · {pending['category']}"
+        final_msg = f"✅ Tersimpan: Rp{pending['amount']:,.0f} · {pending['category']}"
         if budget_msg:
-            final_msg += f"\n{budget_msg}"
+            final_msg += f"\n\n{budget_msg}"
             
         await query.edit_message_text(final_msg)
-        context.user_data.pop('pending_tx', None)
+        user_data.pop('pending_tx', None)
+        user_data.pop('state', None)
+        
+        # Update Pinned Dashboard
+        await update_pinned_dashboard(context, user_id)
         
     elif action == "tx_edit":
-        user_data['state'] = 'WAITING_EDIT_CHOICE'
         keyboard = [
             [
                 InlineKeyboardButton("Nominal", callback_data="edit_amount"),
-                InlineKeyboardButton("Kategori", callback_data="edit_category"),
-                InlineKeyboardButton("Batal", callback_data="tx_ignore")
+                InlineKeyboardButton("Kategori", callback_data="edit_category")
+            ],
+            [
+                InlineKeyboardButton("Tanggal", callback_data="edit_date"),
+                InlineKeyboardButton("Abaikan", callback_data="tx_ignore")
             ]
         ]
-        await query.edit_message_text("Edit apa?", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.edit_message_text("Pilih bagian yang ingin diubah:", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif action == "edit_amount":
         user_data['state'] = 'WAITING_EDIT_AMOUNT'
@@ -216,7 +334,33 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     elif action == "edit_category":
         user_data['state'] = 'WAITING_EDIT_CATEGORY'
-        await query.edit_message_text("Ketik kategori baru (contoh: Makan, Transport, Belanja):")
+        keyboard = []
+        # Group categories into rows of 2
+        for i in range(0, len(CATEGORIES), 2):
+            row = [InlineKeyboardButton(cat, callback_data=f"set_cat_{cat}") for cat in CATEGORIES[i:i+2]]
+            keyboard.append(row)
+        keyboard.append([InlineKeyboardButton("Batal", callback_data="tx_edit")])
+        await query.edit_message_text("Pilih kategori baru:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif action.startswith("set_cat_"):
+        new_cat = action.replace("set_cat_", "")
+        if pending:
+            pending['category'] = new_cat
+            user_data['pending_tx'] = pending
+            msg = f"Kategori diubah ke: {new_cat}\n\nRp{pending['amount']:,.0f} · {new_cat}"
+            keyboard = [
+                [
+                    InlineKeyboardButton("✓ Simpan", callback_data="tx_confirm"),
+                    InlineKeyboardButton("✎ Edit Lagi", callback_data="tx_edit"),
+                    InlineKeyboardButton("✕ Abaikan", callback_data="tx_ignore")
+                ]
+            ]
+            await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard))
+        user_data.pop('state', None)
+
+    elif action == "edit_date":
+        user_data['state'] = 'WAITING_EDIT_DATE'
+        await query.edit_message_text("Ketik tanggal transaksi (format: YYYY-MM-DD):")
         
     elif action == "view_salary_summary":
         user_id = update.effective_user.id
@@ -301,38 +445,53 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_path = f"temp_{user_id}.jpg"
     await photo_file.download_to_drive(file_path)
     
-    await update.message.reply_text("Sedang memproses struk... ⏳")
+    processing_msg = await update.message.reply_text("Sedang memproses struk... ⏳")
     
     try:
-        amount = ocr.process_receipt(file_path)
+        ocr_result = ocr.process_receipt(file_path)
+        amount = ocr_result.get('amount', 0)
+        
         if amount > 0:
-            category = "Belanja"
-            merchant = "Struk Belanja"
+            merchant = ocr_result.get('merchant', 'Struk Belanja')
+            date_str = ocr_result.get('date', datetime.now().strftime("%Y-%m-%d"))
+            
+            # Map merchant to category using NLP
+            category = nlp._detect_category(merchant)
+            if category == "Lain-lain":
+                category = "Belanja" # Default for OCR
             
             # Store temporary transaction data for confirmation
             context.user_data['pending_tx'] = {
                 'amount': amount,
                 'category': category,
                 'merchant': merchant,
+                'date': date_str,
                 'type': 'expense'
             }
             
             keyboard = [
                 [
-                    InlineKeyboardButton("✓ Simpan", callback_data="tx_save"),
+                    InlineKeyboardButton("✓ Simpan", callback_data="tx_confirm"),
                     InlineKeyboardButton("✎ Edit", callback_data="tx_edit"),
                     InlineKeyboardButton("✕ Abaikan", callback_data="tx_ignore")
                 ]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            msg = f"Rp {amount:,.0f} · {category}\n{merchant}"
-            await update.message.reply_text(msg, reply_markup=reply_markup)
+            msg = (
+                f"📝 **Data Struk Berhasil Dibaca**\n\n"
+                f"💰 **Nominal:** Rp{amount:,.0f}\n"
+                f"📂 **Kategori:** {category}\n"
+                f"🏪 **Toko:** {merchant}\n"
+                f"📅 **Tanggal:** {date_str}\n\n"
+                f"Apakah data di atas sudah benar?"
+            )
+            await processing_msg.edit_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
         else:
-            await update.message.reply_text("Maaf, aku nggak nemu total harganya. Bisa coba foto lagi atau ketik manual?")
+            await processing_msg.edit_text("Maaf, aku nggak nemu total harganya. Bisa coba foto lagi atau ketik manual?")
     except Exception as e:
         logging.error(f"OCR Error: {e}")
-        await update.message.reply_text("Terjadi kesalahan saat memproses gambar.")
+        await processing_msg.edit_text("Terjadi kesalahan saat memproses gambar. Coba pastikan foto struk terlihat jelas.")
     finally:
         if os.path.exists(file_path):
             os.remove(file_path)
@@ -349,7 +508,6 @@ async def set_salary(update: Update, context: ContextTypes.DEFAULT_TYPE):
         amount = float(context.args[0].replace('.', '').replace(',', ''))
         db.add_monthly_income(user_db.id, amount)
         
-        # Principle 3.1: Ringkas
         keyboard = [
             [
                 InlineKeyboardButton("Lihat ringkasan", callback_data="view_salary_summary"),
@@ -360,6 +518,7 @@ async def set_salary(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Gaji dicatat: Rp{amount:,.0f}",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
+        await update_pinned_dashboard(context, user_id)
         
     except ValueError:
         await update.message.reply_text("Format nominal salah. Gunakan angka saja.")
@@ -387,6 +546,7 @@ async def set_budget(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.set_budget(user_db.id, category, amount)
         
         await update.message.reply_text(f"✅ Budget {category} berhasil diatur ke Rp {amount:,.0f} per bulan.")
+        await update_pinned_dashboard(context, user_id)
     except ValueError:
         await update.message.reply_text("Format nominal salah. Gunakan angka saja.")
     except Exception as e:
@@ -394,43 +554,56 @@ async def set_budget(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def daily_digest(context: ContextTypes.DEFAULT_TYPE):
     """
-    Automatic daily digest at night.
-    Principle 2.4: Only send if there are transactions.
+    Automatic daily digest at night (21:00 WIB).
+    Includes total expenses, category breakdown, budget utilization, and patterns.
     """
-    from datetime import datetime
-    import pandas as pd
     now = datetime.now()
     users = db.get_all_users()
     
     for user in users:
-        transactions = db.get_daily_transactions(user.id, now.day, now.month, now.year)
+        # 1. Total expenses for the day
+        transactions = db.get_daily_transactions(user.id, now)
         if not transactions:
             continue
             
-        total = sum(t.amount for t in transactions if t.type == 'expense')
-        if total == 0:
+        total_expense = sum(t.amount for t in transactions if t.type == 'expense')
+        if total_expense == 0:
             continue
             
-        # Get top category
+        # 2. Category-wise breakdown
         df = pd.DataFrame([{
             'amount': t.amount,
             'category': t.category
         } for t in transactions if t.type == 'expense'])
-        top_cat = df.groupby('category')['amount'].sum().idxmax()
-        top_amt = df.groupby('category')['amount'].sum().max()
+        cat_summary = df.groupby('category')['amount'].sum().sort_values(ascending=False)
         
-        msg = (f"Hari ini: Rp {total:,.0f}\n"
-               f"Terbesar: {top_cat} Rp {top_amt:,.0f}\n\n")
-        
-        # Add budget info for top category
+        # 3. Budget utilization for top category
+        top_cat = cat_summary.index[0]
         budget_info = budget_mgr.check_budget_status(user.id, top_cat)
+        
+        # 4. Trending patterns (e.g., comparison with last 7 days average)
+        last_7_days = db.get_sliding_window_transactions(user.id, days=7)
+        if last_7_days:
+            avg_7_days = sum(t.amount for t in last_7_days if t.type == 'expense') / 7
+            trend = "📈 Di atas rata-rata" if total_expense > avg_7_days else "📉 Di bawah rata-rata"
+        else:
+            trend = ""
+
+        msg = (f"🌙 **DAILY DIGEST**\n\n"
+               f"💰 Total Hari Ini: Rp{total_expense:,.0f}\n"
+               f"{trend}\n\n"
+               f"📂 Breakdown:\n")
+        
+        for cat, amt in cat_summary.items():
+            msg += f"- {cat}: Rp{amt:,.0f}\n"
+            
         if budget_info:
-            msg += budget_info
+            msg += f"\n💡 {budget_info}"
             
         try:
-            await context.bot.send_message(chat_id=user.telegram_id, text=msg)
+            await context.bot.send_message(chat_id=user.telegram_id, text=msg, parse_mode='Markdown')
         except Exception as e:
-            print(f"Failed to send digest to {user.telegram_id}: {e}")
+            logging.error(f"Failed to send digest to {user.telegram_id}: {e}")
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -460,16 +633,16 @@ if __name__ == '__main__':
 
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     
-    # Scheduler for daily digest (Every night at 21:00)
+    # Scheduler for daily digest (Every night at 21:00 WIB)
     job_queue = application.job_queue
-    from datetime import time
-    job_queue.run_daily(daily_digest, time(hour=21, minute=0))
+    # 21:00 WIB is 14:00 UTC (assuming server is UTC)
+    job_queue.run_daily(daily_digest, time(hour=14, minute=0, tzinfo=pytz.UTC))
     
     # Handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("setgaji", set_salary))
     application.add_handler(CommandHandler("setbudget", set_budget))
-    application.add_handler(CommandHandler("rekomendasi", set_salary)) # Alias for showing recommendation
+    application.add_handler(CommandHandler("rekomendasi", set_salary))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(CallbackQueryHandler(handle_callback))
