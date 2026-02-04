@@ -115,17 +115,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         help_msg = (
             "🚀 **FinBot Command Center**\n\n"
             "**Catat Transaksi:**\n"
-            "- 'kopi 25rb'\n"
-            "- 'gaji 10jt'\n"
-            "- Kirim foto struk/invoice 📸\n\n"
+            "- 'kopi 25rb' atau 'gaji 10jt'\n"
+            "- Kirim foto struk 📸\n\n"
+            "**Perintah Baru:**\n"
+            "- `/undo`: Batalkan transaksi terakhir\n"
+            "- `/hapus [ID]`: Hapus transaksi spesifik\n"
+            "- `/history`: Lihat semua riwayat\n"
+            "- `/history cat:Makanan`: Filter kategori\n"
+            "- `/history min:100k`: Filter nominal min\n\n"
             "**Manajemen Budget:**\n"
             "- `/setgaji [jumlah]`\n"
-            "- `/setbudget [kategori] [jumlah]`\n"
-            "- 'sisa budget'\n\n"
-            "**Laporan & Analisis:**\n"
-            "- 'laporan'\n"
-            "- 'rekap 30 hari'\n\n"
-            "Bot ini pro-level! Coba ketik asal, aku akan beri saran pintar."
+            "- `/setbudget [kategori] [jumlah]`\n\n"
+            "Saldo & Dashboard diupdate otomatis di pesan tersemat (pin)!"
         )
         await update.message.reply_text(help_msg, parse_mode='Markdown')
         return
@@ -174,8 +175,11 @@ async def update_pinned_dashboard(context: ContextTypes.DEFAULT_TYPE, user_id: i
         
     report = budget_mgr.generate_report(user_db.id, period='monthly')
     budgets = db.get_user_budgets(user_db.id)
+    balance = db.get_current_balance(user_db.id)
     
-    summary = f"📌 **DASHBOARD KEUANGAN**\n\n{report}\n"
+    summary = f"📌 **DASHBOARD KEUANGAN**\n"
+    summary += f"💰 **Saldo Saat Ini: Rp{balance:,.0f}**\n\n"
+    summary += f"{report}\n"
     if budgets:
         summary += "\n📊 **Budget Utilization:**\n"
         for b in budgets:
@@ -496,7 +500,72 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if os.path.exists(file_path):
             os.remove(file_path)
 
-async def set_salary(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def undo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_db = db.get_user(user_id)
+    if not user_db:
+        return
+
+    if db.undo_last_transaction(user_db.id):
+        await update.message.reply_text("✅ Transaksi terakhir berhasil dibatalkan (undo).")
+        await update_pinned_dashboard(context, user_id)
+    else:
+        await update.message.reply_text("❌ Tidak ada transaksi untuk dibatalkan.")
+
+async def hapus_transaksi(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_db = db.get_user(user_id)
+    if not user_db:
+        return
+
+    if not context.args:
+        await update.message.reply_text("Gunakan: `/hapus [ID]`\nContoh: `/hapus 123`", parse_mode='Markdown')
+        return
+
+    try:
+        tx_id = int(context.args[0])
+        if db.delete_transaction(user_db.id, tx_id):
+            await update.message.reply_text(f"✅ Transaksi #{tx_id} berhasil dihapus.")
+            await update_pinned_dashboard(context, user_id)
+        else:
+            await update.message.reply_text(f"❌ Transaksi #{tx_id} tidak ditemukan.")
+    except ValueError:
+        await update.message.reply_text("ID transaksi harus berupa angka.")
+
+async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_db = db.get_user(user_id)
+    if not user_db:
+        return
+
+    # Parse filters from arguments
+    category = None
+    min_amount = None
+    
+    for arg in context.args:
+        if arg.startswith("cat:"):
+            category = arg.split(":", 1)[1]
+        elif arg.startswith("min:"):
+            try:
+                min_amount = float(arg.split(":", 1)[1].replace('k', '000'))
+            except:
+                pass
+
+    txs = db.get_transactions_history(user_db.id, category=category, min_amount=min_amount)
+    
+    if not txs:
+        await update.message.reply_text("Belum ada riwayat transaksi atau tidak ditemukan filter yang cocok.")
+        return
+
+    msg = "📜 **RIWAYAT TRANSAKSI**\n\n"
+    for tx in txs:
+        date_str = tx.date.strftime("%d/%m %H:%M")
+        msg += f"`#{tx.id}` {date_str} | **{tx.category}**\n   Rp{tx.amount:,.0f} - {tx.description[:20]}\n"
+    
+    msg += "\n💡 *Gunakan `/hapus [ID]` untuk menghapus transaksi.*"
+    await update.message.reply_text(msg, parse_mode='Markdown')
+
+async def set_gaji(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_db = db.get_or_create_user(user_id, update.effective_user.username)
     
@@ -654,9 +723,12 @@ if __name__ == '__main__':
     
     # Handlers
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("setgaji", set_salary))
+    application.add_handler(CommandHandler("setgaji", set_gaji))
     application.add_handler(CommandHandler("setbudget", set_budget))
-    application.add_handler(CommandHandler("rekomendasi", set_salary))
+    application.add_handler(CommandHandler("undo", undo))
+    application.add_handler(CommandHandler("hapus", hapus_transaksi))
+    application.add_handler(CommandHandler("history", history))
+    application.add_handler(CommandHandler("rekomendasi", set_gaji))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(CallbackQueryHandler(handle_callback))

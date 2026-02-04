@@ -188,6 +188,61 @@ class DBHandler:
             year=now.year
         ).all()
 
+    def get_transactions_history(self, user_id, limit=50, category=None, start_date=None, end_date=None, min_amount=None):
+        """
+        Retrieves transaction history with advanced filtering.
+        """
+        query = self.session.query(Transaction).filter(Transaction.user_id == user_id)
+        
+        if category:
+            query = query.filter(Transaction.category.ilike(f"%{category}%"))
+        if start_date:
+            query = query.filter(Transaction.date >= start_date)
+        if end_date:
+            query = query.filter(Transaction.date <= end_date)
+        if min_amount:
+            query = query.filter(Transaction.amount >= min_amount)
+            
+        return query.order_by(Transaction.date.desc()).limit(limit).all()
+
+    def delete_transaction(self, user_id, transaction_id):
+        """
+        Deletes a specific transaction and reverses budget usage.
+        """
+        tx = self.session.query(Transaction).filter_by(id=transaction_id, user_id=user_id).first()
+        if tx:
+            if tx.type == 'expense':
+                # Reverse budget usage
+                self.update_budget_usage(user_id, tx.category, -tx.amount)
+            
+            self.session.delete(tx)
+            self.session.commit()
+            return True
+        return False
+
+    def undo_last_transaction(self, user_id):
+        """
+        Deletes the very last transaction made by the user.
+        """
+        last_tx = self.session.query(Transaction).filter_by(user_id=user_id).order_by(Transaction.id.desc()).first()
+        if last_tx:
+            return self.delete_transaction(user_id, last_tx.id)
+        return False
+
+    def get_current_balance(self, user_id):
+        """
+        Calculates real-time balance: Total Income - Total Expense for the current month.
+        """
+        now = datetime.now()
+        income = self.get_latest_income(user_id)
+        total_income = income.amount if income else 0
+        
+        # Sum all expenses for this month
+        transactions = self.get_monthly_report(user_id, now.month, now.year)
+        total_expense = sum(t.amount for t in transactions if t.type == 'expense')
+        
+        return total_income - total_expense
+
     def get_monthly_report(self, user_id, month, year):
         return self.session.query(Transaction).filter(
             Transaction.user_id == user_id,
