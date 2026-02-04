@@ -1,5 +1,7 @@
 import logging
 import os
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
@@ -314,11 +316,32 @@ async def daily_digest(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             print(f"Failed to send digest to {user.telegram_id}: {e}")
 
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+    def log_message(self, format, *args):
+        # Silence logs to keep things clean
+        return
+
+def run_health_check_server():
+    port = int(os.getenv("PORT", 8000))
+    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+    print(f"Health check server running on port {port}")
+    server.serve_forever()
+
 if __name__ == '__main__':
     if not TELEGRAM_BOT_TOKEN:
         print("Error: TELEGRAM_BOT_TOKEN tidak ditemukan di .env")
         exit(1)
         
+    # Start health check server for Koyeb in a separate thread
+    health_thread = threading.Thread(target=run_health_check_server, daemon=True)
+    health_thread.start()
+
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     
     # Scheduler for daily digest (Every night at 21:00)
