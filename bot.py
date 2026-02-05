@@ -143,9 +143,13 @@ async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
     filepath = os.path.join(os.getcwd(), filename)
     
     try:
-        db.export_transactions_to_csv(user_db.id, filepath)
-        await update.message.reply_document(document=open(filepath, 'rb'), filename=filename, caption="📊 Ini data transaksi kamu dalam format CSV.")
-        os.remove(filepath)
+        result = db.export_transactions_to_csv(user_db.id, filepath)
+        if result:
+            with open(filepath, 'rb') as f:
+                await update.message.reply_document(document=f, filename=filename, caption="📊 Ini data transaksi kamu dalam format CSV.")
+            os.remove(filepath)
+        else:
+            await update.message.reply_text("Belum ada data transaksi untuk diekspor. Yuk mulai catat! 📝")
     except Exception as e:
         await update.message.reply_text(f"Gagal mengekspor data: {e}")
 

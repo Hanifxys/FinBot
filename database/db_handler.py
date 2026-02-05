@@ -294,21 +294,21 @@ class DBHandler:
 
     # --- EXPORT ---
     def export_transactions_to_csv(self, user_id, filepath):
-        import csv
+        import pandas as pd
         txs = self.session.query(Transaction).filter_by(user_id=user_id).order_by(Transaction.date.desc()).all()
         
-        with open(filepath, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow(['ID', 'Tanggal', 'Kategori', 'Nominal', 'Tipe', 'Deskripsi'])
-            for tx in txs:
-                writer.writerow([
-                    tx.id, 
-                    tx.date.strftime('%Y-%m-%d %H:%M'), 
-                    tx.category, 
-                    tx.amount, 
-                    tx.type, 
-                    tx.description
-                ])
+        if not txs:
+            return None
+
+        df = pd.DataFrame([{
+            'Tanggal': tx.date.strftime('%Y-%m-%d %H:%M'),
+            'Tipe': 'Pengeluaran' if tx.type == 'expense' else 'Pemasukan',
+            'Kategori': tx.category,
+            'Nominal': f"Rp{tx.amount:,.0f}",
+            'Catatan': tx.description or '-'
+        } for tx in txs])
+        
+        df.to_csv(filepath, index=False)
         return filepath
 
     def add_monthly_income(self, user_id, amount):
