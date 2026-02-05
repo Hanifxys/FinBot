@@ -160,14 +160,15 @@ class NLPProcessor:
         if any(kw in normalized_text for kw in ["help", "tolong", "bantuan", "perintah", "command", "bisa apa"]):
             return {"intent": "HELP", "confidence": 1.0}
 
-        # 5. Check for Greetings
-        if any(kw in normalized_text for kw in ["halo", "hi", "hai", "p", "siang", "pagi", "malam", "u", "uii", "ui", "oey"]):
+        # 5. Check for Greetings and Social Chat
+        if any(re.search(rf'\b{re.escape(kw)}\b', normalized_text) for kw in ["halo", "hi", "hai", "p", "siang", "pagi", "malam", "u", "uii", "ui", "oey", "halo", "apa kabar", "gimana", "sehat", "baik"]):
             return {"intent": "GREETING", "confidence": 1.0}
 
         # 6. LLM Fallback (Groq) for complex queries
         if self.groq_enabled:
             llm_intent = self._llm_classify_intent(text)
-            if llm_intent:
+            # Only accept LLM intent if confidence is high, otherwise fallback to UNKNOWN
+            if llm_intent and llm_intent.get('confidence', 0) >= 0.7:
                 return llm_intent
 
         return {"intent": "UNKNOWN", "confidence": 0.0}
@@ -182,14 +183,17 @@ class NLPProcessor:
             
             Allowed intents:
             - ADD_TRANSACTION: User wants to record an expense or income (e.g., "beli cilok", "tadi makan 20k")
-            - CHECK_BUDGET: User asks about remaining budget or limits
-            - QUERY_SUMMARY: User wants to see reports or stats
+            - CHECK_BUDGET: User asks about remaining budget or limits (e.g., "sisa budget", "berapa limitku")
+            - QUERY_SUMMARY: User EXPLICITLY wants to see reports, stats, or rekap (e.g., "liat laporan", "rekap bulan ini")
             - HELP: User needs assistance or command list
-            - GREETING: Casual talk
+            - GREETING: Casual talk, greetings, or existential/social questions (e.g., "apa kabar", "kamu siapa", "baik2 saja")
             - UNKNOWN: Anything else
             
+            CRITICAL: If the message is just a social question or greeting, return GREETING. 
+            Do NOT return QUERY_SUMMARY unless the user specifically asks for a report or summary.
+            
             Return ONLY a JSON with "intent" and "confidence" (0.0-1.0).
-            Example: {{"intent": "ADD_TRANSACTION", "confidence": 0.85}}
+            Example: {{"intent": "GREETING", "confidence": 0.95}}
             """
             
             chat_completion = self.client.chat.completions.create(

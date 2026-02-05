@@ -855,8 +855,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     from telegram.error import Conflict
     if isinstance(context.error, Conflict):
         logging.error("CRITICAL: Conflict error detected! Another instance is running with the same token.")
-        # We don't exit here as run_polling will handle retries, 
-        # but this helps in identifying the issue in logs.
+        logging.error("TIPS: Pastikan Anda tidak menjalankan bot di laptop/lokal saat bot di server sedang aktif.")
 
 if __name__ == '__main__':
     if not TELEGRAM_BOT_TOKEN:
