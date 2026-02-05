@@ -1,6 +1,8 @@
 # Stage 1: Build stage
 FROM python:3.10-slim AS builder
 
+ENV DEBIAN_FRONTEND=noninteractive
+
 WORKDIR /app
 
 # Install build dependencies
@@ -14,6 +16,8 @@ RUN pip install --user --no-cache-dir -r requirements.txt
 
 # Stage 2: Final runtime stage
 FROM python:3.10-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
 
 WORKDIR /app
 
