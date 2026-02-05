@@ -161,8 +161,8 @@ class NLPProcessor:
             return {"intent": "HELP", "confidence": 1.0}
 
         # 5. Check for Greetings
-        if any(kw in normalized_text for kw in ["halo", "hi", "hai", "p", "siang", "pagi", "malam"]):
-            return {"intent": "GREETING", "confidence": 0.8}
+        if any(kw in normalized_text for kw in ["halo", "hi", "hai", "p", "siang", "pagi", "malam", "u", "uii", "ui", "oey"]):
+            return {"intent": "GREETING", "confidence": 1.0}
 
         # 6. LLM Fallback (Groq) for complex queries
         if self.groq_enabled:
@@ -194,7 +194,7 @@ class NLPProcessor:
             
             chat_completion = self.client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
-                model="llama3-8b-8192",
+                model="llama-3.3-70b-versatile",
                 response_format={"type": "json_object"}
             )
             import json

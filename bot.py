@@ -285,15 +285,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    # Fallback for unknown/low confidence
-    fallback_msg = "Maaf, aku tidak mengerti. Coba ketik 'help' untuk daftar perintah atau kirim foto struk."
+    # Fallback: Use AI for casual chat
+    user_name = update.effective_user.first_name
+    ai_reply = ai.chat_response(text, user_name)
+    
     keyboard = [
         [
-            InlineKeyboardButton("Bantuan", callback_data="suggest_help"),
-            InlineKeyboardButton("Contoh: 'kopi 20k'", callback_data="suggest_example")
+            InlineKeyboardButton("📊 Status Budget", callback_data="suggest_budget"),
+            InlineKeyboardButton("📈 Laporan", callback_data="report_monthly")
+        ],
+        [
+            InlineKeyboardButton("🚀 Command Center", callback_data="suggest_help")
         ]
     ]
-    await update.message.reply_text(fallback_msg, reply_markup=InlineKeyboardMarkup(keyboard))
+    await update.message.reply_text(ai_reply, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -410,6 +415,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = query.data
     pending = user_data.get('pending_tx')
     
+    if action == "suggest_help":
+        await help_command(update, context)
+        return
+
     if action.startswith("report_"):
         period = action.replace("report_", "")
         report_msg = budget_mgr.generate_report(user_db.id, period=period)
