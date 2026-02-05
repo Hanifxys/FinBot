@@ -238,6 +238,28 @@ def test_analyzer_insights_and_health():
     db_mock.get_latest_income.return_value = None
     assert analyzer.calculate_health_score(1) == 50
 
+def test_analyzer_anomaly_detection():
+    db_mock = MagicMock()
+    analyzer = ExpenseAnalyzer(db_mock)
+    
+    # 1. Test large transaction detection
+    t_large = MagicMock(amount=5000000, category="Hiburan", type="expense")
+    db_mock.get_monthly_report.return_value = [t_large]
+    
+    insight = analyzer.analyze_patterns(1)
+    assert "TRANSAKSI BESAR" in insight
+    assert "Rp5,000,000" in insight
+
+    # 2. Test frequency detection
+    t1 = MagicMock(amount=20000, category="Makanan", date=datetime.now(), type="expense")
+    t2 = MagicMock(amount=20000, category="Makanan", date=datetime.now(), type="expense")
+    t3 = MagicMock(amount=20000, category="Makanan", date=datetime.now(), type="expense")
+    db_mock.get_monthly_report.return_value = [t1, t2, t3]
+    
+    insight_freq = analyzer.analyze_patterns(1)
+    assert "FREKUENSI TINGGI" in insight_freq
+    assert "Makanan" in insight_freq
+
 # 5. DB Handler Tests
 def test_db_handler_full():
     # Use SQLite memory for real testing

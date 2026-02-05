@@ -1,16 +1,20 @@
 import os
 import json
+import logging
+import time
 from groq import Groq
 from config import GROQ_API_KEY, CATEGORIES
+
+logger = logging.getLogger(__name__)
 
 class AIEngine:
     def __init__(self):
         self.client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
         self.model = "llama3-8b-8192"
 
-    def parse_transaction(self, text):
+    def parse_transaction(self, text, retries=2):
         """
-        Parses natural language text into a structured transaction JSON using Groq.
+        Parses natural language text into a structured transaction JSON using Groq with retry logic.
         """
         if not self.client:
             return None
@@ -32,20 +36,24 @@ class AIEngine:
         Example: "beli sate 50rb" -> {{"amount": 50000, "category": "Makanan", "description": "beli sate", "type": "expense", "is_transaction": true}}
         """
 
-        try:
-            response = self.client.chat.completions.create(
-                messages=[{"role": "user", "content": prompt}],
-                model=self.model,
-                response_format={"type": "json_object"}
-            )
-            return json.loads(response.choices[0].message.content)
-        except Exception as e:
-            print(f"Groq Parsing Error: {e}")
-            return None
+        for attempt in range(retries + 1):
+            try:
+                response = self.client.chat.completions.create(
+                    messages=[{"role": "user", "content": prompt}],
+                    model=self.model,
+                    response_format={"type": "json_object"}
+                )
+                return json.loads(response.choices[0].message.content)
+            except Exception as e:
+                logger.error(f"Groq Parsing Error (attempt {attempt+1}): {e}")
+                if attempt == retries:
+                    return None
+                time.sleep(1)
+        return None
 
-    def generate_smart_insight(self, analysis_data):
+    def generate_smart_insight(self, analysis_data, retries=2):
         """
-        Generates a human-like financial advice based on raw analysis data.
+        Generates a human-like financial advice based on raw analysis data with retry logic.
         """
         if not self.client:
             return "AI Key tidak ditemukan. Gunakan analisis standar."
@@ -60,11 +68,16 @@ class AIEngine:
         Gunakan bahasa Indonesia yang santai tapi profesional. Berikan apresiasi jika bagus, dan tegur dengan sopan jika boros.
         """
 
-        try:
-            response = self.client.chat.completions.create(
-                messages=[{"role": "user", "content": prompt}],
-                model=self.model,
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            return f"Error generating AI insight: {e}"
+        for attempt in range(retries + 1):
+            try:
+                response = self.client.chat.completions.create(
+                    messages=[{"role": "user", "content": prompt}],
+                    model=self.model,
+                )
+                return response.choices[0].message.content
+            except Exception as e:
+                logger.error(f"Error generating AI insight (attempt {attempt+1}): {e}")
+                if attempt == retries:
+                    return f"Aduh, AI-nya lagi capek nih (Error: {e}). Coba lagi nanti ya!"
+                time.sleep(1)
+        return "Aduh, AI-nya lagi capek nih. Coba lagi nanti ya!"
