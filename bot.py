@@ -467,8 +467,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         final_msg = f"✅ Tersimpan: Rp{pending['amount']:,.0f} · {pending['category']}"
         if budget_msg:
             final_msg += f"\n\n{budget_msg}"
+        else:
+            final_msg += "\n\nMau catat transaksi lain atau cek laporan?"
             
-        await query.edit_message_text(final_msg)
+        keyboard = [
+            [
+                InlineKeyboardButton("📊 Cek Budget", callback_data="suggest_budget"),
+                InlineKeyboardButton("📈 Laporan", callback_data="report_monthly")
+            ],
+            [
+                InlineKeyboardButton("🚀 Menu Utama", callback_data="suggest_help")
+            ]
+        ]
+            
+        await query.edit_message_text(final_msg, reply_markup=InlineKeyboardMarkup(keyboard))
         user_data.pop('pending_tx', None)
         user_data.pop('state', None)
         
@@ -536,8 +548,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif action == "tx_ignore":
         user_data = context.user_data
         user_data.pop('state', None)
-        await query.edit_message_text("Transaksi diabaikan.")
         user_data.pop('pending_tx', None)
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("📊 Status Budget", callback_data="suggest_budget"),
+                InlineKeyboardButton("📈 Laporan", callback_data="report_monthly")
+            ],
+            [
+                InlineKeyboardButton("🚀 Menu Utama", callback_data="suggest_help")
+            ]
+        ]
+        await query.edit_message_text("Transaksi diabaikan. Ada lagi yang bisa aku bantu?", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif action == "show_budget_menu":
         await query.edit_message_text("Mau ubah alokasi?")
@@ -557,6 +579,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("Ketik `/setbudget [Kategori] [Jumlah]` untuk atur limit.", parse_mode='Markdown')
         elif suggested_cmd == "laporan":
             await send_report(update, context)
+        elif suggested_cmd == "budget":
+            await send_budget_summary(update, context)
+        elif suggested_cmd == "insight":
+            await get_ai_insight(update, context)
+        elif suggested_cmd == "help":
+            await help_command(update, context)
         else:
             await query.edit_message_text(f"Kamu memilih: {suggested_cmd}")
 
@@ -583,7 +611,17 @@ async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     report = budget_mgr.generate_report(user_db.id)
     transactions = db.get_monthly_report(user_db.id, now.month, now.year)
     
-    await update.message.reply_text(report)
+    keyboard = [
+        [
+            InlineKeyboardButton("📊 Detail Budget", callback_data="suggest_budget"),
+            InlineKeyboardButton("💡 Tips Hemat", callback_data="suggest_insight")
+        ],
+        [
+            InlineKeyboardButton("🚀 Menu Utama", callback_data="suggest_help")
+        ]
+    ]
+    
+    await update.message.reply_text(report, reply_markup=InlineKeyboardMarkup(keyboard))
     
     photo_path = visual_reporter.generate_expense_pie(transactions, user_id)
     if photo_path:
