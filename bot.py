@@ -54,7 +54,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "- `/setbudget [Kategori] [Nominal]`: Atur limit budget\n\n"
         "💡 *Tips: Dashboard terupdate otomatis di pesan yang di-pin!*"
     )
-    await update.message.reply_text(help_text, parse_mode='Markdown')
+    if update.callback_query:
+        await update.callback_query.message.reply_text(help_text, parse_mode='Markdown')
+    else:
+        await update.message.reply_text(help_text, parse_mode='Markdown')
 
 async def set_target(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -144,7 +147,8 @@ async def get_ai_insight(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 2. Enhance with Groq AI
     ai_insight = ai.generate_smart_insight(raw_insight)
     
-    await update.message.reply_text(f"🤖 **FINBOT AI ADVISOR**\n\n{ai_insight}", parse_mode='Markdown')
+    target = update.callback_query.message if update.callback_query else update.message
+    await target.reply_text(f"🤖 **FINBOT AI ADVISOR**\n\n{ai_insight}", parse_mode='Markdown')
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -311,7 +315,11 @@ async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("30 Hari Terakhir", callback_data="report_30days")
         ]
     ]
-    await update.message.reply_text("Pilih periode laporan:", reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    if update.callback_query:
+        await update.callback_query.message.reply_text("Pilih periode laporan:", reply_markup=InlineKeyboardMarkup(keyboard))
+    else:
+        await update.message.reply_text("Pilih periode laporan:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def update_pinned_dashboard(context: ContextTypes.DEFAULT_TYPE, user_id: int):
     user_db = db.get_user(user_id)
@@ -578,7 +586,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif suggested_cmd == "/setbudget":
             await query.edit_message_text("Ketik `/setbudget [Kategori] [Jumlah]` untuk atur limit.", parse_mode='Markdown')
         elif suggested_cmd == "laporan":
-            await send_report(update, context)
+            keyboard = [
+                [
+                    InlineKeyboardButton("Bulan Ini", callback_data="report_monthly"),
+                    InlineKeyboardButton("7 Hari Terakhir", callback_data="report_7days"),
+                    InlineKeyboardButton("30 Hari Terakhir", callback_data="report_30days")
+                ]
+            ]
+            await query.edit_message_text("Pilih periode laporan:", reply_markup=InlineKeyboardMarkup(keyboard))
         elif suggested_cmd == "budget":
             await send_budget_summary(update, context)
         elif suggested_cmd == "insight":
@@ -593,15 +608,17 @@ async def send_budget_summary(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_db = db.get_or_create_user(user_id, update.effective_user.username)
     budgets = db.get_user_budgets(user_db.id)
     
+    target = update.callback_query.message if update.callback_query else update.message
+    
     if not budgets:
-        await update.message.reply_text("Kamu belum set budget apapun. Gunakan `/setbudget [Kategori] [Jumlah]`")
+        await target.reply_text("Kamu belum set budget apapun. Gunakan `/setbudget [Kategori] [Jumlah]`")
         return
         
     msg = ""
     for b in budgets:
         msg += budget_mgr.get_detailed_budget_status(user_db.id, b.category) + "\n\n"
     
-    await update.message.reply_text(msg.strip())
+    await target.reply_text(msg.strip())
 
 async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
