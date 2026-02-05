@@ -10,12 +10,13 @@ from modules.analysis import ExpenseAnalyzer
 
 @pytest.fixture
 def db_setup():
+    from database.models import init_db
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
+    init_db(engine)
     Session = sessionmaker(bind=engine)
     session = Session()
-    handler = DBHandler()
-    handler.session = session
+    session.is_mock = True # Skip migration
+    handler = DBHandler(session=session)
     
     # Create test user
     user = User(telegram_id=12345, username="test_user")

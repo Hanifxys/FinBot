@@ -12,6 +12,56 @@ from modules.ocr import OCRProcessor
 from modules.rules import RuleEngine
 from modules.budget import BudgetManager
 from modules.analysis import ExpenseAnalyzer
+from modules.ai_engine import AIEngine
+from utils.visuals import VisualReporter
+from unittest.mock import patch
+
+# --- VISUAL REPORTER TESTS ---
+def test_visual_reporter():
+    vr = VisualReporter(output_dir="test_reports")
+    mock_tx = MagicMock()
+    mock_tx.amount = 50000
+    mock_tx.category = "Makanan"
+    mock_tx.type = "expense"
+    
+    with patch('matplotlib.pyplot.savefig'), patch('matplotlib.pyplot.close'):
+        path = vr.generate_expense_pie([mock_tx], 123)
+        assert path is not None
+        assert "report_123.png" in path
+
+def test_visual_reporter_empty():
+    vr = VisualReporter(output_dir="test_reports")
+    assert vr.generate_expense_pie([], 123) is None
+
+# --- AI ENGINE TESTS ---
+def test_ai_engine_no_client():
+    with patch.dict('os.environ', {'GROQ_API_KEY': ''}):
+        ai = AIEngine()
+        ai.client = None
+        assert ai.parse_transaction("halo") is None
+        assert "AI Key tidak ditemukan" in ai.generate_smart_insight({})
+        assert "FinBot" in ai.chat_response("halo")
+
+def test_ai_engine_parsing():
+    ai = AIEngine()
+    ai.client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.choices[0].message.content = '{"amount": 50000, "category": "Makanan", "is_transaction": true}'
+    ai.client.chat.completions.create.return_value = mock_response
+    
+    result = ai.parse_transaction("makan sate 50rb")
+    assert result["amount"] == 50000
+    assert result["category"] == "Makanan"
+
+def test_ai_engine_insight():
+    ai = AIEngine()
+    ai.client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.choices[0].message.content = "Bagus sekali!"
+    ai.client.chat.completions.create.return_value = mock_response
+    
+    result = ai.generate_smart_insight({"data": "test"})
+    assert result == "Bagus sekali!"
 
 # --- NLP TESTS ---
 def test_nlp_process_text():

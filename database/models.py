@@ -1,7 +1,6 @@
 from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, create_engine, extract
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship, sessionmaker
-from datetime import datetime
+from sqlalchemy.orm import relationship, sessionmaker, declarative_base
+from datetime import datetime, timezone
 import sys
 import os
 
@@ -17,7 +16,7 @@ class User(Base):
     telegram_id = Column(Integer, unique=True, nullable=False)
     username = Column(String)
     pinned_message_id = Column(Integer, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     
 class MonthlyIncome(Base):
     __tablename__ = 'monthly_incomes'
@@ -26,7 +25,7 @@ class MonthlyIncome(Base):
     amount = Column(Float, nullable=False)
     month = Column(Integer)
     year = Column(Integer)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 class Transaction(Base):
     __tablename__ = 'transactions'
@@ -36,7 +35,7 @@ class Transaction(Base):
     category = Column(String, nullable=False)
     description = Column(String)
     type = Column(String) # 'expense' or 'income'
-    date = Column(DateTime, default=datetime.utcnow)
+    date = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     
     user = relationship("User", back_populates="transactions")
 
@@ -61,10 +60,27 @@ class SavingGoal(Base):
     current_amount = Column(Float, default=0.0)
     target_date = Column(DateTime, nullable=True)
     is_active = Column(Integer, default=1) # 1 for active, 0 for completed/cancelled
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-def init_db():
-    Base.metadata.create_all(bind=engine)
+# Create engine and SessionLocal
+# Allow overriding for tests
+engine = None
+SessionLocal = None
+
+def get_engine():
+    global engine
+    if engine is None:
+        engine = create_engine(DATABASE_URL)
+    return engine
+
+def get_session():
+    global SessionLocal
+    if SessionLocal is None:
+        SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=get_engine())
+    return SessionLocal()
+
+def init_db(target_engine=None):
+    if target_engine is None:
+        target_engine = get_engine()
+    Base.metadata.create_all(bind=target_engine)

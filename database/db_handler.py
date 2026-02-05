@@ -1,12 +1,18 @@
-from .models import SessionLocal, User, Transaction, Budget, MonthlyIncome, SavingGoal, init_db
+from .models import get_session, User, Transaction, Budget, MonthlyIncome, SavingGoal, init_db
 from datetime import datetime, timedelta
 from sqlalchemy import extract, and_
 
 class DBHandler:
-    def __init__(self):
-        init_db()
-        self.session = SessionLocal()
-        self._migrate_db()
+    def __init__(self, session=None):
+        if session:
+            self.session = session
+        else:
+            init_db()
+            self.session = get_session()
+        
+        # Only migrate if it's not a mock/test session (simple check)
+        if not hasattr(self.session, 'is_mock'):
+            self._migrate_db()
         # Principle 3.1: User-defined day cutoff (Default 04:00 AM)
         self.cutoff_hour = 4
 

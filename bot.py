@@ -3,10 +3,11 @@ import os
 import threading
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes, JobQueue
 from datetime import time, datetime, timedelta
 import pytz
+import pandas as pd
 
 from config import TELEGRAM_BOT_TOKEN, CATEGORIES
 from database.db_handler import DBHandler
@@ -933,6 +934,23 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         logging.error("CRITICAL: Conflict error detected! Another instance is running with the same token.")
         logging.error("TIPS: Pastikan Anda tidak menjalankan bot di laptop/lokal saat bot di server sedang aktif.")
 
+async def post_init(application):
+    commands = [
+        BotCommand("start", "Mulai bot & Registrasi"),
+        BotCommand("help", "Tampilkan menu bantuan"),
+        BotCommand("setgaji", "Atur pendapatan bulanan"),
+        BotCommand("setbudget", "Atur limit budget kategori"),
+        BotCommand("undo", "Batalkan transaksi terakhir"),
+        BotCommand("hapus", "Hapus transaksi spesifik"),
+        BotCommand("history", "Lihat riwayat transaksi"),
+        BotCommand("target", "Buat target menabung baru"),
+        BotCommand("nabung", "Tambah tabungan ke target"),
+        BotCommand("list_target", "Lihat semua target menabung"),
+        BotCommand("export", "Download data transaksi CSV"),
+        BotCommand("insight", "Analisis cerdas pola pengeluaran"),
+    ]
+    await application.bot.set_my_commands(commands)
+
 if __name__ == '__main__':
     # Start health check server IMMEDIATELY to pass platform health checks
     health_thread = threading.Thread(target=run_health_check_server, daemon=True)
@@ -949,7 +967,7 @@ if __name__ == '__main__':
     # health_thread = threading.Thread(target=run_health_check_server, daemon=True)
     # health_thread.start()
 
-    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
     
     # Add global error handler
     application.add_error_handler(error_handler)

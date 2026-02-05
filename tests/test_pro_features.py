@@ -15,19 +15,19 @@ from modules.ai_engine import AIEngine
 @pytest.fixture
 def db_session():
     """Create a fresh in-memory database for each test."""
+    from database.models import init_db
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
+    init_db(engine)
     Session = sessionmaker(bind=engine)
     session = Session()
+    session.is_mock = True # Skip migration
     yield session
     session.close()
 
 @pytest.fixture
 def db_handler(db_session):
-    """DBHandler with mocked session."""
-    handler = DBHandler()
-    handler.session = db_session
-    return handler
+    """DBHandler with provided session."""
+    return DBHandler(session=db_session)
 
 @pytest.fixture
 def ai_engine():

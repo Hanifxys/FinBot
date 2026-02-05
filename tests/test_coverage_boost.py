@@ -15,7 +15,8 @@ def mock_db():
 # --- DBHandler Coverage ---
 
 def test_db_effective_date():
-    handler = DBHandler()
+    # Pass a mock session to avoid DB connection in constructor
+    handler = DBHandler(session=MagicMock())
     handler.cutoff_hour = 4
     
     # 3 AM today should be yesterday
