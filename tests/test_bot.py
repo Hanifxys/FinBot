@@ -1,10 +1,35 @@
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, patch, AsyncMock, ANY
 from telegram import Update, Message, User
 from telegram.ext import ContextTypes
 import bot
 import pandas as pd
 from datetime import datetime
+
+@pytest.fixture(autouse=True)
+def setup_bot_components():
+    with patch('bot.db', MagicMock()) as mock_db, \
+         patch('bot.ocr', MagicMock()) as mock_ocr, \
+         patch('bot.nlp', MagicMock()) as mock_nlp, \
+         patch('bot.ai', MagicMock()) as mock_ai, \
+         patch('bot.budget_mgr', MagicMock()) as mock_budget_mgr, \
+         patch('bot.analyzer', MagicMock()) as mock_analyzer, \
+         patch('bot.rules', MagicMock()) as mock_rules, \
+         patch('bot.visual_reporter', MagicMock()) as mock_visual_reporter:
+        # Set some default behaviors for mocks
+        mock_db.get_or_create_user.return_value = MagicMock(id=1, telegram_id=12345)
+        mock_db.get_user.return_value = MagicMock(id=1, telegram_id=12345)
+        
+        yield {
+            'db': mock_db,
+            'ocr': mock_ocr,
+            'nlp': mock_nlp,
+            'ai': mock_ai,
+            'budget_mgr': mock_budget_mgr,
+            'analyzer': mock_analyzer,
+            'rules': mock_rules,
+            'visual_reporter': mock_visual_reporter
+        }
 
 @pytest.fixture
 def mock_update():
@@ -562,4 +587,146 @@ async def test_handle_message_waiting_edit_date(mock_update, mock_context):
         assert 'state' not in mock_context.user_data
         mock_update.message.reply_text.assert_called()
         assert "Berhasil diubah" in mock_update.message.reply_text.call_args[0][0]
+
+@pytest.mark.asyncio
+async def test_handle_message_casual_chat(mock_update, mock_context, setup_bot_components):
+    mock_update.message.text = "Halo bot, apa kabar?"
+    mock_ai = setup_bot_components['ai']
+    mock_ai.parse_transaction.return_value = {'is_transaction': False}
+    mock_ai.chat_response.return_value = "Kabar baik!"
+    
+    await bot.handle_message(mock_update, mock_context)
+    
+    mock_ai.chat_response.assert_called_once()
+    mock_update.message.reply_text.assert_called_once()
+    assert "Kabar baik!" in mock_update.message.reply_text.call_args[0][0]
+
+@pytest.mark.asyncio
+async def test_send_report_callback(mock_update, mock_context, setup_bot_components):
+    mock_update.callback_query = AsyncMock()
+    mock_update.callback_query.message = MagicMock()
+    mock_update.callback_query.message.reply_text = AsyncMock()
+    
+    await bot.send_report(mock_update, mock_context)
+    
+    mock_update.callback_query.message.reply_text.assert_called_with(
+        "Pilih periode laporan:", 
+        reply_markup=ANY
+    )
+
+@pytest.mark.asyncio
+async def test_handle_photo_success(mock_update, mock_context, setup_bot_components):
+    mock_photo = MagicMock()
+    mock_photo.get_file = AsyncMock()
+    mock_file = AsyncMock()
+    mock_file.download_to_drive = AsyncMock()
+    mock_photo.get_file.return_value = mock_file
+    mock_update.message.photo = [mock_photo]
+    
+    # Setup processing_msg mock
+    processing_msg = AsyncMock()
+    mock_update.message.reply_text.return_value = processing_msg
+    
+    mock_ocr = setup_bot_components['ocr']
+    mock_ocr.process_receipt.return_value = {'amount': 50000, 'merchant': 'Test Store', 'date': '2024-02-05'}
+    
+    with patch('os.path.exists', return_value=True), \
+         patch('os.remove') as mock_remove:
+        await bot.handle_photo(mock_update, mock_context)
+        
+        assert mock_context.user_data['pending_tx']['amount'] == 50000
+        mock_update.message.reply_text.assert_called_with("Sedang memproses struk... ⏳")
+        processing_msg.edit_text.assert_called()
+        mock_remove.assert_called()
+
+@pytest.mark.asyncio
+async def test_handle_photo_failure(mock_update, mock_context, setup_bot_components):
+    mock_photo = MagicMock()
+    mock_photo.get_file = AsyncMock()
+    mock_file = AsyncMock()
+    mock_file.download_to_drive = AsyncMock()
+    mock_photo.get_file.return_value = mock_file
+    mock_update.message.photo = [mock_photo]
+    
+    # Setup processing_msg mock
+    processing_msg = AsyncMock()
+    mock_update.message.reply_text.return_value = processing_msg
+    
+    mock_ocr = setup_bot_components['ocr']
+    mock_ocr.process_receipt.return_value = {'amount': 0}
+    
+    with patch('os.path.exists', return_value=True), \
+         patch('os.remove'):
+        await bot.handle_photo(mock_update, mock_context)
+        
+        assert "Maaf, aku nggak nemu total harganya" in processing_msg.edit_text.call_args[0][0]
+
+@pytest.mark.asyncio
+async def test_handle_callback_report(mock_update, mock_context, setup_bot_components):
+    query = AsyncMock()
+    query.data = "report_7days"
+    query.message = AsyncMock()
+    mock_update.callback_query = query
+    
+    mock_budget_mgr = setup_bot_components['budget_mgr']
+    mock_budget_mgr.generate_report.return_value = "Laporan 7 Hari"
+    
+    # Mock visual_reporter to return None to avoid photo sending logic in this test
+    setup_bot_components['visual_reporter'].generate_expense_pie.return_value = None
+    
+    await bot.handle_callback(mock_update, mock_context)
+    query.edit_message_text.assert_called()
+    assert "Laporan 7 Hari" in query.edit_message_text.call_args[0][0]
+
+@pytest.mark.asyncio
+async def test_handle_callback_tx_confirm_with_date(mock_update, mock_context, setup_bot_components):
+    query = AsyncMock()
+    query.data = "tx_confirm"
+    mock_update.callback_query = query
+    mock_context.user_data['pending_tx'] = {
+        'amount': 50000, 
+        'category': 'Makanan', 
+        'date': '2024-01-01',
+        'merchant': 'Warung'
+    }
+    
+    mock_db = setup_bot_components['db']
+    mock_budget_mgr = setup_bot_components['budget_mgr']
+    mock_budget_mgr.check_budget_status.return_value = "Budget aman"
+    
+    with patch('bot.update_pinned_dashboard') as mock_pinned:
+        await bot.handle_callback(mock_update, mock_context)
+        
+        mock_db.add_transaction.assert_called()
+        # Check if date was parsed correctly (roughly)
+        call_args = mock_db.add_transaction.call_args[1]
+        assert call_args['trans_date'].year == 2024
+        assert "Budget aman" in query.edit_message_text.call_args[0][0]
+
+@pytest.mark.asyncio
+async def test_handle_callback_tx_edit_options(mock_update, mock_context, setup_bot_components):
+    query = AsyncMock()
+    query.data = "tx_edit"
+    mock_update.callback_query = query
+    
+    await bot.handle_callback(mock_update, mock_context)
+    assert "Pilih bagian yang ingin diubah" in query.edit_message_text.call_args[0][0]
+
+@pytest.mark.asyncio
+async def test_handle_callback_edit_amount(mock_update, mock_context, setup_bot_components):
+    query = AsyncMock()
+    query.data = "edit_amount"
+    mock_update.callback_query = query
+    
+    await bot.handle_callback(mock_update, mock_context)
+    assert mock_context.user_data['state'] == 'WAITING_EDIT_AMOUNT'
+
+@pytest.mark.asyncio
+async def test_handle_callback_edit_category(mock_update, mock_context, setup_bot_components):
+    query = AsyncMock()
+    query.data = "edit_category"
+    mock_update.callback_query = query
+    
+    await bot.handle_callback(mock_update, mock_context)
+    assert mock_context.user_data['state'] == 'WAITING_EDIT_CATEGORY'
 

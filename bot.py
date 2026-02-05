@@ -382,6 +382,11 @@ async def update_pinned_dashboard(context: ContextTypes.DEFAULT_TYPE, user_id: i
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    
+    if not ocr.enabled:
+        await update.message.reply_text("Maaf, fitur baca struk (OCR) sedang dinonaktifkan di server untuk menghemat memori. Kamu bisa catat manual ya!")
+        return
+
     user_db = db.get_or_create_user(user_id, update.effective_user.username)
     
     # Download photo
@@ -389,19 +394,32 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_path = f"temp_{user_id}.jpg"
     await photo_file.download_to_drive(file_path)
     
-    await update.message.reply_text("Sedang memproses struk... ⏳")
+    processing_msg = await update.message.reply_text("Sedang memproses struk... ⏳")
     
     try:
-        amount = ocr.process_receipt(file_path)
+        ocr_result = ocr.process_receipt(file_path)
+        # Handle both dict and int (for backward compatibility or simplified mocks)
+        if isinstance(ocr_result, dict):
+            amount = ocr_result.get('amount', 0)
+            merchant = ocr_result.get('merchant', 'Struk Belanja')
+            date_str = ocr_result.get('date', datetime.now().strftime("%Y-%m-%d"))
+        else:
+            amount = ocr_result if ocr_result else 0
+            merchant = 'Struk Belanja'
+            date_str = datetime.now().strftime("%Y-%m-%d")
+        
         if amount > 0:
-            category = "Belanja"
-            merchant = "Struk Belanja"
+            # Map merchant to category using NLP
+            category = nlp._detect_category(merchant)
+            if category == "Lain-lain":
+                category = "Belanja" # Default for OCR
             
             # Store temporary transaction data for confirmation
             context.user_data['pending_tx'] = {
                 'amount': amount,
                 'category': category,
                 'merchant': merchant,
+                'date': date_str,
                 'type': 'expense'
             }
             
@@ -414,13 +432,20 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            msg = f"Rp {amount:,.0f} · {category}\n{merchant}"
-            await update.message.reply_text(msg, reply_markup=reply_markup)
+            msg = (
+                f"📝 **Data Struk Berhasil Dibaca**\n\n"
+                f"💰 **Nominal:** Rp{amount:,.0f}\n"
+                f"📂 **Kategori:** {category}\n"
+                f"🏪 **Toko:** {merchant}\n"
+                f"📅 **Tanggal:** {date_str}\n\n"
+                f"Apakah data di atas sudah benar?"
+            )
+            await processing_msg.edit_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
         else:
-            await update.message.reply_text("Maaf, aku nggak nemu total harganya. Bisa coba foto lagi atau ketik manual?")
+            await processing_msg.edit_text("Maaf, aku nggak nemu total harganya. Bisa coba foto lagi atau ketik manual?")
     except Exception as e:
         logging.error(f"OCR Error: {e}")
-        await update.message.reply_text("Terjadi kesalahan saat memproses gambar.")
+        await processing_msg.edit_text("Terjadi kesalahan saat memproses gambar. Coba pastikan foto struk terlihat jelas.")
     finally:
         if os.path.exists(file_path):
             os.remove(file_path)
@@ -443,7 +468,34 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action.startswith("report_"):
         period = action.replace("report_", "")
         report_msg = budget_mgr.generate_report(user_db.id, period=period)
-        await query.edit_message_text(report_msg)
+        
+        # Also try to send visual report
+        from datetime import datetime
+        now = datetime.now()
+        transactions = db.get_monthly_report(user_db.id, now.month, now.year)
+        
+        keyboard = [
+            [
+                InlineKeyboardButton("📊 Detail Budget", callback_data="suggest_budget"),
+                InlineKeyboardButton("💡 Tips Hemat", callback_data="suggest_insight")
+            ],
+            [
+                InlineKeyboardButton("🚀 Menu Utama", callback_data="suggest_help")
+            ]
+        ]
+        
+        await query.edit_message_text(report_msg, reply_markup=InlineKeyboardMarkup(keyboard))
+        
+        photo_path = visual_reporter.generate_expense_pie(transactions, user_id)
+        if photo_path:
+            try:
+                with open(photo_path, 'rb') as photo:
+                    await query.message.reply_photo(photo, caption="Visualisasi Pengeluaran Anda")
+            except Exception as e:
+                logging.error(f"Error sending report photo: {e}")
+            finally:
+                if os.path.exists(photo_path):
+                    os.remove(photo_path)
         return
 
     if action == "tx_confirm" and pending:
@@ -632,97 +684,6 @@ async def send_budget_summary(update: Update, context: ContextTypes.DEFAULT_TYPE
         msg += budget_mgr.get_detailed_budget_status(user_db.id, b.category) + "\n\n"
     
     await target.reply_text(msg.strip())
-
-async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_db = db.get_or_create_user(user_id, update.effective_user.username)
-    from datetime import datetime
-    now = datetime.now()
-    report = budget_mgr.generate_report(user_db.id)
-    transactions = db.get_monthly_report(user_db.id, now.month, now.year)
-    
-    keyboard = [
-        [
-            InlineKeyboardButton("📊 Detail Budget", callback_data="suggest_budget"),
-            InlineKeyboardButton("💡 Tips Hemat", callback_data="suggest_insight")
-        ],
-        [
-            InlineKeyboardButton("🚀 Menu Utama", callback_data="suggest_help")
-        ]
-    ]
-    
-    await update.message.reply_text(report, reply_markup=InlineKeyboardMarkup(keyboard))
-    
-    photo_path = visual_reporter.generate_expense_pie(transactions, user_id)
-    if photo_path:
-        with open(photo_path, 'rb') as photo:
-            await update.message.reply_photo(photo, caption="Visualisasi Pengeluaran Anda")
-        os.remove(photo_path)
-
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    
-    if not ocr.enabled:
-        await update.message.reply_text("Maaf, fitur baca struk (OCR) sedang dinonaktifkan di server untuk menghemat memori. Kamu bisa catat manual ya!")
-        return
-
-    user_db = db.get_or_create_user(user_id, update.effective_user.username)
-    
-    # Download photo
-    photo_file = await update.message.photo[-1].get_file()
-    file_path = f"temp_{user_id}.jpg"
-    await photo_file.download_to_drive(file_path)
-    
-    processing_msg = await update.message.reply_text("Sedang memproses struk... ⏳")
-    
-    try:
-        ocr_result = ocr.process_receipt(file_path)
-        amount = ocr_result.get('amount', 0)
-        
-        if amount > 0:
-            merchant = ocr_result.get('merchant', 'Struk Belanja')
-            date_str = ocr_result.get('date', datetime.now().strftime("%Y-%m-%d"))
-            
-            # Map merchant to category using NLP
-            category = nlp._detect_category(merchant)
-            if category == "Lain-lain":
-                category = "Belanja" # Default for OCR
-            
-            # Store temporary transaction data for confirmation
-            context.user_data['pending_tx'] = {
-                'amount': amount,
-                'category': category,
-                'merchant': merchant,
-                'date': date_str,
-                'type': 'expense'
-            }
-            
-            keyboard = [
-                [
-                    InlineKeyboardButton("✓ Simpan", callback_data="tx_confirm"),
-                    InlineKeyboardButton("✎ Edit", callback_data="tx_edit"),
-                    InlineKeyboardButton("✕ Abaikan", callback_data="tx_ignore")
-                ]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            msg = (
-                f"📝 **Data Struk Berhasil Dibaca**\n\n"
-                f"💰 **Nominal:** Rp{amount:,.0f}\n"
-                f"📂 **Kategori:** {category}\n"
-                f"🏪 **Toko:** {merchant}\n"
-                f"📅 **Tanggal:** {date_str}\n\n"
-                f"Apakah data di atas sudah benar?"
-            )
-            await processing_msg.edit_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
-        else:
-            await processing_msg.edit_text("Maaf, aku nggak nemu total harganya. Bisa coba foto lagi atau ketik manual?")
-    except Exception as e:
-        logging.error(f"OCR Error: {e}")
-        await processing_msg.edit_text("Terjadi kesalahan saat memproses gambar. Coba pastikan foto struk terlihat jelas.")
-    finally:
-        if os.path.exists(file_path):
-            os.remove(file_path)
 
 async def undo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id

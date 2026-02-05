@@ -23,6 +23,7 @@ def db_session():
     session.is_mock = True # Skip migration
     yield session
     session.close()
+    engine.dispose()
 
 @pytest.fixture
 def db_handler(db_session):

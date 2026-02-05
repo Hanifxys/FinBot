@@ -289,43 +289,47 @@ def test_db_handler_full():
     session = Session()
     session.is_mock = True # Skip migration
     
-    db = DBHandler(session=session)
-    
-    # Test User operations
-    user = db.get_or_create_user(12345, "testuser")
-    assert user.telegram_id == 12345
-    assert db.get_user(12345).username == "testuser"
-    assert len(db.get_all_users()) == 1
-    
-    # Test Budget operations (Set first so transaction can update it)
-    db.set_budget(user.id, "Makanan", 1000000)
-    budgets = db.get_user_budgets(user.id)
-    assert len(budgets) == 1
-    assert budgets[0].limit_amount == 1000000
-    
-    # Test Transaction operations
-    tx = db.add_transaction(user.id, 50000, "Makanan", "makan siang")
-    assert tx.amount == 50000
-    assert len(db.get_daily_transactions(user.id, tx.date.date())) == 1
-    assert len(db.get_sliding_window_transactions(user.id)) == 1
-    
-    # Check budget usage (should be 50000 from transaction)
-    assert db.get_user_budgets(user.id)[0].current_usage == 50000
-    
-    db.update_budget_usage(user.id, "Makanan", 50000)
-    assert db.get_user_budgets(user.id)[0].current_usage == 100000
-    
-    # Test Income operations
-    db.add_monthly_income(user.id, 10000000)
-    assert db.get_latest_income(user.id).amount == 10000000
-    
-    # Test effective date cutoff (4 AM)
-    assert db.get_effective_date(datetime(2026, 2, 5, 3, 0)) == datetime(2026, 2, 4).date()
-    assert db.get_effective_date(datetime(2026, 2, 5, 5, 0)) == datetime(2026, 2, 5).date()
-    
-    # Test Report
-    report = db.get_monthly_report(user.id, datetime.now().month, datetime.now().year)
-    assert len(report) == 1
+    try:
+        db = DBHandler(session=session)
+        
+        # Test User operations
+        user = db.get_or_create_user(12345, "testuser")
+        assert user.telegram_id == 12345
+        assert db.get_user(12345).username == "testuser"
+        assert len(db.get_all_users()) == 1
+        
+        # Test Budget operations (Set first so transaction can update it)
+        db.set_budget(user.id, "Makanan", 1000000)
+        budgets = db.get_user_budgets(user.id)
+        assert len(budgets) == 1
+        assert budgets[0].limit_amount == 1000000
+        
+        # Test Transaction operations
+        tx = db.add_transaction(user.id, 50000, "Makanan", "makan siang")
+        assert tx.amount == 50000
+        assert len(db.get_daily_transactions(user.id, tx.date.date())) == 1
+        assert len(db.get_sliding_window_transactions(user.id)) == 1
+        
+        # Check budget usage (should be 50000 from transaction)
+        assert db.get_user_budgets(user.id)[0].current_usage == 50000
+        
+        db.update_budget_usage(user.id, "Makanan", 50000)
+        assert db.get_user_budgets(user.id)[0].current_usage == 100000
+        
+        # Test Income operations
+        db.add_monthly_income(user.id, 10000000)
+        assert db.get_latest_income(user.id).amount == 10000000
+        
+        # Test effective date cutoff (4 AM)
+        assert db.get_effective_date(datetime(2026, 2, 5, 3, 0)) == datetime(2026, 2, 4).date()
+        assert db.get_effective_date(datetime(2026, 2, 5, 5, 0)) == datetime(2026, 2, 5).date()
+        
+        # Test Report
+        report = db.get_monthly_report(user.id, datetime.now().month, datetime.now().year)
+        assert len(report) == 1
+    finally:
+        session.close()
+        engine.dispose()
 
 # 6. Rule Engine Tests
 def test_rule_engine():

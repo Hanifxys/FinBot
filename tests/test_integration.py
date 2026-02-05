@@ -23,7 +23,10 @@ def db_setup():
     session.add(user)
     session.commit()
     
-    return handler, user
+    yield handler, user
+    
+    session.close()
+    engine.dispose()
 
 @pytest.fixture
 def mock_ai():
@@ -79,3 +82,45 @@ def test_full_transaction_flow(db_setup, mock_ai):
     
     final_insight = mock_ai.generate_smart_insight(raw_insight)
     assert "nasi padang" in final_insight or "enak" in final_insight
+
+def test_db_handler_advanced_features(db_setup):
+    db, user = db_setup
+    
+    # 1. Test get_transactions_history with filters
+    db.add_transaction(user.id, 50000, "Makanan", "Makan", "expense")
+    db.add_transaction(user.id, 100000, "Transport", "Ojek", "expense")
+    
+    # Test category filter
+    history = db.get_transactions_history(user.id, category="Makanan")
+    assert len(history) == 1
+    assert history[0].category == "Makanan"
+    
+    # Test min_amount filter
+    history = db.get_transactions_history(user.id, min_amount=75000)
+    assert len(history) == 1
+    assert history[0].amount == 100000
+    
+    # 2. Test delete_transaction and undo_last_transaction
+    tx = db.get_transactions_history(user.id)[0]
+    result = db.delete_transaction(user.id, tx.id)
+    assert result is True
+    assert len(db.get_transactions_history(user.id)) == 1
+    
+    db.undo_last_transaction(user.id)
+    assert len(db.get_transactions_history(user.id)) == 0
+    
+    # 3. Test get_current_balance
+    db.add_monthly_income(user.id, 5000000)
+    db.add_transaction(user.id, 50000, "Makanan", "Makan", "expense")
+    
+    balance = db.get_current_balance(user.id)
+    assert balance == 4950000
+    
+    # 4. Test add_monthly_income update case
+    db.add_monthly_income(user.id, 6000000)
+    income = db.get_latest_income(user.id)
+    assert income.amount == 6000000
+    
+    # 5. Test saving goals progress failure
+    result = db.update_saving_progress(user.id, 999, 1000) # Non-existent goal
+    assert result is None
