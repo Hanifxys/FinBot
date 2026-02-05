@@ -42,8 +42,9 @@ COPY . .
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
-ENV PORT=8000
 
+# Default port, but Koyeb will override this with its own $PORT
+ENV PORT=8000
 EXPOSE 8000
 
 CMD ["python", "bot.py"]

@@ -1,6 +1,7 @@
 import logging
 import os
 import threading
+import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes, JobQueue
@@ -23,15 +24,26 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-# Initialize components
-db = DBHandler()
-ocr = OCRProcessor()
-nlp = NLPProcessor()
-ai = AIEngine()
-budget_mgr = BudgetManager(db)
-analyzer = ExpenseAnalyzer(db)
-rules = RuleEngine()
-visual_reporter = VisualReporter()
+# Initialize components (lazily or in main)
+db = None
+ocr = None
+nlp = None
+ai = None
+budget_mgr = None
+analyzer = None
+rules = None
+visual_reporter = None
+
+def init_components():
+    global db, ocr, nlp, ai, budget_mgr, analyzer, rules, visual_reporter
+    db = DBHandler()
+    ocr = OCRProcessor()
+    nlp = NLPProcessor()
+    ai = AIEngine()
+    budget_mgr = BudgetManager(db)
+    analyzer = ExpenseAnalyzer(db)
+    rules = RuleEngine()
+    visual_reporter = VisualReporter()
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
@@ -892,15 +904,24 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"OK")
 
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
+
     def log_message(self, format, *args):
         # Silence logs to keep things clean
         return
 
 def run_health_check_server():
-    port = int(os.getenv("PORT", 8000))
-    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
-    print(f"Health check server running on port {port}")
-    server.serve_forever()
+    try:
+        port = int(os.getenv("PORT", 8000))
+        server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+        logging.info(f"✅ Health check server started on port {port}")
+        sys.stdout.flush()
+        server.serve_forever()
+    except Exception as e:
+        logging.error(f"❌ Failed to start health check server: {e}")
+        sys.stdout.flush()
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Log the error and send a telegram message to notify the developer."""
@@ -913,13 +934,20 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
         logging.error("TIPS: Pastikan Anda tidak menjalankan bot di laptop/lokal saat bot di server sedang aktif.")
 
 if __name__ == '__main__':
+    # Start health check server IMMEDIATELY to pass platform health checks
+    health_thread = threading.Thread(target=run_health_check_server, daemon=True)
+    health_thread.start()
+    
+    # Initialize components after health check starts
+    init_components()
+    
     if not TELEGRAM_BOT_TOKEN:
-        print("Error: TELEGRAM_BOT_TOKEN tidak ditemukan di .env")
+        logging.error("Error: TELEGRAM_BOT_TOKEN tidak ditemukan di .env")
         exit(1)
         
     # Start health check server for Koyeb in a separate thread
-    health_thread = threading.Thread(target=run_health_check_server, daemon=True)
-    health_thread.start()
+    # health_thread = threading.Thread(target=run_health_check_server, daemon=True)
+    # health_thread.start()
 
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     
