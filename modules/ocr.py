@@ -67,11 +67,20 @@ class OCRProcessor:
             if date_match:
                 date_str = date_match.group(0)
 
-            return {
+            result = {
                 "amount": amount,
                 "merchant": merchant,
                 "date": date_str
             }
+            
+            # Memory safety: Clear reader after intensive OCR if on low-memory env
+            # This is optional but can help if Koyeb instance is very tight
+            # self._reader = None 
+            
+            return result
+        except Exception as e:
+            print(f"OCR Processing Error: {e}")
+            return None
         finally:
             # Clean up after processing
             gc.collect()

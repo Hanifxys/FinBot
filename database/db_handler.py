@@ -1,88 +1,13 @@
-from .models import get_session, User, Transaction, Budget, MonthlyIncome, SavingGoal, init_db
+from .models import get_supabase, Tables
 from datetime import datetime, timedelta
-from sqlalchemy import extract, and_
+import logging
 
 class DBHandler:
     def __init__(self, session=None):
-        if session:
-            self.session = session
-        else:
-            init_db()
-            self.session = get_session()
-        
-        # Only migrate if it's not a mock/test session (simple check)
-        if not hasattr(self.session, 'is_mock'):
-            self._migrate_db()
+        # We use session=None for backward compatibility, but we use Supabase client now
+        self.supabase = get_supabase()
         # Principle 3.1: User-defined day cutoff (Default 04:00 AM)
         self.cutoff_hour = 4
-
-    def _migrate_db(self):
-        """
-        Comprehensive migration to ensure all columns from models exist in the database.
-        This is a preventive measure to handle cases where models change but database doesn't.
-        """
-        try:
-            from sqlalchemy import text
-            import logging
-            
-            # List of all required columns across all tables
-            migrations = [
-                # Users table
-                ("users", "telegram_id", "BIGINT"), # Use BIGINT for safety with telegram IDs
-                ("users", "username", "VARCHAR"),
-                ("users", "pinned_message_id", "INTEGER"),
-                ("users", "created_at", "TIMESTAMP"),
-                
-                # Transactions table
-                ("transactions", "user_id", "INTEGER"),
-                ("transactions", "amount", "FLOAT"),
-                ("transactions", "category", "VARCHAR"),
-                ("transactions", "description", "VARCHAR"),
-                ("transactions", "type", "VARCHAR"),
-                ("transactions", "date", "TIMESTAMP"),
-                
-                # Budgets table
-                ("budgets", "user_id", "INTEGER"),
-                ("budgets", "category", "VARCHAR"),
-                ("budgets", "limit_amount", "FLOAT"),
-                ("budgets", "current_usage", "FLOAT"),
-                ("budgets", "month", "INTEGER"),
-                ("budgets", "year", "INTEGER"),
-                
-                # Monthly Incomes table
-                ("monthly_incomes", "user_id", "INTEGER"),
-                ("monthly_incomes", "amount", "FLOAT"),
-                ("monthly_incomes", "month", "INTEGER"),
-                ("monthly_incomes", "year", "INTEGER"),
-                ("monthly_incomes", "created_at", "TIMESTAMP"),
-
-                # Saving Goals table
-                ("saving_goals", "user_id", "INTEGER"),
-                ("saving_goals", "name", "VARCHAR"),
-                ("saving_goals", "target_amount", "FLOAT"),
-                ("saving_goals", "current_amount", "FLOAT"),
-                ("saving_goals", "target_date", "TIMESTAMP"),
-                ("saving_goals", "is_active", "INTEGER"),
-                ("saving_goals", "created_at", "TIMESTAMP"),
-            ]
-            
-            for table, column, data_type in migrations:
-                try:
-                    # Using PostgreSQL syntax for IF NOT EXISTS column addition
-                    # Note: ALTER TABLE ... ADD COLUMN IF NOT EXISTS is supported in PostgreSQL 9.6+
-                    query = text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {data_type}")
-                    self.session.execute(query)
-                except Exception as col_e:
-                    logging.warning(f"Could not migrate {table}.{column}: {col_e}")
-                    self.session.rollback()
-                    continue
-            
-            self.session.commit()
-            logging.info("Database migration check completed successfully.")
-            
-        except Exception as e:
-            self.session.rollback()
-            logging.error(f"Global Migration Error: {e}")
 
     def get_effective_date(self, dt=None):
         """
@@ -97,241 +22,253 @@ class DBHandler:
         return dt.date()
 
     def get_user(self, telegram_id):
-        return self.session.query(User).filter_by(telegram_id=telegram_id).first()
+        response = self.supabase.table(Tables.USERS).select("*").eq("telegram_id", telegram_id).execute()
+        if response.data:
+            # Wrap in a simple object-like structure for compatibility
+            return type('User', (object,), response.data[0])
+        return None
 
     def get_all_users(self):
-        return self.session.query(User).all()
+        response = self.supabase.table(Tables.USERS).select("*").execute()
+        return [type('User', (object,), item) for item in response.data]
 
     def get_daily_transactions(self, user_id, date_obj):
-        # Using effective date for filtering
-        return self.session.query(Transaction).filter(
-            Transaction.user_id == user_id,
-            Transaction.date >= datetime.combine(date_obj, datetime.min.time()),
-            Transaction.date <= datetime.combine(date_obj, datetime.max.time())
-        ).all()
+        start_time = datetime.combine(date_obj, datetime.min.time()).isoformat()
+        end_time = datetime.combine(date_obj, datetime.max.time()).isoformat()
+        
+        response = self.supabase.table(Tables.TRANSACTIONS).select("*").eq("user_id", user_id)\
+            .gte("date", start_time).lte("date", end_time).execute()
+        return [type('Transaction', (object,), item) for item in response.data]
 
     def get_or_create_user(self, telegram_id, username):
-        user = self.session.query(User).filter_by(telegram_id=telegram_id).first()
+        user = self.get_user(telegram_id)
         if not user:
-            user = User(telegram_id=telegram_id, username=username)
-            self.session.add(user)
-            self.session.commit()
-            self.session.refresh(user)
+            data = {"telegram_id": telegram_id, "username": username}
+            response = self.supabase.table(Tables.USERS).insert(data).execute()
+            return type('User', (object,), response.data[0])
+        elif user.username != username:
+            data = {"username": username}
+            response = self.supabase.table(Tables.USERS).update(data).eq("telegram_id", telegram_id).execute()
+            return type('User', (object,), response.data[0])
         return user
 
     def add_transaction(self, user_id, amount, category, description, trans_type='expense', trans_date=None):
         if trans_date is None:
-            # Principle 3.1: Apply cutoff logic
             now = datetime.now()
-            eff_date = self.get_effective_date(now)
-            # Store with current time but we use eff_date for reporting
-            trans_date = now
+            trans_date = now.isoformat()
+        elif isinstance(trans_date, datetime):
+            trans_date = trans_date.isoformat()
 
-        transaction = Transaction(
-            user_id=user_id,
-            amount=amount,
-            category=category,
-            description=description,
-            type=trans_type,
-            date=trans_date
-        )
-        self.session.add(transaction)
+        data = {
+            "user_id": user_id,
+            "amount": float(amount),
+            "category": category,
+            "description": description,
+            "type": trans_type,
+            "date": trans_date
+        }
+        
+        response = self.supabase.table(Tables.TRANSACTIONS).insert(data).execute()
         
         # Update budget if it's an expense
         if trans_type == 'expense':
             self.update_budget_usage(user_id, category, amount)
             
-        self.session.commit()
-        return transaction
+        return type('Transaction', (object,), response.data[0])
 
     def get_sliding_window_transactions(self, user_id, days=7):
-        """
-        Principle 3.2: Sliding window summary (Last N days)
-        """
         end_date = datetime.now()
-        start_date = end_date - timedelta(days=days)
-        return self.session.query(Transaction).filter(
-            Transaction.user_id == user_id,
-            Transaction.date >= start_date,
-            Transaction.date <= end_date
-        ).all()
+        start_date = (end_date - timedelta(days=days)).isoformat()
+        end_date_iso = end_date.isoformat()
+        
+        response = self.supabase.table(Tables.TRANSACTIONS).select("*").eq("user_id", user_id)\
+            .gte("date", start_date).lte("date", end_date_iso).execute()
+        return [type('Transaction', (object,), item) for item in response.data]
 
     def set_budget(self, user_id, category, limit_amount):
         now = datetime.now()
-        budget = self.session.query(Budget).filter_by(
-            user_id=user_id, 
-            category=category, 
-            month=now.month, 
-            year=now.year
-        ).first()
+        existing = self.supabase.table(Tables.BUDGETS).select("*")\
+            .eq("user_id", user_id).eq("category", category)\
+            .eq("month", now.month).eq("year", now.year).execute()
         
-        if budget:
-            budget.limit_amount = limit_amount
+        if existing.data:
+            data = {"limit_amount": float(limit_amount)}
+            response = self.supabase.table(Tables.BUDGETS).update(data).eq("id", existing.data[0]['id']).execute()
         else:
-            budget = Budget(
-                user_id=user_id,
-                category=category,
-                limit_amount=limit_amount,
-                month=now.month,
-                year=now.year
-            )
-            self.session.add(budget)
+            data = {
+                "user_id": user_id,
+                "category": category,
+                "limit_amount": float(limit_amount),
+                "month": now.month,
+                "year": now.year,
+                "current_usage": 0.0
+            }
+            response = self.supabase.table(Tables.BUDGETS).insert(data).execute()
         
-        self.session.commit()
-        return budget
+        return type('Budget', (object,), response.data[0])
 
     def update_budget_usage(self, user_id, category, amount):
         now = datetime.now()
-        budget = self.session.query(Budget).filter_by(
-            user_id=user_id, 
-            category=category, 
-            month=now.month, 
-            year=now.year
-        ).first()
+        existing = self.supabase.table(Tables.BUDGETS).select("*")\
+            .eq("user_id", user_id).eq("category", category)\
+            .eq("month", now.month).eq("year", now.year).execute()
         
-        if budget:
-            budget.current_usage += amount
-            self.session.commit()
-            return budget
+        if existing.data:
+            new_usage = existing.data[0]['current_usage'] + float(amount)
+            response = self.supabase.table(Tables.BUDGETS).update({"current_usage": new_usage})\
+                .eq("id", existing.data[0]['id']).execute()
+            return type('Budget', (object,), response.data[0])
+        return None
+
+    def get_budget(self, user_id, category):
+        now = datetime.now()
+        response = self.supabase.table(Tables.BUDGETS).select("*")\
+            .eq("user_id", user_id).eq("category", category)\
+            .eq("month", now.month).eq("year", now.year).execute()
+        if response.data:
+            return type('Budget', (object,), response.data[0])
         return None
 
     def get_user_budgets(self, user_id):
         now = datetime.now()
-        return self.session.query(Budget).filter_by(
-            user_id=user_id, 
-            month=now.month, 
-            year=now.year
-        ).all()
+        response = self.supabase.table(Tables.BUDGETS).select("*")\
+            .eq("user_id", user_id).eq("month", now.month).eq("year", now.year).execute()
+        return [type('Budget', (object,), item) for item in response.data]
 
     def get_transactions_history(self, user_id, limit=50, category=None, start_date=None, end_date=None, min_amount=None):
-        """
-        Retrieves transaction history with advanced filtering.
-        """
-        query = self.session.query(Transaction).filter(Transaction.user_id == user_id)
+        query = self.supabase.table(Tables.TRANSACTIONS).select("*").eq("user_id", user_id)
         
         if category:
-            query = query.filter(Transaction.category.ilike(f"%{category}%"))
+            query = query.ilike("category", f"%{category}%")
         if start_date:
-            query = query.filter(Transaction.date >= start_date)
+            query = query.gte("date", start_date.isoformat() if isinstance(start_date, datetime) else start_date)
         if end_date:
-            query = query.filter(Transaction.date <= end_date)
+            query = query.lte("date", end_date.isoformat() if isinstance(end_date, datetime) else end_date)
         if min_amount:
-            query = query.filter(Transaction.amount >= min_amount)
+            query = query.gte("amount", float(min_amount))
             
-        return query.order_by(Transaction.date.desc()).limit(limit).all()
+        response = query.order("date", desc=True).limit(limit).execute()
+        return [type('Transaction', (object,), item) for item in response.data]
 
     def delete_transaction(self, user_id, transaction_id):
-        """
-        Deletes a specific transaction and reverses budget usage.
-        """
-        tx = self.session.query(Transaction).filter_by(id=transaction_id, user_id=user_id).first()
-        if tx:
-            if tx.type == 'expense':
-                # Reverse budget usage
-                self.update_budget_usage(user_id, tx.category, -tx.amount)
+        response = self.supabase.table(Tables.TRANSACTIONS).select("*")\
+            .eq("id", transaction_id).eq("user_id", user_id).execute()
+        if response.data:
+            tx = response.data[0]
+            if tx['type'] == 'expense':
+                self.update_budget_usage(user_id, tx['category'], -tx['amount'])
             
-            self.session.delete(tx)
-            self.session.commit()
+            self.supabase.table(Tables.TRANSACTIONS).delete().eq("id", transaction_id).execute()
             return True
         return False
 
     def undo_last_transaction(self, user_id):
-        """
-        Deletes the very last transaction made by the user.
-        """
-        last_tx = self.session.query(Transaction).filter_by(user_id=user_id).order_by(Transaction.id.desc()).first()
-        if last_tx:
-            return self.delete_transaction(user_id, last_tx.id)
+        response = self.supabase.table(Tables.TRANSACTIONS).select("*")\
+            .eq("user_id", user_id).order("id", desc=True).limit(1).execute()
+        if response.data:
+            return self.delete_transaction(user_id, response.data[0]['id'])
         return False
 
     def get_current_balance(self, user_id):
-        """
-        Calculates real-time balance: Total Income - Total Expense for the current month.
-        """
         now = datetime.now()
         income = self.get_latest_income(user_id)
         total_income = income.amount if income else 0
         
-        # Sum all expenses for this month
         transactions = self.get_monthly_report(user_id, now.month, now.year)
         total_expense = sum(t.amount for t in transactions if t.type == 'expense')
         
         return total_income - total_expense
 
     def get_monthly_report(self, user_id, month, year):
-        return self.session.query(Transaction).filter(
-            Transaction.user_id == user_id,
-            Transaction.date >= datetime(year, month, 1)
-        ).all()
+        start_date = datetime(year, month, 1).isoformat()
+        response = self.supabase.table(Tables.TRANSACTIONS).select("*")\
+            .eq("user_id", user_id).gte("date", start_date).execute()
+        return [type('Transaction', (object,), item) for item in response.data]
 
     # --- SAVING GOALS ---
     def add_saving_goal(self, user_id, name, target_amount, target_date=None):
-        goal = SavingGoal(
-            user_id=user_id,
-            name=name,
-            target_amount=target_amount,
-            target_date=target_date
-        )
-        self.session.add(goal)
-        self.session.commit()
-        return goal
+        data = {
+            "user_id": user_id,
+            "name": name,
+            "target_amount": float(target_amount),
+            "target_date": target_date.isoformat() if isinstance(target_date, datetime) else target_date,
+            "is_active": 1,
+            "current_amount": 0.0
+        }
+        response = self.supabase.table(Tables.SAVING_GOALS).insert(data).execute()
+        return type('SavingGoal', (object,), response.data[0])
 
     def get_user_saving_goals(self, user_id, active_only=True):
-        query = self.session.query(SavingGoal).filter_by(user_id=user_id)
+        query = self.supabase.table(Tables.SAVING_GOALS).select("*").eq("user_id", user_id)
         if active_only:
-            query = query.filter_by(is_active=1)
-        return query.all()
+            query = query.eq("is_active", 1)
+        response = query.execute()
+        return [type('SavingGoal', (object,), item) for item in response.data]
 
     def update_saving_progress(self, user_id, goal_id, amount):
-        goal = self.session.query(SavingGoal).filter_by(id=goal_id, user_id=user_id).first()
-        if goal:
-            goal.current_amount += amount
-            if goal.current_amount >= goal.target_amount:
-                goal.is_active = 0 # Completed
-            self.session.commit()
-            return goal
+        response = self.supabase.table(Tables.SAVING_GOALS).select("*")\
+            .eq("id", goal_id).eq("user_id", user_id).execute()
+        if response.data:
+            goal = response.data[0]
+            new_amount = goal['current_amount'] + float(amount)
+            is_active = 1
+            if new_amount >= goal['target_amount']:
+                is_active = 0
+            
+            update_data = {"current_amount": new_amount, "is_active": is_active}
+            update_response = self.supabase.table(Tables.SAVING_GOALS).update(update_data).eq("id", goal_id).execute()
+            return type('SavingGoal', (object,), update_response.data[0])
         return None
 
     # --- EXPORT ---
     def export_transactions_to_csv(self, user_id, filepath):
         import pandas as pd
-        txs = self.session.query(Transaction).filter_by(user_id=user_id).order_by(Transaction.date.desc()).all()
+        response = self.supabase.table(Tables.TRANSACTIONS).select("*")\
+            .eq("user_id", user_id).order("date", desc=True).execute()
         
-        if not txs:
+        if not response.data:
             return None
 
+        # Helper to parse ISO strings back to datetime objects
+        def parse_date(date_str):
+            try:
+                return datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+            except:
+                return date_str
+
         df = pd.DataFrame([{
-            'Tanggal': tx.date.strftime('%Y-%m-%d %H:%M'),
-            'Tipe': 'Pengeluaran' if tx.type == 'expense' else 'Pemasukan',
-            'Kategori': tx.category,
-            'Nominal': f"Rp{tx.amount:,.0f}",
-            'Catatan': tx.description or '-'
-        } for tx in txs])
+            'Tanggal': parse_date(tx['date']).strftime('%Y-%m-%d %H:%M'),
+            'Tipe': 'Pengeluaran' if tx['type'] == 'expense' else 'Pemasukan',
+            'Kategori': tx['category'],
+            'Nominal': f"Rp{tx['amount']:,.0f}",
+            'Catatan': tx['description'] or '-'
+        } for tx in response.data])
         
         df.to_csv(filepath, index=False)
         return filepath
 
     def add_monthly_income(self, user_id, amount):
         now = datetime.now()
-        income = self.session.query(MonthlyIncome).filter_by(
-            user_id=user_id,
-            month=now.month,
-            year=now.year
-        ).first()
+        existing = self.supabase.table(Tables.MONTHLY_INCOMES).select("*")\
+            .eq("user_id", user_id).eq("month", now.month).eq("year", now.year).execute()
         
-        if income:
-            income.amount = amount
+        if existing.data:
+            response = self.supabase.table(Tables.MONTHLY_INCOMES).update({"amount": float(amount)})\
+                .eq("id", existing.data[0]['id']).execute()
         else:
-            income = MonthlyIncome(
-                user_id=user_id,
-                amount=amount,
-                month=now.month,
-                year=now.year
-            )
-            self.session.add(income)
+            data = {
+                "user_id": user_id,
+                "amount": float(amount),
+                "month": now.month,
+                "year": now.year
+            }
+            response = self.supabase.table(Tables.MONTHLY_INCOMES).insert(data).execute()
         
-        self.session.commit()
-        return income
+        return type('MonthlyIncome', (object,), response.data[0])
 
     def get_latest_income(self, user_id):
-        return self.session.query(MonthlyIncome).filter_by(user_id=user_id).order_by(MonthlyIncome.id.desc()).first()
+        response = self.supabase.table(Tables.MONTHLY_INCOMES).select("*")\
+            .eq("user_id", user_id).order("id", desc=True).limit(1).execute()
+        if response.data:
+            return type('MonthlyIncome', (object,), response.data[0])
+        return None

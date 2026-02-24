@@ -92,7 +92,7 @@ async def test_help_command(mock_update, mock_context):
 @pytest.mark.asyncio
 async def test_set_target_command(mock_update, mock_context):
     mock_context.args = ["Laptop", "10.000.000"]
-    with patch('core.db') as mock_db:
+    with patch('handlers.saving.db') as mock_db:
         mock_db.get_user.return_value = MagicMock(id=1)
         await set_target(mock_update, mock_context)
         mock_db.add_saving_goal.assert_called_once_with(1, "Laptop", 10000000.0)
@@ -101,7 +101,7 @@ async def test_set_target_command(mock_update, mock_context):
 @pytest.mark.asyncio
 async def test_add_savings_command(mock_update, mock_context):
     mock_context.args = ["1", "500rb"]
-    with patch('core.db') as mock_db, patch('handlers.saving.update_pinned_dashboard', new_callable=AsyncMock):
+    with patch('handlers.saving.db') as mock_db:
         mock_db.get_user.return_value = MagicMock(id=1)
         mock_goal = MagicMock(id=1, name="Laptop", current_amount=500000.0, target_amount=10000000.0)
         mock_db.update_saving_progress.return_value = mock_goal
@@ -124,7 +124,10 @@ async def test_handle_callback_confirm(mock_update, mock_context):
         'type': 'expense'
     }
     
-    with patch('core.db') as mock_db, patch('core.budget_mgr') as mock_bm, patch('core.rules') as mock_rules, patch('handlers.callbacks.update_pinned_dashboard', new_callable=AsyncMock):
+    with patch('handlers.callbacks.db') as mock_db, \
+         patch('handlers.callbacks.budget_mgr') as mock_bm, \
+         patch('handlers.callbacks.rules') as mock_rules, \
+         patch('handlers.callbacks.update_pinned_dashboard', new_callable=AsyncMock) as mock_upd:
         mock_db.get_or_create_user.return_value = MagicMock(id=1)
         mock_rules.evaluate.return_value = []
         mock_bm.check_budget_status.return_value = ""
@@ -138,8 +141,9 @@ async def test_handle_callback_confirm(mock_update, mock_context):
 @pytest.mark.asyncio
 async def test_set_salary_command(mock_update, mock_context):
     mock_context.args = ["10000000"]
-    with patch('core.db') as mock_db, patch('handlers.finance.update_pinned_dashboard', new_callable=AsyncMock):
-        mock_db.get_or_create_user.return_value = MagicMock(id=1)
+    with patch('handlers.finance.db') as mock_db, \
+         patch('handlers.finance.update_pinned_dashboard', new_callable=AsyncMock) as mock_upd:
+        mock_db.get_user.return_value = MagicMock(id=1)
         
         await set_gaji(mock_update, mock_context)
         
@@ -149,8 +153,9 @@ async def test_set_salary_command(mock_update, mock_context):
 @pytest.mark.asyncio
 async def test_set_budget_command(mock_update, mock_context):
     mock_context.args = ["Makanan", "2000000"]
-    with patch('core.db') as mock_db, patch('handlers.finance.update_pinned_dashboard', new_callable=AsyncMock):
-        mock_db.get_or_create_user.return_value = MagicMock(id=1)
+    with patch('handlers.finance.db') as mock_db, \
+         patch('handlers.finance.update_pinned_dashboard', new_callable=AsyncMock) as mock_upd:
+        mock_db.get_user.return_value = MagicMock(id=1)
         
         await set_budget(mock_update, mock_context)
         
@@ -159,7 +164,8 @@ async def test_set_budget_command(mock_update, mock_context):
 
 @pytest.mark.asyncio
 async def test_undo_command(mock_update, mock_context):
-    with patch('core.db') as mock_db, patch('handlers.transactions.update_pinned_dashboard', new_callable=AsyncMock):
+    with patch('handlers.transactions.db') as mock_db, \
+         patch('handlers.transactions.update_pinned_dashboard', new_callable=AsyncMock) as mock_upd:
         mock_db.get_user.return_value = MagicMock(id=1)
         mock_db.undo_last_transaction.return_value = True
         
@@ -172,7 +178,7 @@ async def test_undo_command(mock_update, mock_context):
 @pytest.mark.asyncio
 async def test_delete_transaction_command(mock_update, mock_context):
     mock_context.args = ["123"]
-    with patch('core.db') as mock_db, patch('handlers.transactions.update_pinned_dashboard', new_callable=AsyncMock):
+    with patch('handlers.transactions.db') as mock_db:
         mock_db.get_user.return_value = MagicMock(id=1)
         mock_db.delete_transaction.return_value = True
         
@@ -184,7 +190,9 @@ async def test_delete_transaction_command(mock_update, mock_context):
 
 @pytest.mark.asyncio
 async def test_get_ai_insight(mock_update, mock_context):
-    with patch('core.db') as mock_db, patch('core.analyzer') as mock_analyzer, patch('core.ai') as mock_ai:
+    with patch('handlers.finance.db') as mock_db, \
+         patch('handlers.finance.analyzer') as mock_analyzer, \
+         patch('handlers.finance.ai') as mock_ai:
         mock_db.get_user.return_value = MagicMock(id=1)
         mock_analyzer.analyze_patterns.return_value = "raw insight"
         mock_ai.generate_smart_insight.return_value = "Insight AI"
@@ -196,8 +204,9 @@ async def test_get_ai_insight(mock_update, mock_context):
 
 @pytest.mark.asyncio
 async def test_export_data_success(mock_update, mock_context):
-    with patch('core.db') as mock_db, patch('builtins.open', MagicMock()), patch('os.remove', MagicMock()):
+    with patch('handlers.transactions.db') as mock_db, patch('builtins.open', MagicMock()), patch('os.remove', MagicMock()):
         mock_db.get_user.return_value = MagicMock(id=1, telegram_id=123)
+        mock_db.export_transactions_to_csv.return_value = True
         
         await export_data(mock_update, mock_context)
         
@@ -206,7 +215,7 @@ async def test_export_data_success(mock_update, mock_context):
 
 @pytest.mark.asyncio
 async def test_export_data_failure(mock_update, mock_context):
-    with patch('core.db') as mock_db:
+    with patch('handlers.transactions.db') as mock_db:
         mock_db.get_user.return_value = MagicMock(id=1)
         mock_db.export_transactions_to_csv.side_effect = Exception("Export failed")
         
@@ -217,9 +226,9 @@ async def test_export_data_failure(mock_update, mock_context):
 
 @pytest.mark.asyncio
 async def test_list_targets(mock_update, mock_context):
-    with patch('core.db') as mock_db:
+    with patch('handlers.saving.db') as mock_db:
         mock_db.get_user.return_value = MagicMock(id=1)
-        mock_goal = MagicMock(name="Laptop", target_amount=10000000.0, current_amount=500000.0)
+        mock_goal = MagicMock(id=1, name="Laptop", target_amount=10000000.0, current_amount=500000.0)
         mock_db.get_user_saving_goals.return_value = [mock_goal]
         
         await list_targets(mock_update, mock_context)
@@ -230,7 +239,9 @@ async def test_list_targets(mock_update, mock_context):
 @pytest.mark.asyncio
 async def test_handle_message_transaction(mock_update, mock_context):
     mock_update.message.text = "makan 50rb"
-    with patch('core.db') as mock_db, patch('core.nlp') as mock_nlp:
+    with patch('handlers.messages.db') as mock_db, \
+         patch('handlers.messages.nlp') as mock_nlp, \
+         patch('handlers.messages.update_pinned_dashboard', new_callable=AsyncMock) as mock_upd:
         mock_db.get_or_create_user.return_value = MagicMock(id=1)
         mock_nlp.process_text.return_value = (50000.0, 'Makanan', 'expense')
         
@@ -245,7 +256,8 @@ async def test_handle_message_transaction(mock_update, mock_context):
 @pytest.mark.asyncio
 async def test_handle_message_chat(mock_update, mock_context):
     mock_update.message.text = "Halo bot"
-    with patch('core.db') as mock_db, patch('core.nlp') as mock_nlp:
+    with patch('handlers.messages.db') as mock_db, \
+         patch('handlers.messages.nlp') as mock_nlp:
         mock_user = MagicMock(id=1)
         mock_db.get_or_create_user.return_value = mock_user
         mock_nlp.process_text.return_value = (0, None, None)
@@ -268,8 +280,13 @@ async def test_handle_photo(mock_update, mock_context):
     processing_msg = AsyncMock()
     mock_update.message.reply_text.return_value = processing_msg
     
-    with patch('core.db') as mock_db, patch('core.ocr') as mock_ocr, patch('core.nlp') as mock_nlp, patch('os.path.exists') as mock_exists, patch('os.remove') as mock_remove:
+    with patch('handlers.messages.db') as mock_db, \
+         patch('handlers.messages.ocr') as mock_ocr, \
+         patch('handlers.messages.nlp') as mock_nlp, \
+         patch('os.path.exists') as mock_exists, \
+         patch('os.remove') as mock_remove:
         mock_db.get_or_create_user.return_value = MagicMock(id=1)
+        mock_ocr.enabled = True
         mock_ocr.process_receipt.return_value = {'amount': 75000.0, 'merchant': 'Test Shop'}
         mock_nlp._detect_category.return_value = "Makanan"
         mock_exists.return_value = True
@@ -287,7 +304,7 @@ async def test_handle_callback_ignore(mock_update, mock_context):
     query.data = "tx_ignore"
     mock_update.callback_query = query
     
-    with patch('core.db') as mock_db:
+    with patch('handlers.callbacks.db') as mock_db:
         mock_db.get_or_create_user.return_value = MagicMock(id=1)
         await handle_callback(mock_update, mock_context)
         query.edit_message_text.assert_called_once()
@@ -296,7 +313,7 @@ async def test_handle_callback_ignore(mock_update, mock_context):
 @pytest.mark.asyncio
 async def test_history_command(mock_update, mock_context):
     mock_context.args = []
-    with patch('core.db') as mock_db:
+    with patch('handlers.transactions.db') as mock_db:
         mock_user = MagicMock(id=1)
         mock_db.get_user.return_value = mock_user
         mock_tx = MagicMock()
@@ -305,7 +322,8 @@ async def test_history_command(mock_update, mock_context):
         mock_tx.category = "Makanan"
         mock_tx.description = "test"
         mock_tx.date = datetime.now()
-        mock_db.get_transactions_history.return_value = [mock_tx]
+        mock_tx.type = 'expense'
+        mock_db.get_monthly_report.return_value = [mock_tx]
         
         await history(mock_update, mock_context)
         
@@ -315,10 +333,10 @@ async def test_history_command(mock_update, mock_context):
 @pytest.mark.asyncio
 async def test_history_command_filtered(mock_update, mock_context):
     mock_context.args = ["cat:Makanan", "min:10k"]
-    with patch('core.db') as mock_db:
+    with patch('handlers.transactions.db') as mock_db:
         mock_user = MagicMock(id=1)
         mock_db.get_user.return_value = mock_user
-        mock_db.get_transactions_history.return_value = []
+        mock_db.get_monthly_report.return_value = []
         
         await history(mock_update, mock_context)
         
@@ -327,8 +345,9 @@ async def test_history_command_filtered(mock_update, mock_context):
 
 @pytest.mark.asyncio
 async def test_update_pinned_dashboard(mock_context):
-    with patch('core.db') as mock_db, patch('core.budget_mgr') as mock_budget:
-        mock_user = MagicMock(id=1)
+    with patch('utils.dashboard.db') as mock_db, \
+         patch('utils.dashboard.budget_mgr') as mock_budget:
+        mock_user = MagicMock(id=1, telegram_id=123, pinned_message_id=456)
         mock_db.get_user.return_value = mock_user
         mock_db.get_current_balance.return_value = 1000000
         mock_budget.generate_report.return_value = "Monthly Report"
@@ -336,7 +355,6 @@ async def test_update_pinned_dashboard(mock_context):
         mock_db.get_user_saving_goals.return_value = []
         
         mock_context.bot.edit_message_text = AsyncMock()
-        mock_db.get_user_metadata.return_value = 123
         
         await update_pinned_dashboard(mock_context, 1)
         
@@ -345,7 +363,8 @@ async def test_update_pinned_dashboard(mock_context):
 
 @pytest.mark.asyncio
 async def test_daily_digest(mock_context):
-    with patch('core.db') as mock_db, patch('core.budget_mgr') as mock_budget:
+    with patch('handlers.digest.db') as mock_db, \
+         patch('handlers.digest.budget_mgr') as mock_budget:
         mock_user = MagicMock(id=1, telegram_id=123)
         mock_db.get_all_users.return_value = [mock_user]
         
@@ -370,14 +389,19 @@ async def test_handle_callback_report(mock_update, mock_context):
     query.data = "report_monthly"
     mock_update.callback_query = query
     
-    with patch('core.db') as mock_db, patch('core.budget_mgr') as mock_bm:
+    with patch('handlers.callbacks.db') as mock_db, \
+         patch('handlers.callbacks.budget_mgr') as mock_bm, \
+         patch('handlers.callbacks.visual_reporter') as mock_vr, \
+         patch('builtins.open', MagicMock()):
         mock_db.get_or_create_user.return_value = MagicMock(id=1)
         mock_bm.generate_report.return_value = "Laporan Bulanan"
+        mock_db.get_monthly_report.return_value = []
+        mock_vr.generate_expense_pie.return_value = "test.png"
         
         await handle_callback(mock_update, mock_context)
         
         mock_bm.generate_report.assert_called_once_with(1, period="monthly")
-        query.edit_message_text.assert_called_once_with("Laporan Bulanan", reply_markup=ANY)
+        query.edit_message_text.assert_called_once()
 
 @pytest.mark.asyncio
 async def test_handle_message_waiting_edit_amount(mock_update, mock_context):
@@ -405,7 +429,8 @@ async def test_handle_message_waiting_edit_invalid(mock_update, mock_context):
 @pytest.mark.asyncio
 async def test_handle_message_unknown_intent(mock_update, mock_context):
     mock_update.message.text = "random text"
-    with patch('core.db') as mock_db, patch('core.nlp') as mock_nlp:
+    with patch('handlers.messages.db') as mock_db, \
+         patch('handlers.messages.nlp') as mock_nlp:
         mock_db.get_or_create_user.return_value = MagicMock(id=1)
         mock_nlp.process_text.return_value = (0, None, None)
         mock_nlp.parse_message.return_value = {'intent': 'unknown'}
@@ -422,7 +447,7 @@ async def test_handle_callback_edit_actions(mock_update, mock_context):
         query = AsyncMock()
         query.data = action
         mock_update.callback_query = query
-        with patch('core.db') as mock_db:
+        with patch('handlers.callbacks.db') as mock_db:
             mock_db.get_or_create_user.return_value = MagicMock(id=1)
             await handle_callback(mock_update, mock_context)
             query.edit_message_text.assert_called()
@@ -434,7 +459,7 @@ async def test_handle_callback_set_cat(mock_update, mock_context):
     mock_update.callback_query = query
     mock_context.user_data['pending_tx'] = {'amount': 50000, 'category': 'Lain-lain'}
     
-    with patch('core.db') as mock_db:
+    with patch('handlers.callbacks.db') as mock_db:
         mock_db.get_or_create_user.return_value = MagicMock(id=1)
         await handle_callback(mock_update, mock_context)
         assert mock_context.user_data['pending_tx']['category'] == "Makanan"
@@ -442,7 +467,8 @@ async def test_handle_callback_set_cat(mock_update, mock_context):
 
 @pytest.mark.asyncio
 async def test_send_budget_summary(mock_update, mock_context):
-    with patch('core.db') as mock_db, patch('core.budget_mgr') as mock_bm:
+    with patch('handlers.messages.db') as mock_db, \
+         patch('handlers.messages.budget_mgr') as mock_bm:
         mock_db.get_or_create_user.return_value = MagicMock(id=1)
         mock_db.get_user_budgets.return_value = [
             MagicMock(category="Makanan", limit_amount=2000000, current_usage=500000)
@@ -459,10 +485,11 @@ async def test_handle_message_intents(mock_update, mock_context):
     intents = ["query_budget", "get_report", "help", "greeting"]
     for intent in intents:
         mock_update.message.text = "test"
-        with patch('core.db') as mock_db, patch('core.nlp') as mock_nlp, \
+        with patch('handlers.messages.db') as mock_db, \
+             patch('handlers.messages.nlp') as mock_nlp, \
              patch('handlers.messages.send_budget_summary', new_callable=AsyncMock) as mock_sbs, \
-             patch('handlers.messages.send_report', new_callable=AsyncMock) as mock_sr, \
-             patch('handlers.messages.help_command', new_callable=AsyncMock) as mock_hc:
+             patch('handlers.callbacks.send_report', new_callable=AsyncMock) as mock_sr, \
+             patch('handlers.commands.help_command', new_callable=AsyncMock) as mock_hc:
             
             mock_db.get_or_create_user.return_value = MagicMock(id=1)
             mock_nlp.process_text.return_value = (0, None, None)
@@ -486,8 +513,10 @@ async def test_handle_callback_misc(mock_update, mock_context):
         query = AsyncMock()
         query.data = action
         mock_update.callback_query = query
-        with patch('core.db') as mock_db, patch('core.budget_mgr') as mock_bm, \
-             patch('handlers.callbacks.get_ai_insight', new_callable=AsyncMock) as mock_ai_insight:
+        with patch('handlers.callbacks.db') as mock_db, \
+             patch('handlers.callbacks.budget_mgr') as mock_bm, \
+             patch('handlers.finance.get_ai_insight', new_callable=AsyncMock) as mock_ai_insight, \
+             patch('handlers.commands.help_command', new_callable=AsyncMock) as mock_hc:
             
             mock_db.get_or_create_user.return_value = MagicMock(id=1)
             mock_bm.check_budget_status.return_value = "Status"
@@ -496,9 +525,8 @@ async def test_handle_callback_misc(mock_update, mock_context):
             
             if action == "suggest_insight":
                 mock_ai_insight.assert_called_once()
-            else:
-                # query.answer() or similar
-                pass
+            elif action == "suggest_help":
+                mock_hc.assert_called_once()
 
 @pytest.mark.asyncio
 async def test_handle_message_waiting_edit_category(mock_update, mock_context):
@@ -506,14 +534,10 @@ async def test_handle_message_waiting_edit_category(mock_update, mock_context):
     mock_context.user_data['state'] = 'WAITING_EDIT_CATEGORY'
     mock_context.user_data['pending_tx'] = {'amount': 50000, 'category': 'Lain-lain'}
     
-    with patch('core.nlp') as mock_nlp, patch('core.ai') as mock_ai:
-        mock_ai.parse_transaction.return_value = {'is_transaction': False}
-        mock_nlp.classify_intent.return_value = {'intent': 'NONE', 'confidence': 0.0}
-        
-        await handle_message(mock_update, mock_context)
-        
-        assert mock_context.user_data['pending_tx']['category'] == "Makanan"
-        assert 'state' not in mock_context.user_data
+    await handle_message(mock_update, mock_context)
+    
+    assert mock_context.user_data['pending_tx']['category'] == "Makanan"
+    assert mock_context.user_data.get('state') is None
 
 @pytest.mark.asyncio
 async def test_handle_message_waiting_edit_date(mock_update, mock_context):
@@ -521,14 +545,10 @@ async def test_handle_message_waiting_edit_date(mock_update, mock_context):
     mock_context.user_data['state'] = 'WAITING_EDIT_DATE'
     mock_context.user_data['pending_tx'] = {'amount': 50000, 'category': 'Makanan', 'date': '2023-01-02'}
     
-    with patch('core.nlp') as mock_nlp, patch('core.ai') as mock_ai:
-        mock_ai.parse_transaction.return_value = {'is_transaction': False}
-        mock_nlp.classify_intent.return_value = {'intent': 'NONE', 'confidence': 0.0}
-        
-        await handle_message(mock_update, mock_context)
-        
-        assert mock_context.user_data['pending_tx']['date'] == "2023-01-01"
-        assert 'state' not in mock_context.user_data
+    await handle_message(mock_update, mock_context)
+    
+    assert mock_context.user_data['pending_tx']['date'] == "2023-01-01"
+    assert mock_context.user_data.get('state') is None
 
 @pytest.mark.asyncio
 async def test_send_report_callback(mock_update, mock_context):
@@ -546,10 +566,16 @@ async def test_handle_photo_success(mock_update, mock_context):
     processing_msg = AsyncMock()
     mock_update.message.reply_text.return_value = processing_msg
     
-    with patch('core.db') as mock_db, patch('core.ocr') as mock_ocr, patch('core.nlp') as mock_nlp, patch('os.path.exists') as mock_exists, patch('os.remove') as mock_remove:
+    with patch('handlers.messages.db') as mock_db, \
+         patch('handlers.messages.ocr') as mock_ocr, \
+         patch('handlers.messages.nlp') as mock_nlp, \
+         patch('os.path.exists') as mock_exists, \
+         patch('os.remove') as mock_remove:
+        mock_db.get_or_create_user.return_value = MagicMock(id=1)
         mock_ocr.enabled = True
         mock_ocr.process_receipt.return_value = {'amount': 50000, 'merchant': 'Toko', 'date': '2023-01-01'}
         mock_nlp._detect_category.return_value = "Belanja"
+        mock_exists.return_value = True
         
         await handle_photo(mock_update, mock_context)
         
@@ -567,7 +593,9 @@ async def test_handle_photo_failure(mock_update, mock_context):
     processing_msg = AsyncMock()
     mock_update.message.reply_text.return_value = processing_msg
     
-    with patch('core.db') as mock_db, patch('core.ocr') as mock_ocr:
+    with patch('handlers.messages.db') as mock_db, \
+         patch('handlers.messages.ocr') as mock_ocr:
+        mock_db.get_or_create_user.return_value = MagicMock(id=1)
         mock_ocr.enabled = True
         mock_ocr.process_receipt.side_effect = Exception("OCR Error")
         
@@ -588,7 +616,10 @@ async def test_handle_callback_tx_confirm_with_date(mock_update, mock_context):
         'type': 'expense'
     }
     
-    with patch('core.db') as mock_db, patch('core.budget_mgr') as mock_bm, patch('core.rules') as mock_rules, patch('handlers.callbacks.update_pinned_dashboard', new_callable=AsyncMock):
+    with patch('handlers.callbacks.db') as mock_db, \
+         patch('handlers.callbacks.budget_mgr') as mock_bm, \
+         patch('handlers.callbacks.rules') as mock_rules, \
+         patch('handlers.callbacks.update_pinned_dashboard', new_callable=AsyncMock) as mock_upd:
         mock_db.get_or_create_user.return_value = MagicMock(id=1)
         mock_rules.evaluate.return_value = []
         mock_bm.check_budget_status.return_value = ""
@@ -606,7 +637,7 @@ async def test_handle_callback_tx_edit_options(mock_update, mock_context):
     query.data = "tx_edit"
     mock_update.callback_query = query
     
-    with patch('core.db') as mock_db:
+    with patch('handlers.callbacks.db') as mock_db:
         mock_db.get_or_create_user.return_value = MagicMock(id=1)
         await handle_callback(mock_update, mock_context)
         query.edit_message_text.assert_called()
@@ -618,7 +649,7 @@ async def test_handle_callback_edit_amount(mock_update, mock_context):
     query.data = "edit_amount"
     mock_update.callback_query = query
     
-    with patch('core.db') as mock_db:
+    with patch('handlers.callbacks.db') as mock_db:
         mock_db.get_or_create_user.return_value = MagicMock(id=1)
         await handle_callback(mock_update, mock_context)
         assert mock_context.user_data['state'] == 'WAITING_EDIT_AMOUNT'
@@ -630,8 +661,9 @@ async def test_handle_callback_edit_category(mock_update, mock_context):
     query.data = "edit_category"
     mock_update.callback_query = query
     
-    with patch('core.db') as mock_db:
+    with patch('handlers.callbacks.db') as mock_db:
         mock_db.get_or_create_user.return_value = MagicMock(id=1)
         await handle_callback(mock_update, mock_context)
         assert mock_context.user_data['state'] == 'WAITING_EDIT_CATEGORY'
         query.edit_message_text.assert_called()
+

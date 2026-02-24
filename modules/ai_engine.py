@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import time
+import gc
 from groq import Groq
 from config import GROQ_API_KEY, CATEGORIES
 
@@ -9,15 +10,31 @@ logger = logging.getLogger(__name__)
 
 class AIEngine:
     def __init__(self):
-        self.client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+        self._client = None
         # Updated to llama-3.3-70b-versatile as llama3-8b-8192 is decommissioned
         self.model = "llama-3.3-70b-versatile"
+
+    @property
+    def client(self):
+        """Lazy load Groq client to save memory on startup"""
+        if self._client is None and GROQ_API_KEY:
+            try:
+                self._client = Groq(api_key=GROQ_API_KEY)
+            except Exception as e:
+                logger.error(f"Failed to initialize Groq client: {e}")
+                self._client = None
+        return self._client
+
+    @client.setter
+    def client(self, value):
+        self._client = value
 
     def parse_transaction(self, text, retries=2):
         """
         Parses natural language text into a structured transaction JSON using Groq with retry logic.
         """
-        if not self.client:
+        client = self.client
+        if not client:
             return None
 
         prompt = f"""
@@ -39,7 +56,7 @@ class AIEngine:
 
         for attempt in range(retries + 1):
             try:
-                response = self.client.chat.completions.create(
+                response = client.chat.completions.create(
                     messages=[{"role": "user", "content": prompt}],
                     model=self.model,
                     response_format={"type": "json_object"}
@@ -50,13 +67,16 @@ class AIEngine:
                 if attempt == retries:
                     return None
                 time.sleep(1)
+            finally:
+                gc.collect()
         return None
 
     def generate_smart_insight(self, analysis_data, retries=2):
         """
         Generates a human-like financial advice based on raw analysis data with retry logic.
         """
-        if not self.client:
+        client = self.client
+        if not client:
             return "AI Key tidak ditemukan. Gunakan analisis standar."
 
         prompt = f"""
@@ -71,7 +91,7 @@ class AIEngine:
 
         for attempt in range(retries + 1):
             try:
-                response = self.client.chat.completions.create(
+                response = client.chat.completions.create(
                     messages=[{"role": "user", "content": prompt}],
                     model=self.model,
                 )
@@ -81,13 +101,16 @@ class AIEngine:
                 if attempt == retries:
                     return f"Aduh, AI-nya lagi capek nih (Error: {e}). Coba lagi nanti ya!"
                 time.sleep(1)
+            finally:
+                gc.collect()
         return "Aduh, AI-nya lagi capek nih. Coba lagi nanti ya!"
 
     def chat_response(self, text, user_name="Teman"):
         """
         Handles general chat messages using Groq AI with a friendly, Gen-Z persona.
         """
-        if not self.client:
+        client = self.client
+        if not client:
             return f"Halo {user_name}! Aku FinBot. Ada yang bisa kubantu catat hari ini?"
 
         prompt = f"""
@@ -105,7 +128,7 @@ class AIEngine:
         """
 
         try:
-            response = self.client.chat.completions.create(
+            response = client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
                 model=self.model,
             )
@@ -113,3 +136,5 @@ class AIEngine:
         except Exception as e:
             logger.error(f"Error in AI chat response: {e}")
             return f"Halo {user_name}! Ada yang bisa aku bantu catat hari ini? 💸"
+        finally:
+            gc.collect()

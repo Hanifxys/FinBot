@@ -35,9 +35,10 @@ def test_visual_reporter_empty():
 
 # --- AI ENGINE TESTS ---
 def test_ai_engine_no_client():
-    with patch.dict('os.environ', {'GROQ_API_KEY': ''}):
+    with patch('modules.ai_engine.GROQ_API_KEY', ''):
         ai = AIEngine()
-        ai.client = None
+        # Ensure _client is None so it tries to use the empty GROQ_API_KEY
+        ai._client = None 
         assert ai.parse_transaction("halo") is None
         assert "AI Key tidak ditemukan" in ai.generate_smart_insight({})
         assert "FinBot" in ai.chat_response("halo")

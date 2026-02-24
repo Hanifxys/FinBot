@@ -1,6 +1,7 @@
 from telegram import Update
 from telegram.ext import ContextTypes
 from core import db, analyzer, ai
+from utils.dashboard import update_pinned_dashboard
 import logging
 
 async def set_gaji(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -23,6 +24,7 @@ async def set_gaji(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         db.add_monthly_income(user_db.id, amount)
         await update.message.reply_text(f"✅ Pendapatan bulanan berhasil diatur ke Rp{amount:,.0f}. Semangat mengelola uangnya! 💪", parse_mode='Markdown')
+        await update_pinned_dashboard(update, context)
     except ValueError:
         await update.message.reply_text("Format nominal salah. Gunakan angka saja.")
 
@@ -47,6 +49,7 @@ async def set_budget(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         db.set_budget(user_db.id, category, amount)
         await update.message.reply_text(f"✅ Budget {category} berhasil diatur ke Rp {amount:,.0f} per bulan.")
+        await update_pinned_dashboard(update, context)
     except ValueError:
         await update.message.reply_text("Format nominal salah. Gunakan angka saja.")
 

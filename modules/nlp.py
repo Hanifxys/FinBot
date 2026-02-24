@@ -1,18 +1,13 @@
 import re
 import logging
+import gc
 from config import GROQ_API_KEY
 
 class NLPProcessor:
     def __init__(self):
         # Initialize Groq
-        self.groq_enabled = False
-        try:
-            from groq import Groq
-            self.client = Groq(api_key=GROQ_API_KEY)
-            self.groq_enabled = True
-        except Exception as e:
-            logging.error(f"Groq initialization failed: {e}")
-            self.client = None
+        self._client = None
+        self.groq_enabled = GROQ_API_KEY is not None
 
         # Keywords for categorization - User-centric mapping
         self.category_keywords = {
@@ -53,6 +48,23 @@ class NLPProcessor:
             ],
             "Gaji": ["gaji", "salary", "bonus", "transfer masuk", "income", "payroll", "pemasukan", "cashback", "refund", "jual"]
         }
+
+    @property
+    def client(self):
+        """Lazy load Groq client to save memory on startup"""
+        if self._client is None and self.groq_enabled:
+            try:
+                from groq import Groq
+                self._client = Groq(api_key=GROQ_API_KEY)
+            except Exception as e:
+                logging.error(f"Groq initialization failed: {e}")
+                self._client = None
+                self.groq_enabled = False
+        return self._client
+
+    @client.setter
+    def client(self, value):
+        self._client = value
 
     def process_text(self, text):
         """
@@ -177,6 +189,10 @@ class NLPProcessor:
         """
         Uses Groq LLM to classify intent when regex fails.
         """
+        client = self.client
+        if not client:
+            return None
+            
         try:
             prompt = f"""
             Classify the intent of this financial bot user message: "{text}"
@@ -196,17 +212,18 @@ class NLPProcessor:
             Example: {{"intent": "GREETING", "confidence": 0.95}}
             """
             
-            chat_completion = self.client.chat.completions.create(
+            chat_completion = client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
                 model="llama-3.3-70b-versatile",
                 response_format={"type": "json_object"}
             )
             import json
-            result = json.loads(chat_completion.choices[0].message.content)
-            return result
+            return json.loads(chat_completion.choices[0].message.content)
         except Exception as e:
-            logging.error(f"Groq LLM classification failed: {e}")
+            logging.error(f"LLM Intent Classification Error: {e}")
             return None
+        finally:
+            gc.collect()
 
     def extract_transaction_data(self, text):
         """

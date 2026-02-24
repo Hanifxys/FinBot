@@ -129,11 +129,11 @@ def test_export_csv(db_handler, db_session):
         reader = csv.reader(f)
         rows = list(reader)
         assert len(rows) == 3 # Header + 2 data rows
-        assert rows[0] == ['ID', 'Tanggal', 'Kategori', 'Nominal', 'Tipe', 'Deskripsi']
+        assert rows[0] == ['Tanggal', 'Tipe', 'Kategori', 'Nominal', 'Catatan']
         # Check if amounts are present (row 1 is newest tx due to order_by desc)
         amounts = [row[3] for row in rows[1:]]
-        assert "100000.0" in amounts
-        assert "50000.0" in amounts
+        assert "Rp100,000" in amounts
+        assert "Rp50,000" in amounts
 
     # Cleanup
     os.remove(filepath)

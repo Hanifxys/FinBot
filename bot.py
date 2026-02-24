@@ -1,11 +1,10 @@
+from datetime import time, datetime, timezone
 import logging
 import os
 import threading
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes, TypeHandler
-from datetime import time, datetime
-import pytz
 
 from config import TELEGRAM_BOT_TOKEN
 from core import init_components, db, ocr, nlp, ai, budget_mgr, analyzer, rules, visual_reporter
@@ -88,7 +87,7 @@ if __name__ == '__main__':
     application.add_error_handler(error_handler)
     
     job_queue = application.job_queue
-    job_queue.run_daily(daily_digest, time(hour=14, minute=0, tzinfo=pytz.UTC))
+    job_queue.run_daily(daily_digest, time(hour=14, minute=0, tzinfo=timezone.utc))
     
     # Logging Middleware (Group -1 runs before other groups)
     application.add_handler(TypeHandler(object, log_update), group=-1)
@@ -112,5 +111,12 @@ if __name__ == '__main__':
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(CallbackQueryHandler(handle_callback))
     
-    print("FinBot sedang berjalan...")
-    application.run_polling(drop_pending_updates=True)
+    logging.info("FinBot sedang berjalan...")
+    sys.stdout.flush()
+    try:
+        application.run_polling(drop_pending_updates=True)
+    except Exception as e:
+        logging.error(f"Bot exited with error: {e}")
+    finally:
+        logging.info("Bot stopped.")
+        sys.stdout.flush()

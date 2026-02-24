@@ -1,6 +1,7 @@
 from telegram import Update
 from telegram.ext import ContextTypes
 from core import db
+from utils.dashboard import update_pinned_dashboard
 import os
 from datetime import datetime
 import logging
@@ -13,6 +14,7 @@ async def undo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     success = db.undo_last_transaction(user_db.id)
     if success:
         await update.message.reply_text("✅ Transaksi terakhir berhasil dibatalkan!")
+        await update_pinned_dashboard(update, context)
     else:
         await update.message.reply_text("❌ Tidak ada transaksi yang bisa dibatalkan.")
 

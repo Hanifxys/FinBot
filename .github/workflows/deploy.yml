@@ -37,8 +37,37 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
+  publish-to-jfrog:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup JFrog CLI
+      uses: jfrog/setup-jfrog-cli@v4
+      env:
+        JF_URL: ${{ secrets.JF_URL }}
+        JF_USER: ${{ secrets.JF_USER }}
+        JF_PASSWORD: ${{ secrets.JF_PASSWORD }}
+
+    - name: Docker Login to JFrog
+      run: |
+        echo "${{ secrets.JF_PASSWORD }}" | docker login ${{ secrets.JF_DOCKER_REGISTRY }} -u ${{ secrets.JF_USER }} --password-stdin
+
+    - name: Build and Push Docker Image to JFrog
+      run: |
+        docker build -t ${{ secrets.JF_DOCKER_REGISTRY }}/finbot-pro:${{ github.sha }} .
+        docker push ${{ secrets.JF_DOCKER_REGISTRY }}/finbot-pro:${{ github.sha }}
+        docker tag ${{ secrets.JF_DOCKER_REGISTRY }}/finbot-pro:${{ github.sha }} ${{ secrets.JF_DOCKER_REGISTRY }}/finbot-pro:latest
+        docker push ${{ secrets.JF_DOCKER_REGISTRY }}/finbot-pro:latest
+
+    - name: Publish Build Info to JFrog
+      run: |
+        jf rt build-publish finbot-pro ${{ github.run_number }}
+
   deploy:
-  
+    needs: publish-to-jfrog
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
