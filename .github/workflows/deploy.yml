@@ -66,6 +66,7 @@ jobs:
   #     run: |
   #       jf rt build-publish finbot-pro ${{ github.run_number }}
 
+  # Trigger rebuild for deployment
   deploy:
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
