@@ -1,6 +1,7 @@
 import re
 import logging
 import gc
+import difflib
 from typing import Dict, Any, Tuple, Optional
 from config import GROQ_API_KEY
 from modules.amounts import parse_primary_amount_id
@@ -12,6 +13,27 @@ class NLPProcessor:
         # Initialize Groq
         self._client = None
         self.groq_enabled = GROQ_API_KEY is not None
+
+        # Slang & Abbreviation Mapping (Indonesian)
+        self.slang_map = {
+            "mkn": "makan", "mnm": "minum", "bli": "beli", "byr": "bayar",
+            "blj": "belanja", "trf": "transfer", "tf": "transfer",
+            "k": "ribu", "rb": "ribu", "jt": "juta", "mio": "juta",
+            "skul": "sekolah", "klh": "kuliah", "bns": "bensin",
+            "parkir": "parkir", "pkr": "parkir", "rt": "rumah tangga",
+            "ls": "listrik", "net": "internet", "inet": "internet",
+            "pd": "pendidikan", "inv": "investasi", "depo": "deposit",
+            "wd": "withdraw", "ccl": "cicilan", "kred": "kredit",
+            "lap": "laporan", "cek": "check", "sisa": "sisa",
+            "bln": "bulan", "thn": "tahun", "hr": "hari",
+            "bsk": "besok", "kmrn": "kemarin", "tgl": "tanggal",
+            "gaji": "gaji", "gj": "gaji", "inc": "income", "exp": "expense",
+            "gw": "saya", "aku": "saya", "sy": "saya",
+            "ga": "tidak", "gk": "tidak", "gak": "tidak",
+            "ngopi": "kopi", "sarapan": "makan pagi", "lunch": "makan siang",
+            "dinner": "makan malam", "gojek": "ojol", "grab": "ojol",
+            "gocar": "taksi", "grabcar": "taksi", "bluebird": "taksi"
+        }
 
         # Keywords for categorization - User-centric mapping
         self.category_keywords = {
@@ -65,8 +87,11 @@ class NLPProcessor:
             "get_report": re.compile(r'\b(laporan|report|rekap|summary|statistik)\b', re.IGNORECASE),
             "roast_wallet": re.compile(r'\b(roast|julid|marah|hujat)\b', re.IGNORECASE),
             "export_data": re.compile(r'\b(export|ekspor|download|backup)\b', re.IGNORECASE),
-            "what_if": re.compile(r'\b(what if|simulasi|kalo beli|misal beli)\b', re.IGNORECASE),
-            "greeting": re.compile(r'\b(halo|hi|hai|siang|pagi|malam|apa kabar|sehat)\b', re.IGNORECASE)
+            "what_if": re.compile(r'\b(what if|simulasi|kalo|misal|kalau|andai|seandainya)\b', re.IGNORECASE),
+            "greeting": re.compile(r'\b(halo|hi|hai|siang|pagi|malam|apa kabar|sehat)\b', re.IGNORECASE),
+            "set_budget_alert": re.compile(r'\b(ingat|inget|alert|warning|batas|notif|peringatan).*(budget|anggaran)\b', re.IGNORECASE),
+            "set_budget": re.compile(r'\b(set|atur|ubah|ganti|tambah).*(budget|anggaran|limit)\b', re.IGNORECASE),
+            "set_gaji": re.compile(r'\b(set|atur|ubah|ganti|masukkan).*(gaji|pemasukan|income|pendapatan)\b', re.IGNORECASE),
         }
 
     @property
@@ -138,13 +163,27 @@ class NLPProcessor:
     def normalize_text(self, text: str) -> str:
         """
         Normalizes informal text like '2jt' -> '2000000', '50rb' -> '50000', etc.
-        Also handles slang and common abbreviations.
+        Also handles slang and common abbreviations using dictionary mapping.
         """
         if not text:
             return ""
             
         text = text.lower().strip()
         
+        # 0. Slang Replacement (Token-based)
+        tokens = text.split()
+        normalized_tokens = []
+        for token in tokens:
+            # Handle mixed alphanumeric like '50k' or '2jt' first
+            if re.match(r'^\d+[a-z]+$', token):
+                normalized_tokens.append(token)
+                continue
+            
+            # Use slang map
+            normalized_tokens.append(self.slang_map.get(token, token))
+            
+        text = " ".join(normalized_tokens)
+
         # 1. Standardize separators: change comma to dot for decimal parsing
         # But only if it looks like a decimal (e.g., 1,5jt or 1.5jt)
         text = re.sub(r'(\d+),(\d+)\s*(jt|mio|rb|k|ribu)', r'\1.\2\3', text)
@@ -186,6 +225,16 @@ class NLPProcessor:
 
         if self._intents_map["what_if"].search(normalized_text):
             return {"intent": "WHAT_IF", "confidence": 0.95}
+
+        # New Intent Checks for Settings (Before Transaction Check)
+        if self._intents_map["set_budget_alert"].search(normalized_text):
+            return {"intent": "SET_BUDGET_ALERT", "confidence": 0.95}
+
+        if self._intents_map["set_gaji"].search(normalized_text):
+            return {"intent": "SET_GAJI", "confidence": 0.95}
+
+        if self._intents_map["set_budget"].search(normalized_text):
+            return {"intent": "SET_BUDGET", "confidence": 0.95}
 
         # 1. Natural Language Settings
         if any(kw in normalized_text for kw in ["mode", "ganti mode", "ubah mode"]):
@@ -334,20 +383,36 @@ class NLPProcessor:
         return {"new_value": None, "valid": False, "reason": "Field tidak valid"}
 
     def _detect_category(self, text: str) -> str:
-        """Smarter category detection with improved keyword matching using pre-compiled regex"""
+        """Smarter category detection with improved keyword matching using pre-compiled regex and fuzzy match"""
         if not text:
             return "Lain-lain"
             
         text = text.lower()
         
-        # Check using pre-compiled regex for speed
+        # 1. Exact Regex Match
         for category, pattern in self._compiled_keywords.items():
             if pattern.search(text):
                 return category
         
-        # Heuristic: if text contains "beli" or "bayar" but no category found
-        if any(kw in text for kw in ["beli", "bayar", "pesan"]):
+        # 2. Heuristic: if text contains "beli" or "bayar" but no category found
+        if any(kw in text for kw in ["beli", "bayar", "pesan", "checkout"]):
             return "Belanja"
+
+        # 3. Fuzzy Match for Typos (e.g. "mkan" -> "makan")
+        # Flatten all keywords
+        all_keywords = []
+        keyword_to_cat = {}
+        for cat, kws in self.category_keywords.items():
+            for kw in kws:
+                all_keywords.append(kw)
+                keyword_to_cat[kw] = cat
+        
+        words = text.split()
+        for word in words:
+            if len(word) > 3: # Skip short words
+                matches = difflib.get_close_matches(word, all_keywords, n=1, cutoff=0.8)
+                if matches:
+                    return keyword_to_cat[matches[0]]
             
         return "Lain-lain"
 
@@ -373,7 +438,8 @@ class NLPProcessor:
         stopwords = [
             "beli", "bayar", "untuk", "ke", "di", "makan", "minum", "transaksi", "transfer", 
             "ngopi", "buat", "pembayaran", "tagihan", "biaya", "topup", "saldo", "isi", "pemasukan",
-            "gaji", "bonus", "duit", "uang", "bensin", "kopi", "makan", "sarapan", "lunch", "dinner"
+            "gaji", "bonus", "duit", "uang", "bensin", "kopi", "makan", "sarapan", "lunch", "dinner",
+            "pesan", "order", "via", "dari", "sama", "dengan"
         ]
         
         # Build a regex pattern for stopwords to remove them efficiently
@@ -383,6 +449,10 @@ class NLPProcessor:
         # 3. Clean up punctuation and extra spaces
         clean_text = re.sub(r'[^\w\s]', ' ', clean_text)
         clean_text = re.sub(r'\s+', ' ', clean_text).strip()
+        
+        # 4. Filter short words (likely conjunctions or typos)
+        words = [w for w in clean_text.split() if len(w) > 2]
+        clean_text = " ".join(words)
         
         merchant = clean_text.title()
         return merchant if merchant else "Transaksi"

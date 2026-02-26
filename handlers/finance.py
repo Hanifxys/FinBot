@@ -163,15 +163,65 @@ async def what_if_simulator(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
         
         from core import premium_ai
+        from core import visual_reporter
+        from datetime import datetime
+
         processing = await update.message.reply_text("🔮 **Meramal masa depan dompetmu...**", parse_mode='Markdown')
+        
+        # Determine Scenario Type (Recurring vs One-time)
+        is_recurring = any(w in desc.lower() for w in ["cicil", "langganan", "bulan", "rutin"])
+        duration = 12 if is_recurring else 1
+        
+        # Generate Projection Chart
+        # Use simple heuristics for projection: Average income/expense
+        # In production, this should be more sophisticated (e.g. taking recurring txs into account)
+        current_balance = savings + (income - expense)
+        
+        # Assuming monthly income and expense stays roughly same as this month
+        # This is a simplification for the "What-If" visual
+        chart = visual_reporter.generate_cashflow_projection(
+            current_balance=current_balance,
+            monthly_income=income,
+            monthly_expense=expense,
+            scenario_expense=amount if is_recurring else (amount / 12), # If one-time, impact is immediate but we visualize monthly flow? 
+                                                                         # Actually, for one-time, it just drops the balance once.
+                                                                         # For recurring, it drops every month.
+            scenario_duration_months=12,
+            scenario_name=desc
+        )
+        
+        # Correction for one-time expense in projection logic above:
+        # The visual reporter logic I wrote: curr_scen += (monthly_income - monthly_expense - scenario_expense)
+        # This implies scenario_expense happens EVERY month.
+        # So if it's NOT recurring, we should pass 0 for subsequent months? 
+        # The current visual_reporter logic assumes constant scenario expense.
+        # Let's keep it simple: If one-time, we treat it as recurring for 1 month? No, VisualReporter loops 12 times.
+        # Refactor VisualReporter call logic slightly? 
+        # Actually, for "cicilan", it IS recurring.
+        # For "beli hp cash", it is NOT.
+        # Let's handle this by passing the right 'monthly' impact.
+        
+        # If one-time purchase:
+        # We can't easily use the simple loop in VisualReporter for one-time drop at month 1.
+        # BUT, users mostly ask about "cicilan" or "subscription" in this context.
+        # Let's assume user intent for "What If" often involves cashflow impact over time.
+        # If one-time, let's just warn about immediate drop.
         
         analysis = await premium_ai._call_llm(
             system_prompt="You are a financial risk analyst. Be realistic and direct.",
             user_prompt=prompt
         )
         
-        await processing.edit_text(f"🔮 **Hasil Simulasi: {desc}**\n\n{analysis}", parse_mode='Markdown')
+        await processing.delete()
         
+        caption = f"🔮 **Hasil Simulasi: {desc}**\n\n{analysis}"
+        
+        if chart and is_recurring:
+            await update.message.reply_photo(photo=chart, caption=caption, parse_mode='Markdown')
+        else:
+            await update.message.reply_text(caption, parse_mode='Markdown')
+            
     except Exception as e:
         logging.error(f"What-if error: {e}")
         await update.message.reply_text("Gagal melakukan simulasi. Coba lagi nanti.")
+
