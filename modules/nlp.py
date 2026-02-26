@@ -12,7 +12,7 @@ class NLPProcessor:
     def __init__(self):
         # Initialize Groq
         self._client = None
-        self.groq_enabled = GROQ_API_KEY is not None
+        self.groq_enabled = bool(GROQ_API_KEY and GROQ_API_KEY.strip())
 
         # Slang & Abbreviation Mapping (Indonesian)
         self.slang_map = {
