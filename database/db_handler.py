@@ -10,8 +10,19 @@ CACHE_TTL_BUDGET = 60
 
 # Roles
 ROLE_SUPERADMIN = "superadmin"
-ROLE_ADMIN = "admin"
+ROLE_MODERATOR = "moderator"
+ROLE_FINANCE = "finance"
+ROLE_SUPPORT = "support"
 ROLE_USER = "user"
+
+# Permissions Matrix
+PERMISSIONS = {
+    ROLE_SUPERADMIN: ["*"],
+    ROLE_MODERATOR: ["view_users", "block_user", "broadcast", "view_logs"],
+    ROLE_FINANCE: ["view_transactions", "export_data", "view_reports"],
+    ROLE_SUPPORT: ["view_users", "message_user", "view_activity"],
+    ROLE_USER: []
+}
 
 # Superadmin Configuration
 SUPERADMIN_ID = 1512347775 # Muhamad Hanif
@@ -428,21 +439,135 @@ class DBHandler:
             del self._user_cache[telegram_id]
         return True
 
-    def log_admin_action(self, admin_id, target_id, action, reason=None):
+    def has_permission(self, telegram_id, permission):
+        """Check if user has a specific permission based on their role."""
+        if telegram_id == SUPERADMIN_ID:
+            return True
+        user = self.get_user(telegram_id)
+        if not user:
+            return False
+        
+        role = getattr(user, 'role', ROLE_USER)
+        perms = PERMISSIONS.get(role, [])
+        return "*" in perms or permission in perms
+
+    def log_admin_action(self, admin_id, target_id, action, reason=None, action_type="modification", old_value=None, new_value=None, ip_address=None):
+        """Enhanced admin action logging for serious audit trail."""
         data = {
             "admin_id": admin_id,
             "target_id": target_id,
             "action": action,
+            "action_type": action_type,
+            "old_value": str(old_value) if old_value is not None else None,
+            "new_value": str(new_value) if new_value is not None else None,
             "reason": reason,
+            "ip_address": ip_address,
             "timestamp": datetime.now().isoformat()
         }
-        self.supabase.table(Tables.ADMIN_LOGS).insert(data).execute()
+        try:
+            self.supabase.table(Tables.ADMIN_LOGS).insert(data).execute()
+        except Exception as e:
+            logging.error(f"Failed to log admin action: {e}")
         return True
 
     def get_admin_logs(self, limit=100):
-        response = self.supabase.table(Tables.ADMIN_LOGS).select("*")\
-            .order("timestamp", desc=True).limit(limit).execute()
-        return response.data
+        """Fetch audit logs, sorted by most recent."""
+        try:
+            response = self.supabase.table(Tables.ADMIN_LOGS).select("*")\
+                .order("timestamp", desc=True).limit(limit).execute()
+            return response.data
+        except Exception as e:
+            logging.error(f"Failed to fetch admin logs: {e}")
+            return []
+
+    def get_flagged_transactions(self, limit=50):
+        try:
+            response = self.supabase.table(Tables.FLAGGED_TRANSACTIONS).select("*, transactions(*)")\
+                .order("created_at", desc=True).limit(limit).execute()
+            return response.data
+        except Exception as e:
+            logging.error(f"Failed to fetch flagged transactions: {e}")
+            return []
+
+    def get_suspicious_users(self, limit=20):
+        """Identifies users with high activity or anomalies."""
+        try:
+            # For now, let's identify users with > 20 transactions today as suspicious
+            today = self.get_effective_date()
+            start_time = datetime.combine(today, datetime.min.time()).isoformat()
+            
+            # This is a bit complex for a single Supabase query without RPC, 
+            # so we'll do a simple heuristic or return an empty list until RPC is ready.
+            # Real version would use a view or RPC.
+            return [] 
+        except Exception as e:
+            logging.error(f"Failed to fetch suspicious users: {e}")
+            return []
+
+    def get_dispute_tickets(self, limit=50):
+        try:
+            response = self.supabase.table(Tables.DISPUTES).select("*")\
+                .order("created_at", desc=True).limit(limit).execute()
+            return response.data
+        except Exception as e:
+            logging.error(f"Failed to fetch disputes: {e}")
+            return []
+
+    def get_moderation_settings(self):
+        try:
+            response = self.supabase.table(Tables.MODERATION_SETTINGS).select("*").execute()
+            if response.data:
+                return response.data[0]
+            return {
+                "auto_flag_high_amount": True,
+                "high_amount_threshold": 5000000,
+                "auto_freeze_risk_score": 90,
+                "spam_detection_enabled": True
+            }
+        except Exception:
+            return {
+                "auto_flag_high_amount": True,
+                "high_amount_threshold": 5000000,
+                "auto_freeze_risk_score": 90,
+                "spam_detection_enabled": True
+            }
+
+    def update_moderation_settings(self, settings: dict):
+        try:
+            # Try to update if exists, else insert
+            existing = self.get_moderation_settings()
+            if "id" in existing:
+                self.supabase.table(Tables.MODERATION_SETTINGS).update(settings).eq("id", existing["id"]).execute()
+            else:
+                self.supabase.table(Tables.MODERATION_SETTINGS).insert(settings).execute()
+            return True
+        except Exception as e:
+            logging.error(f"Failed to update moderation settings: {e}")
+            return False
+
+    def moderate_transaction(self, flag_id, status, admin_id):
+        """Update the status of a flagged transaction."""
+        try:
+            data = {"status": status, "reviewed_by": admin_id, "reviewed_at": datetime.now().isoformat()}
+            self.supabase.table(Tables.FLAGGED_TRANSACTIONS).update(data).eq("id", flag_id).execute()
+            return True
+        except Exception as e:
+            logging.error(f"Failed to moderate transaction: {e}")
+            return False
+
+    def resolve_dispute(self, dispute_id, status, resolution, admin_id):
+        try:
+            data = {
+                "status": status, 
+                "resolution": resolution, 
+                "resolved_by": admin_id, 
+                "resolved_at": datetime.now().isoformat()
+            }
+            self.supabase.table(Tables.DISPUTES).update(data).eq("id", dispute_id).execute()
+            return True
+        except Exception as e:
+            logging.error(f"Failed to resolve dispute: {e}")
+            return False
 
     def is_superadmin(self, telegram_id):
         if telegram_id == SUPERADMIN_ID:
@@ -451,7 +576,11 @@ class DBHandler:
         return user and getattr(user, 'role', ROLE_USER) == ROLE_SUPERADMIN
 
     def is_admin(self, telegram_id):
-        if self.is_superadmin(telegram_id):
+        """General check for any admin-like role."""
+        if telegram_id == SUPERADMIN_ID:
             return True
         user = self.get_user(telegram_id)
-        return user and getattr(user, 'role', ROLE_USER) == ROLE_ADMIN
+        if not user:
+            return False
+        role = getattr(user, 'role', ROLE_USER)
+        return role in [ROLE_SUPERADMIN, ROLE_MODERATOR, ROLE_FINANCE, ROLE_SUPPORT]

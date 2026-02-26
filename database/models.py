@@ -39,3 +39,6 @@ class Tables:
     BUDGETS = "budgets"
     SAVING_GOALS = "saving_goals"
     ADMIN_LOGS = "admin_logs"
+    FLAGGED_TRANSACTIONS = "flagged_transactions"
+    DISPUTES = "disputes"
+    MODERATION_SETTINGS = "moderation_settings"

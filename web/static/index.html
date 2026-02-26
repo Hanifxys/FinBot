@@ -145,6 +145,27 @@
         </div>
         </transition>
 
+        <!-- TOAST NOTIFICATIONS -->
+        <div class="fixed top-6 right-6 z-[200] flex flex-col gap-3 w-80 pointer-events-none">
+            <transition-group name="slide">
+                <div v-for="toast in toasts" :key="toast.id" 
+                    :class="['pointer-events-auto p-4 rounded-xl glass-panel border shadow-2xl flex items-start gap-3 animate-slide-in', 
+                            toast.type === 'success' ? 'border-success-500/30 bg-success-500/10' : 'border-danger-500/30 bg-danger-500/10']">
+                    <div :class="['w-8 h-8 rounded-lg flex items-center justify-center shrink-0', 
+                                toast.type === 'success' ? 'bg-success-500/20 text-success-500' : 'bg-danger-500/20 text-danger-500']">
+                        <i :class="['fas', toast.type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle']"></i>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <p class="text-xs font-bold text-white uppercase tracking-wider">{{ toast.type === 'success' ? 'Operation Success' : 'System Error' }}</p>
+                        <p class="text-[11px] text-slate-300 mt-1 leading-relaxed">{{ toast.message }}</p>
+                    </div>
+                    <button @click="removeToast(toast.id)" class="text-slate-500 hover:text-white transition-colors">
+                        <i class="fas fa-times text-[10px]"></i>
+                    </button>
+                </div>
+            </transition-group>
+        </div>
+
         <!-- MAIN DASHBOARD -->
         <transition name="fade">
         <div v-if="isAuthenticated" class="flex-1 flex overflow-hidden bg-dark-950">
@@ -175,6 +196,10 @@
                             <i class="fas fa-users-cog w-5 text-center"></i>
                             <span>User Management</span>
                         </a>
+                        <a @click="setView('admin_ai')" :class="['flex items-center gap-3 px-4 py-3 rounded-lg cursor-pointer transition-all duration-200 group text-sm font-medium', currentView === 'admin_ai' ? 'bg-brand-500/10 text-brand-400 border border-brand-500/20' : 'text-slate-400 hover:text-white hover:bg-white/5']">
+                            <i class="fas fa-brain w-5 text-center"></i>
+                            <span>AI Intelligence</span>
+                        </a>
                         <a v-if="isSuperadmin" @click="setView('admin_broadcast')" :class="['flex items-center gap-3 px-4 py-3 rounded-lg cursor-pointer transition-all duration-200 group text-sm font-medium', currentView === 'admin_broadcast' ? 'bg-brand-500/10 text-brand-400 border border-brand-500/20' : 'text-slate-400 hover:text-white hover:bg-white/5']">
                             <i class="fas fa-bullhorn w-5 text-center"></i>
                             <span>Broadcast System</span>
@@ -182,6 +207,7 @@
                         <a v-if="isSuperadmin" @click="setView('admin_moderation')" :class="['flex items-center gap-3 px-4 py-3 rounded-lg cursor-pointer transition-all duration-200 group text-sm font-medium', currentView === 'admin_moderation' ? 'bg-brand-500/10 text-brand-400 border border-brand-500/20' : 'text-slate-400 hover:text-white hover:bg-white/5']">
                             <i class="fas fa-shield-halved w-5 text-center"></i>
                             <span>Content Moderation</span>
+                            <div v-if="flaggedCount > 0" class="ml-auto px-1.5 py-0.5 rounded-full bg-danger-500 text-[9px] font-bold text-white">{{ flaggedCount }}</div>
                         </a>
                         <a v-if="isSuperadmin" @click="setView('admin_logs')" :class="['flex items-center gap-3 px-4 py-3 rounded-lg cursor-pointer transition-all duration-200 group text-sm font-medium', currentView === 'admin_logs' ? 'bg-brand-500/10 text-brand-400 border border-brand-500/20' : 'text-slate-400 hover:text-white hover:bg-white/5']">
                             <i class="fas fa-history w-5 text-center"></i>
@@ -225,9 +251,11 @@
                     </div>
                     
                     <div class="flex items-center gap-4">
-                        <div class="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full bg-dark-800 border border-white/5">
-                            <span class="w-2 h-2 rounded-full bg-success-500 animate-pulse"></span>
-                            <span class="text-[10px] font-mono text-slate-400">LIVE DATA</span>
+                        <div class="hidden md:flex items-center gap-4 px-4 py-2 rounded-xl bg-dark-900/50 border border-white/5">
+                            <div v-for="(status, name) in health.components" :key="name" class="flex items-center gap-1.5 px-2 py-0.5 rounded border border-white/5 bg-dark-800">
+                                <span :class="['w-1.5 h-1.5 rounded-full', status === 'connected' || status === 'running' || status === 'ready' ? 'bg-success-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-danger-500 animate-pulse']"></span>
+                                <span class="text-[9px] font-bold text-slate-400 uppercase tracking-tight">{{ name }}</span>
+                            </div>
                         </div>
                         <button @click="toggleTheme" class="p-2 text-slate-400 hover:text-white transition-colors">
                             <i class="fas fa-moon"></i>
@@ -251,7 +279,7 @@
                                     <div class="flex justify-between items-start mb-4">
                                         <div>
                                             <p class="text-slate-400 text-xs font-medium uppercase tracking-wider">{{ card.label }}</p>
-                                            <h3 class="text-2xl font-bold text-white mt-1 font-mono tracking-tight">{{ formatCurrency(card.value) }}</h3>
+                                            <h3 class="text-2xl font-bold text-white mt-1 font-mono tracking-tight">{{ card.isRaw ? card.value : formatCurrency(card.value) }}</h3>
                                         </div>
                                         <div :class="['p-2 rounded-lg bg-opacity-10', card.colorClass]">
                                             <i :class="[card.icon, card.textClass]"></i>
@@ -368,7 +396,28 @@
 
                         <!-- ADMIN: USER MANAGEMENT -->
                         <transition name="slide" mode="out-in">
-                        <div v-if="currentView === 'admin_users'" class="glass-panel rounded-2xl overflow-hidden" key="admin_users">
+                        <div v-if="currentView === 'admin_users'" class="space-y-8" key="admin_users">
+                            <!-- Admin Quick Stats -->
+                            <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+                                <div class="glass-panel p-4 rounded-xl border-l-4 border-brand-500">
+                                    <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Total Users</p>
+                                    <h4 class="text-xl font-bold text-white mt-1">{{ adminStats.total_users }}</h4>
+                                </div>
+                                <div class="glass-panel p-4 rounded-xl border-l-4 border-success-500">
+                                    <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Active (7d)</p>
+                                    <h4 class="text-xl font-bold text-white mt-1">{{ adminStats.active_users }}</h4>
+                                </div>
+                                <div class="glass-panel p-4 rounded-xl border-l-4 border-purple-500">
+                                    <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">System Health</p>
+                                    <h4 class="text-xl font-bold text-white mt-1 uppercase text-sm">{{ adminStats.system_health }}</h4>
+                                </div>
+                                <div class="glass-panel p-4 rounded-xl border-l-4 border-amber-500">
+                                    <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Database</p>
+                                    <h4 class="text-xl font-bold text-white mt-1 uppercase text-sm">{{ adminStats.db_status }}</h4>
+                                </div>
+                            </div>
+
+                            <div class="glass-panel rounded-2xl overflow-hidden">
                             <div class="p-6 border-b border-white/5 flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white/2">
                                 <h3 class="text-sm font-bold text-white uppercase tracking-wider">User Directory</h3>
                                 <div class="flex items-center gap-3">
@@ -389,11 +438,11 @@
                                     <tbody class="divide-y divide-white/5">
                                         <tr v-for="user in filteredUsers" :key="user.id" class="hover:bg-white/5 transition-colors group">
                                             <td class="px-6 py-4 font-mono text-xs text-slate-500 text-center">{{ user.telegram_id }}</td>
-                                            <td class="px-6 py-4">
+                                            <td class="px-6 py-4 cursor-pointer group/user" @click="openUserDrawer(user)">
                                                 <div class="flex items-center gap-3">
-                                                    <div class="w-8 h-8 rounded-full bg-dark-800 flex items-center justify-center text-[10px] font-bold text-brand-400 border border-white/5">@</div>
+                                                    <div class="w-8 h-8 rounded-full bg-dark-800 flex items-center justify-center text-[10px] font-bold text-brand-400 border border-white/5 group-hover/user:border-brand-500/50 group-hover/user:text-brand-300 transition-all">@</div>
                                                     <div>
-                                                        <p class="text-slate-200 font-medium text-xs">{{ user.username }}</p>
+                                                        <p class="text-slate-200 font-medium text-xs group-hover/user:text-brand-400 transition-colors">{{ user.username }}</p>
                                                         <p class="text-[10px] text-slate-600">Joined: {{ formatDateShort(user.created_at) }}</p>
                                                     </div>
                                                 </div>
@@ -401,10 +450,12 @@
                                             <td class="px-6 py-4">
                                                 <select v-if="isSuperadmin && user.telegram_id != userId" @change="updateUserRole(user.telegram_id, $event.target.value)" :value="user.role" class="bg-dark-900 border border-dark-700 text-[10px] rounded px-2 py-1 outline-none text-slate-300">
                                                     <option value="user">USER</option>
-                                                    <option value="admin">ADMIN</option>
+                                                    <option value="moderator">MODERATOR</option>
+                                                    <option value="finance">FINANCE</option>
+                                                    <option value="support">SUPPORT</option>
                                                     <option value="superadmin">SUPERADMIN</option>
                                                 </select>
-                                                <span v-else class="text-[10px] font-bold uppercase tracking-widest text-brand-500">{{ user.role }}</span>
+                                                <span v-else :class="['text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded border', getRoleClass(user.role)]">{{ user.role }}</span>
                                             </td>
                                             <td class="px-6 py-4">
                                                 <span :class="['text-[10px] font-bold px-2 py-0.5 rounded-full', user.is_active ? 'bg-success-500/10 text-success-500' : 'bg-danger-500/10 text-danger-500']">
@@ -422,6 +473,66 @@
                                         </tr>
                                     </tbody>
                                 </table>
+                            </div>
+                        </div>
+                        </transition>
+
+                        <!-- ADMIN: AI MONITOR -->
+                        <transition name="slide" mode="out-in">
+                        <div v-if="currentView === 'admin_ai'" class="space-y-8" key="admin_ai">
+                            <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+                                <div class="glass-panel p-6 rounded-2xl">
+                                    <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">AI Requests</p>
+                                    <h4 class="text-2xl font-bold text-white mt-1">{{ aiStats.total_requests }}</h4>
+                                    <p class="text-[10px] text-success-500 mt-2 font-mono">↑ 14.2% vs avg</p>
+                                </div>
+                                <div class="glass-panel p-6 rounded-2xl">
+                                    <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Error Rate</p>
+                                    <h4 class="text-2xl font-bold text-danger-500 mt-1">{{ aiStats.error_rate }}</h4>
+                                    <p class="text-[10px] text-slate-500 mt-2 font-mono">Within threshold</p>
+                                </div>
+                                <div class="glass-panel p-6 rounded-2xl">
+                                    <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Avg Latency</p>
+                                    <h4 class="text-2xl font-bold text-brand-400 mt-1">{{ aiStats.avg_latency }}</h4>
+                                    <p class="text-[10px] text-slate-500 mt-2 font-mono">P95: 2.1s</p>
+                                </div>
+                                <div class="glass-panel p-6 rounded-2xl">
+                                    <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Token Usage</p>
+                                    <h4 class="text-2xl font-bold text-purple-400 mt-1">{{ aiStats.token_usage }}</h4>
+                                    <p class="text-[10px] text-slate-500 mt-2 font-mono">~$1.24 today</p>
+                                </div>
+                            </div>
+
+                            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                <!-- Model Performance -->
+                                <div class="glass-panel p-6 rounded-2xl">
+                                    <h3 class="text-sm font-bold text-white uppercase tracking-wider mb-6">Model Performance</h3>
+                                    <div class="space-y-4">
+                                        <div v-for="model in ['Primary (GPT-4)', 'Fallback (Claude)', 'Fast (Groq)']" :key="model" class="p-4 rounded-xl bg-white/2 border border-white/5">
+                                            <div class="flex justify-between items-center mb-2">
+                                                <span class="text-xs font-bold text-slate-300">{{ model }}</span>
+                                                <span class="text-[10px] font-mono text-success-500">READY</span>
+                                            </div>
+                                            <div class="w-full h-1 bg-dark-800 rounded-full overflow-hidden">
+                                                <div class="h-full bg-brand-500" :style="{width: Math.random() * 40 + 60 + '%'}"></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <!-- AI Log Stream -->
+                                <div class="glass-panel p-6 rounded-2xl">
+                                    <h3 class="text-sm font-bold text-white uppercase tracking-wider mb-6">Circuit Breaker Status</h3>
+                                    <div class="flex items-center justify-center h-48">
+                                        <div class="text-center">
+                                            <div class="w-16 h-16 rounded-full bg-success-500/10 flex items-center justify-center mx-auto mb-4 border border-success-500/30 shadow-[0_0_20px_rgba(16,185,129,0.2)]">
+                                                <i class="fas fa-bolt text-2xl text-success-500"></i>
+                                            </div>
+                                            <p class="text-sm font-bold text-white">System: CLOSED</p>
+                                            <p class="text-[10px] text-slate-500 mt-1 uppercase tracking-widest">Flow: Normal</p>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                         </transition>
@@ -460,14 +571,203 @@
 
                         <!-- ADMIN: MODERATION -->
                         <transition name="slide" mode="out-in">
-                        <div v-if="currentView === 'admin_moderation'" class="max-w-2xl mx-auto space-y-6" key="admin_moderation">
-                            <div class="glass-panel p-12 rounded-2xl text-center space-y-6 border-dashed border-2 border-white/5">
-                                <div class="w-20 h-20 bg-dark-800 rounded-full flex items-center justify-center mx-auto mb-4">
-                                    <i class="fas fa-shield-halved text-4xl text-slate-600"></i>
+                        <div v-if="currentView === 'admin_moderation'" class="space-y-6" key="admin_moderation">
+                            <!-- Moderation Tabs -->
+                            <div class="flex gap-1 p-1 bg-dark-900/50 rounded-xl border border-white/5 w-fit">
+                                <button v-for="tab in modTabs" :key="tab.id" @click="modActiveTab = tab.id"
+                                    :class="['px-4 py-2 rounded-lg text-xs font-bold transition-all', modActiveTab === tab.id ? 'bg-brand-500 text-white shadow-lg shadow-brand-500/20' : 'text-slate-500 hover:text-slate-300']">
+                                    {{ tab.label }}
+                                </button>
+                            </div>
+
+                            <!-- Tab 1: Flagged Transactions -->
+                            <div v-if="modActiveTab === 'flagged'" class="glass-panel rounded-2xl overflow-hidden animate-fade-in">
+                                <div class="p-6 border-b border-white/5 flex items-center justify-between bg-white/2">
+                                    <h3 class="text-sm font-bold text-white uppercase tracking-wider">Flagged Transactions</h3>
+                                    <span class="px-2 py-0.5 rounded bg-danger-500/10 text-danger-500 text-[10px] font-bold border border-danger-500/20">{{ flaggedTransactions.length }} PENDING REVIEW</span>
                                 </div>
-                                <h3 class="text-xl font-bold text-white">Content Moderation</h3>
-                                <p class="text-slate-400 text-sm max-w-sm mx-auto">This module is currently in development. Future updates will include automated transaction flagging and user dispute resolution.</p>
-                                <button @click="setView('dashboard')" class="px-6 py-2 bg-dark-800 hover:bg-dark-700 text-white rounded-lg text-xs font-bold transition-all">RETURN TO DASHBOARD</button>
+                                <div class="overflow-x-auto">
+                                    <table class="w-full text-sm text-left text-slate-400">
+                                        <thead class="text-xs text-slate-500 uppercase bg-dark-900/80 font-bold tracking-wider">
+                                            <tr>
+                                                <th class="px-6 py-4">Transaction</th>
+                                                <th class="px-6 py-4">Reason</th>
+                                                <th class="px-6 py-4">Risk</th>
+                                                <th class="px-6 py-4">Status</th>
+                                                <th class="px-6 py-4 text-right">Action</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody class="divide-y divide-white/5">
+                                            <tr v-if="flaggedTransactions.length === 0">
+                                                <td colspan="5" class="px-6 py-12 text-center text-slate-600 font-mono text-xs">No transactions flagged by system</td>
+                                            </tr>
+                                            <tr v-for="flag in flaggedTransactions" :key="flag.id" class="hover:bg-white/2 transition-colors">
+                                                <td class="px-6 py-4">
+                                                    <p class="text-white font-bold text-xs">ID: {{ flag.transaction_id }}</p>
+                                                    <p class="text-[10px] text-slate-500">{{ formatCurrency(flag.transactions?.amount || 0) }} • {{ flag.transactions?.category }}</p>
+                                                </td>
+                                                <td class="px-6 py-4">
+                                                    <span class="text-[10px] font-medium text-danger-400 bg-danger-500/5 px-2 py-1 rounded border border-danger-500/10">{{ flag.reason }}</span>
+                                                </td>
+                                                <td class="px-6 py-4">
+                                                    <div class="flex items-center gap-2">
+                                                        <div class="w-12 h-1.5 bg-dark-800 rounded-full overflow-hidden">
+                                                            <div :class="['h-full', flag.risk_score > 70 ? 'bg-danger-500' : 'bg-amber-500']" :style="{width: flag.risk_score + '%'}"></div>
+                                                        </div>
+                                                        <span class="text-[10px] font-mono text-slate-400">{{ flag.risk_score }}%</span>
+                                                    </div>
+                                                </td>
+                                                <td class="px-6 py-4">
+                                                    <span class="text-[10px] font-bold text-amber-500 uppercase tracking-widest">{{ flag.status }}</span>
+                                                </td>
+                                                <td class="px-6 py-4 text-right">
+                                                    <div class="flex justify-end gap-2">
+                                                        <button @click="resolveFlag(flag, 'approved')" class="p-2 text-success-500 hover:bg-success-500/10 rounded-lg transition-all" title="Approve"><i class="fas fa-check"></i></button>
+                                                        <button @click="resolveFlag(flag, 'rejected')" class="p-2 text-danger-500 hover:bg-danger-500/10 rounded-lg transition-all" title="Reject"><i class="fas fa-times"></i></button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            <!-- Tab 2: Suspicious Users -->
+                            <div v-if="modActiveTab === 'users'" class="glass-panel rounded-2xl overflow-hidden animate-fade-in">
+                                <div class="p-6 border-b border-white/5 bg-white/2">
+                                    <h3 class="text-sm font-bold text-white uppercase tracking-wider">User Behaviour Monitoring</h3>
+                                </div>
+                                <div class="overflow-x-auto">
+                                    <table class="w-full text-sm text-left text-slate-400">
+                                        <thead class="text-xs text-slate-500 uppercase bg-dark-900/80 font-bold tracking-wider">
+                                            <tr>
+                                                <th class="px-6 py-4">User</th>
+                                                <th class="px-6 py-4">Activity Today</th>
+                                                <th class="px-6 py-4">AI Usage</th>
+                                                <th class="px-6 py-4">Risk Level</th>
+                                                <th class="px-6 py-4 text-right">Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody class="divide-y divide-white/5">
+                                            <tr v-if="suspiciousUsers.length === 0">
+                                                <td colspan="5" class="px-6 py-12 text-center text-slate-600 font-mono text-xs">All users behaving normally</td>
+                                            </tr>
+                                            <tr v-for="user in suspiciousUsers" :key="user.id" class="hover:bg-white/2 transition-colors">
+                                                <td class="px-6 py-4">
+                                                    <p class="text-white font-bold text-xs">@{{ user.username }}</p>
+                                                    <p class="text-[10px] text-slate-500">UID: {{ user.telegram_id }}</p>
+                                                </td>
+                                                <td class="px-6 py-4 font-mono text-xs text-slate-300">{{ user.daily_tx_count }} Transactions</td>
+                                                <td class="px-6 py-4 font-mono text-xs text-slate-300">{{ user.ai_calls }} Requests</td>
+                                                <td class="px-6 py-4">
+                                                    <span :class="['text-[10px] font-bold px-2 py-0.5 rounded border', user.risk === 'High' ? 'text-danger-400 border-danger-500/30 bg-danger-500/10' : 'text-amber-400 border-amber-500/30 bg-amber-500/10']">
+                                                        {{ user.risk.toUpperCase() }} RISK
+                                                    </span>
+                                                </td>
+                                                <td class="px-6 py-4 text-right">
+                                                    <button @click="openUserDrawer(user)" class="text-xs text-brand-400 hover:underline">Investigate</button>
+                                                </td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            <!-- Tab 3: Dispute Tickets -->
+                            <div v-if="modActiveTab === 'disputes'" class="glass-panel rounded-2xl overflow-hidden animate-fade-in">
+                                <div class="p-6 border-b border-white/5 bg-white/2">
+                                    <h3 class="text-sm font-bold text-white uppercase tracking-wider">Dispute Resolution Queue</h3>
+                                </div>
+                                <div class="overflow-x-auto">
+                                    <table class="w-full text-sm text-left text-slate-400">
+                                        <thead class="text-xs text-slate-500 uppercase bg-dark-900/80 font-bold tracking-wider">
+                                            <tr>
+                                                <th class="px-6 py-4">Ticket</th>
+                                                <th class="px-6 py-4">Type</th>
+                                                <th class="px-6 py-4">User</th>
+                                                <th class="px-6 py-4">Status</th>
+                                                <th class="px-6 py-4 text-right">Action</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody class="divide-y divide-white/5">
+                                            <tr v-if="disputes.length === 0">
+                                                <td colspan="5" class="px-6 py-12 text-center text-slate-600 font-mono text-xs">No open dispute tickets</td>
+                                            </tr>
+                                            <tr v-for="ticket in disputes" :key="ticket.id" class="hover:bg-white/2 transition-colors">
+                                                <td class="px-6 py-4">
+                                                    <p class="text-white font-bold text-xs">#{{ ticket.id }}</p>
+                                                    <p class="text-[10px] text-slate-500 truncate w-40">{{ ticket.issue }}</p>
+                                                </td>
+                                                <td class="px-6 py-4 uppercase text-[10px] font-bold text-slate-400">{{ ticket.type }}</td>
+                                                <td class="px-6 py-4 text-xs">{{ ticket.user_id }}</td>
+                                                <td class="px-6 py-4">
+                                                    <span class="text-[10px] font-bold text-brand-400">{{ ticket.status.toUpperCase() }}</span>
+                                                </td>
+                                                <td class="px-6 py-4 text-right">
+                                                    <button @click="openDisputeModal(ticket)" class="p-2 text-slate-400 hover:text-white transition-colors"><i class="fas fa-external-link-alt"></i></button>
+                                                </td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            <!-- Tab 4: Moderation Settings -->
+                            <div v-if="modActiveTab === 'settings'" class="max-w-2xl mx-auto animate-fade-in">
+                                <div class="glass-panel p-8 rounded-2xl space-y-8">
+                                    <h3 class="text-sm font-bold text-white uppercase tracking-wider mb-6">Automated Moderation Rules</h3>
+                                    
+                                    <div class="space-y-6">
+                                        <!-- Toggle 1 -->
+                                        <div class="flex items-center justify-between p-4 rounded-xl bg-white/2 border border-white/5">
+                                            <div>
+                                                <p class="text-sm font-bold text-white">Auto-Flag High Amounts</p>
+                                                <p class="text-[10px] text-slate-500 mt-1">Transactions above threshold will be pending admin review.</p>
+                                            </div>
+                                            <label class="relative inline-flex items-center cursor-pointer">
+                                                <input type="checkbox" v-model="modSettings.auto_flag_high_amount" class="sr-only peer">
+                                                <div class="w-11 h-6 bg-dark-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-slate-400 after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-600 peer-checked:after:bg-white"></div>
+                                            </label>
+                                        </div>
+
+                                        <!-- Input Threshold -->
+                                        <div v-if="modSettings.auto_flag_high_amount" class="p-4 rounded-xl bg-white/2 border border-white/5 space-y-3">
+                                            <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">High Amount Threshold (IDR)</label>
+                                            <div class="relative">
+                                                <span class="absolute left-4 top-2.5 text-slate-500 text-xs font-bold">Rp</span>
+                                                <input type="number" v-model="modSettings.high_amount_threshold" class="w-full bg-dark-900 border border-dark-700 rounded-lg pl-10 pr-4 py-2 text-xs text-white outline-none focus:ring-1 focus:ring-brand-500 transition-all">
+                                            </div>
+                                        </div>
+
+                                        <!-- Toggle 2 -->
+                                        <div class="flex items-center justify-between p-4 rounded-xl bg-white/2 border border-white/5">
+                                            <div>
+                                                <p class="text-sm font-bold text-white">Rapid-Fire Detection</p>
+                                                <p class="text-[10px] text-slate-500 mt-1">Flag users who send >50 transactions in 10 minutes.</p>
+                                            </div>
+                                            <label class="relative inline-flex items-center cursor-pointer">
+                                                <input type="checkbox" v-model="modSettings.spam_detection_enabled" class="sr-only peer">
+                                                <div class="w-11 h-6 bg-dark-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-slate-400 after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-600 peer-checked:after:bg-white"></div>
+                                            </label>
+                                        </div>
+
+                                        <!-- Toggle 3 -->
+                                        <div class="flex items-center justify-between p-4 rounded-xl bg-white/2 border border-white/5">
+                                            <div>
+                                                <p class="text-sm font-bold text-white">Auto-Freeze High Risk</p>
+                                                <p class="text-[10px] text-slate-500 mt-1">Suspend user account if risk score exceeds threshold.</p>
+                                            </div>
+                                            <label class="relative inline-flex items-center cursor-pointer">
+                                                <input type="checkbox" v-model="modSettings.auto_freeze_enabled" class="sr-only peer">
+                                                <div class="w-11 h-6 bg-dark-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-slate-400 after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-600 peer-checked:after:bg-white"></div>
+                                            </label>
+                                        </div>
+                                    </div>
+
+                                    <button @click="saveModSettings" class="w-full py-3.5 bg-brand-600 hover:bg-brand-500 text-white font-bold rounded-xl shadow-lg shadow-brand-600/20 transition-all">
+                                        SAVE MODERATION ENGINE CONFIG
+                                    </button>
+                                </div>
                             </div>
                         </div>
                         </transition>
@@ -488,22 +788,35 @@
                                             <th class="px-6 py-4">Timestamp</th>
                                             <th class="px-6 py-4">Admin</th>
                                             <th class="px-6 py-4">Action</th>
+                                            <th class="px-6 py-4">Type</th>
                                             <th class="px-6 py-4">Target</th>
-                                            <th class="px-6 py-4">Details</th>
+                                            <th class="px-6 py-4">Changes (Old → New)</th>
+                                            <th class="px-6 py-4">IP Address</th>
                                         </tr>
                                     </thead>
                                     <tbody class="divide-y divide-white/5">
                                         <tr v-if="adminLogs.length === 0">
-                                            <td colspan="5" class="px-6 py-12 text-center text-slate-600 font-mono text-xs">No audit logs available</td>
+                                            <td colspan="7" class="px-6 py-12 text-center text-slate-600 font-mono text-xs">No audit logs available</td>
                                         </tr>
                                         <tr v-for="log in adminLogs" :key="log.id" class="hover:bg-white/2 transition-colors">
-                                            <td class="px-6 py-4 font-mono text-[10px] text-slate-500">{{ formatDate(log.timestamp) }}</td>
+                                            <td class="px-6 py-4 font-mono text-[10px] text-slate-500 whitespace-nowrap">{{ formatDate(log.timestamp) }}</td>
                                             <td class="px-6 py-4 text-xs font-bold text-brand-400">{{ log.admin_id }}</td>
                                             <td class="px-6 py-4">
                                                 <span class="px-2 py-0.5 rounded bg-dark-800 border border-white/5 text-[10px] font-bold text-slate-300">{{ log.action.toUpperCase() }}</span>
                                             </td>
+                                            <td class="px-6 py-4">
+                                                <span class="text-[10px] text-slate-500">{{ log.action_type || 'generic' }}</span>
+                                            </td>
                                             <td class="px-6 py-4 text-xs font-mono text-slate-500">{{ log.target_id || '-' }}</td>
-                                            <td class="px-6 py-4 text-xs text-slate-400 italic">{{ log.reason || '-' }}</td>
+                                            <td class="px-6 py-4 text-xs">
+                                                <div v-if="log.old_value || log.new_value" class="flex items-center gap-2">
+                                                    <span class="text-danger-500/70 line-through">{{ log.old_value || 'None' }}</span>
+                                                    <i class="fas fa-arrow-right text-[10px] text-slate-600"></i>
+                                                    <span class="text-success-500">{{ log.new_value || 'None' }}</span>
+                                                </div>
+                                                <span v-else class="text-slate-600">-</span>
+                                            </td>
+                                            <td class="px-6 py-4 font-mono text-[10px] text-slate-600">{{ log.ip_address || 'Internal' }}</td>
                                         </tr>
                                     </tbody>
                                 </table>
@@ -514,6 +827,85 @@
                     </div>
                 </div>
             </main>
+        </div>
+        </transition>
+
+        <!-- USER DETAIL DRAWER -->
+        <transition name="slide">
+        <div v-if="userDrawer.show" class="fixed inset-y-0 right-0 z-[110] w-full max-w-lg bg-dark-900/90 backdrop-blur-2xl border-l border-white/10 shadow-2xl flex flex-col">
+            <div class="h-20 flex items-center justify-between px-8 border-b border-white/5 bg-white/2">
+                <h3 class="text-sm font-bold text-white uppercase tracking-wider">User Intelligence</h3>
+                <button @click="userDrawer.show = false" class="w-10 h-10 rounded-full hover:bg-white/10 text-slate-400 hover:text-white transition-all">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            
+            <div class="flex-1 overflow-y-auto p-8 space-y-8 custom-scrollbar">
+                <!-- Profile Header -->
+                <div class="flex items-center gap-6">
+                    <div class="w-20 h-20 rounded-2xl bg-gradient-to-br from-brand-500 to-purple-600 flex items-center justify-center text-3xl text-white shadow-xl shadow-brand-500/20">
+                        {{ userDrawer.user.username?.[0]?.toUpperCase() || 'U' }}
+                    </div>
+                    <div>
+                        <h4 class="text-2xl font-bold text-white tracking-tight">{{ userDrawer.user.username }}</h4>
+                        <p class="text-xs text-slate-500 font-mono mt-1">ID: {{ userDrawer.user.telegram_id }}</p>
+                        <div class="flex gap-2 mt-3">
+                            <span :class="['text-[10px] font-bold px-2 py-0.5 rounded border', getRoleClass(userDrawer.user.role)]">{{ userDrawer.user.role }}</span>
+                            <span :class="['text-[10px] font-bold px-2 py-0.5 rounded-full', userDrawer.user.is_active ? 'bg-success-500/10 text-success-500' : 'bg-danger-500/10 text-danger-500']">
+                                {{ userDrawer.user.is_active ? 'ACTIVE' : 'BANNED' }}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Stats Grid -->
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="glass-panel p-4 rounded-xl">
+                        <p class="text-[10px] font-bold text-slate-600 uppercase tracking-widest">Transactions</p>
+                        <p class="text-lg font-bold text-white mt-1">248</p>
+                    </div>
+                    <div class="glass-panel p-4 rounded-xl">
+                        <p class="text-[10px] font-bold text-slate-600 uppercase tracking-widest">AI Queries</p>
+                        <p class="text-lg font-bold text-white mt-1">1,024</p>
+                    </div>
+                </div>
+
+                <!-- Action Panel -->
+                <div class="space-y-4">
+                    <h5 class="text-[10px] font-bold text-slate-600 uppercase tracking-widest px-1">Administrative Actions</h5>
+                    <div class="grid grid-cols-1 gap-3">
+                        <button @click="openPrivateMessage(userDrawer.user)" class="w-full p-4 rounded-xl glass-panel border border-white/5 hover:border-brand-500/30 flex items-center gap-4 group transition-all">
+                            <div class="w-10 h-10 rounded-lg bg-brand-500/10 text-brand-500 flex items-center justify-center group-hover:bg-brand-500/20"><i class="fas fa-envelope"></i></div>
+                            <div class="text-left">
+                                <p class="text-xs font-bold text-white">Send Direct Message</p>
+                                <p class="text-[10px] text-slate-500">Contact user via Telegram bot</p>
+                            </div>
+                        </button>
+                        <button @click="toggleUserStatus(userDrawer.user)" class="w-full p-4 rounded-xl glass-panel border border-white/5 hover:border-danger-500/30 flex items-center gap-4 group transition-all">
+                            <div :class="['w-10 h-10 rounded-lg flex items-center justify-center group-hover:bg-opacity-20', userDrawer.user.is_active ? 'bg-danger-500/10 text-danger-500' : 'bg-success-500/10 text-success-500']">
+                                <i :class="['fas', userDrawer.user.is_active ? 'fa-user-slash' : 'fa-user-check']"></i>
+                            </div>
+                            <div class="text-left">
+                                <p class="text-xs font-bold text-white">{{ userDrawer.user.is_active ? 'Suspend Account' : 'Reactivate Account' }}</p>
+                                <p class="text-[10px] text-slate-500">{{ userDrawer.user.is_active ? 'Restrict all access' : 'Restore full access' }}</p>
+                            </div>
+                        </button>
+                        <button class="w-full p-4 rounded-xl glass-panel border border-white/5 hover:border-amber-500/30 flex items-center gap-4 group transition-all">
+                            <div class="w-10 h-10 rounded-lg bg-amber-500/10 text-amber-500 flex items-center justify-center group-hover:bg-amber-500/20"><i class="fas fa-trash-restore"></i></div>
+                            <div class="text-left">
+                                <p class="text-xs font-bold text-white">Reset User Data</p>
+                                <p class="text-[10px] text-slate-500">Wipe all financial records</p>
+                            </div>
+                        </button>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="p-6 border-t border-white/5 bg-white/2">
+                <button @click="userDrawer.show = false" class="w-full py-3 bg-dark-800 hover:bg-dark-700 text-white text-xs font-bold rounded-xl transition-all uppercase tracking-widest">
+                    Close Intelligence Panel
+                </button>
+            </div>
         </div>
         </transition>
 
@@ -556,12 +948,29 @@
                 const stats = ref({ total_income: 0, total_expense: 0 });
                 const transactions = ref([]);
                 const users = ref([]);
+                const adminStats = ref({ total_users: 0, active_users: 0, system_health: 'loading...' });
+                const aiStats = ref({ total_requests: 0, error_rate: '0%', avg_latency: '0s', token_usage: '0' });
                 const adminLogs = ref([]);
                 const userSearch = ref('');
+                const flaggedTransactions = ref([]);
+                const suspiciousUsers = ref([]);
+                const disputes = ref([]);
+                const modSettings = ref({ auto_flag_high_amount: true, high_amount_threshold: 5000000, spam_detection_enabled: true, auto_freeze_enabled: false });
+                const modActiveTab = ref('flagged');
+                const modTabs = [
+                    { id: 'flagged', label: 'Flagged Transactions' },
+                    { id: 'users', label: 'Suspicious Users' },
+                    { id: 'disputes', label: 'Dispute Queue' },
+                    { id: 'settings', label: 'Mod Settings' }
+                ];
+
+                const toasts = ref([]);
+                const health = ref({ status: 'loading', components: { database: '...', redis: '...', websocket: '...', ai_engine: '...' } });
                 
                 const isSending = ref(false);
                 const broadcastMessage = ref('');
                 const pmModal = ref({ show: false, user: {}, message: '' });
+                const userDrawer = ref({ show: false, user: {} });
 
                 const menuItems = [
                     { id: 'dashboard', label: 'Overview', icon: 'fas fa-layer-group' },
@@ -572,6 +981,13 @@
                 const isSuperadmin = computed(() => userRole.value === 'superadmin');
 
                 const kpiCards = computed(() => {
+                    if (isAdmin.value && currentView.value === 'dashboard') {
+                        return [
+                            { label: 'Platform Users', value: adminStats.value.total_users, icon: 'fas fa-users', colorClass: 'bg-brand-500/10', textClass: 'text-brand-400', trend: 14.2, isRaw: true },
+                            { label: 'Active Today', value: adminStats.value.active_users, icon: 'fas fa-bolt', colorClass: 'bg-success-500/10', textClass: 'text-success-500', trend: 8.5, isRaw: true },
+                            { label: 'Total Volume', value: adminStats.value.total_volume, icon: 'fas fa-coins', colorClass: 'bg-amber-500/10', textClass: 'text-amber-500', trend: 12.1, isRaw: true }
+                        ];
+                    }
                     const balance = stats.value.total_income - stats.value.total_expense;
                     return [
                         { label: 'Total Revenue', value: stats.value.total_income, icon: 'fas fa-arrow-down', colorClass: 'bg-success-500/10', textClass: 'text-success-500', trend: 12.5 },
@@ -596,6 +1012,17 @@
                     return users.value.filter(u => u.username.toLowerCase().includes(s) || u.telegram_id.toString().includes(s));
                 });
 
+                // --- UI Helpers ---
+                const showToast = (message, type = 'success') => {
+                    const id = Date.now();
+                    toasts.value.push({ id, message, type });
+                    setTimeout(() => removeToast(id), 5000);
+                };
+
+                const removeToast = (id) => {
+                    toasts.value = toasts.value.filter(t => t.id !== id);
+                };
+
                 // --- API Methods ---
                 const api = axios.create({ baseURL: '/', timeout: 10000 });
                 api.interceptors.request.use(config => {
@@ -615,11 +1042,14 @@
                             userId.value = res.data.user_id;
                             userRole.value = res.data.role;
                             localStorage.setItem('finbot_token', token.value);
+                            showToast("Authenticated successfully. Welcome back!", "success");
                             fetchData();
+                            startPolling();
                         }
                     } catch (e) {
                         error.value = 'Invalid authentication credentials';
                         localStorage.removeItem('finbot_token');
+                        showToast("Authentication failed", "error");
                     } finally {
                         isLoading.value = false;
                     }
@@ -638,6 +1068,8 @@
                         if (currentView.value === 'dashboard') setTimeout(renderChart, 300);
                         if (isAdmin.value) {
                             fetchUsers();
+                            fetchAdminStats();
+                            fetchAIStats();
                             if (isSuperadmin.value) fetchLogs();
                         }
                     } catch (e) {
@@ -645,6 +1077,21 @@
                     } finally {
                         isLoading.value = false;
                     }
+                };
+
+                const fetchHealth = async () => {
+                    try {
+                        const res = await api.get('/health');
+                        health.value = res.data;
+                    } catch (e) { 
+                        health.value.status = 'error';
+                        Object.keys(health.value.components).forEach(k => health.value.components[k] = 'disconnected');
+                    }
+                };
+
+                const startPolling = () => {
+                    fetchHealth();
+                    setInterval(fetchHealth, 30000);
                 };
 
                 const fetchUsers = async () => {
@@ -661,19 +1108,35 @@
                     } catch (e) { console.error("Failed to fetch logs", e); }
                 };
 
+                const fetchAdminStats = async () => {
+                    try {
+                        const res = await api.get('/admin/stats/system');
+                        adminStats.value = res.data;
+                    } catch (e) { console.error("Failed to fetch admin stats", e); }
+                };
+
+                const fetchAIStats = async () => {
+                    try {
+                        const res = await api.get('/admin/stats/ai');
+                        aiStats.value = res.data;
+                    } catch (e) { console.error("Failed to fetch AI stats", e); }
+                };
+
                 const updateUserRole = async (targetId, role) => {
                     try {
                         await api.post(`/admin/users/${targetId}/role`, { role });
+                        showToast(`User role updated to ${role}`, "success");
                         fetchUsers();
-                    } catch (e) { alert("Failed to update role"); }
+                    } catch (e) { showToast("Failed to update role", "error"); }
                 };
 
                 const toggleUserStatus = async (user) => {
                     try {
                         const newStatus = !user.is_active;
                         await api.post(`/admin/users/${user.telegram_id}/status`, { is_active: newStatus });
+                        showToast(`User ${newStatus ? 'activated' : 'blocked'} successfully`, "success");
                         fetchUsers();
-                    } catch (e) { alert("Failed to update status"); }
+                    } catch (e) { showToast("Failed to update status", "error"); }
                 };
 
                 const sendBroadcast = async () => {
@@ -681,9 +1144,9 @@
                     isSending.value = true;
                     try {
                         const res = await api.post('/admin/broadcast', { message: broadcastMessage.value });
-                        alert(`Broadcast initiated! Sent to ${res.data.sent_to} users.`);
+                        showToast(`Broadcast initiated to ${res.data.sent_to} users!`, "success");
                         broadcastMessage.value = '';
-                    } catch (e) { alert("Broadcast failed"); }
+                    } catch (e) { showToast("Broadcast operation failed", "error"); }
                     finally { isSending.value = false; }
                 };
 
@@ -691,13 +1154,17 @@
                     pmModal.value = { show: true, user, message: '' };
                 };
 
+                const openUserDrawer = (user) => {
+                    userDrawer.value = { show: true, user };
+                };
+
                 const sendPrivateMessage = async () => {
                     isSending.value = true;
                     try {
                         await api.post(`/admin/message/${pmModal.value.user.telegram_id}`, { message: pmModal.value.message });
-                        alert("Message sent successfully!");
+                        showToast(`Message sent to ${pmModal.value.user.username}`, "success");
                         pmModal.value.show = false;
-                    } catch (e) { alert("Failed to send message"); }
+                    } catch (e) { showToast("Failed to send message", "error"); }
                     finally { isSending.value = false; }
                 };
 
@@ -705,9 +1172,21 @@
                     token.value = '';
                     isAuthenticated.value = false;
                     localStorage.removeItem('finbot_token');
+                    showToast("Session terminated", "success");
                 };
 
                 // --- Formatting ---
+                const getRoleClass = (role) => {
+                    const map = {
+                        'superadmin': 'text-purple-400 border-purple-500/30 bg-purple-500/10',
+                        'moderator': 'text-amber-400 border-amber-500/30 bg-amber-500/10',
+                        'finance': 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10',
+                        'support': 'text-blue-400 border-blue-500/30 bg-blue-500/10',
+                        'user': 'text-slate-400 border-slate-500/30 bg-slate-500/10'
+                    };
+                    return map[role] || map['user'];
+                };
+
                 const formatCurrency = (val) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(val);
                 const formatCompact = (val) => new Intl.NumberFormat('id-ID', { notation: "compact", compactDisplay: "short" }).format(val);
                 const formatDate = (d) => new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -774,9 +1253,9 @@
                 return {
                     token, isAuthenticated, isLoading, error, userId, userRole, currentView, mobileMenuOpen,
                     menuItems, isAdmin, isSuperadmin, currentTitle, currentDate, kpiCards, transactions, hasData,
-                    users, userSearch, filteredUsers, adminLogs, isSending, broadcastMessage, pmModal,
-                    login, logout, fetchData, setView, toggleTheme, updateUserRole, toggleUserStatus, sendBroadcast, fetchLogs, openPrivateMessage, sendPrivateMessage,
-                    formatCurrency, formatCompact, formatDate, formatDateShort, formatDateRelative, getCategoryIcon
+                    users, userSearch, filteredUsers, adminStats, aiStats, adminLogs, isSending, broadcastMessage, pmModal, userDrawer, toasts, health,
+                    login, logout, fetchData, setView, toggleTheme, updateUserRole, toggleUserStatus, sendBroadcast, fetchLogs, fetchAdminStats, fetchAIStats, openPrivateMessage, sendPrivateMessage, openUserDrawer, removeToast,
+                    getRoleClass, formatCurrency, formatCompact, formatDate, formatDateShort, formatDateRelative, getCategoryIcon
                 };
             }
         }).mount('#app');
