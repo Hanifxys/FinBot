@@ -1,6 +1,7 @@
 import re
 import os
 import gc
+import tempfile
 
 class OCRProcessor:
     def __init__(self):
@@ -28,13 +29,25 @@ class OCRProcessor:
             return None
         
         try:
-            results = reader.readtext(image_path)
-            full_text = " ".join([res[1] for res in results])
+            try:
+                import torch
+                torch.set_num_threads(1)
+            except Exception:
+                pass
+
+            prepared_path, should_cleanup = self._prepare_image(image_path)
+            try:
+                results = reader.readtext(prepared_path, detail=0, batch_size=1, workers=0)
+            finally:
+                if should_cleanup and os.path.exists(prepared_path):
+                    os.remove(prepared_path)
+
+            full_text = " ".join([t for t in results if isinstance(t, str)])
             
             # 1. Extract Merchant Name (Usually the first few lines)
             merchant = "Transaksi"
             if len(results) > 0:
-                merchant = results[0][1].strip()
+                merchant = results[0].strip() if isinstance(results[0], str) else "Transaksi"
                 # Simple heuristic: if merchant looks like common noise, skip
                 if merchant.lower() in ["alamat", "telp", "tgl", "cashier", "nomor", "no:"]:
                     merchant = "Transaksi"
@@ -84,6 +97,26 @@ class OCRProcessor:
         finally:
             # Clean up after processing
             gc.collect()
+
+    def _prepare_image(self, image_path: str):
+        max_dim = int(os.getenv("OCR_MAX_DIM", "1280"))
+        jpeg_quality = int(os.getenv("OCR_JPEG_QUALITY", "75"))
+
+        try:
+            from PIL import Image
+            with Image.open(image_path) as img:
+                img = img.convert("RGB")
+                w, h = img.size
+                if max(w, h) <= max_dim:
+                    return image_path, False
+
+                img.thumbnail((max_dim, max_dim))
+                fd, out_path = tempfile.mkstemp(prefix="ocr_", suffix=".jpg")
+                os.close(fd)
+                img.save(out_path, format="JPEG", quality=jpeg_quality, optimize=True)
+                return out_path, True
+        except Exception:
+            return image_path, False
 
     def _clean_amount(self, amount_str):
         # 1. Clean common noise but keep digits, comma and dot

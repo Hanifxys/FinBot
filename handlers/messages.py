@@ -8,6 +8,10 @@ import os
 
 logger = logging.getLogger(__name__)
 
+OCR_MAX_DOWNLOAD_BYTES = int(os.getenv("OCR_MAX_DOWNLOAD_BYTES", "1200000"))
+OCR_CONCURRENCY = int(os.getenv("OCR_CONCURRENCY", "1"))
+OCR_SEMAPHORE = asyncio.Semaphore(max(OCR_CONCURRENCY, 1))
+
 def get_main_menu_keyboard():
     return ReplyKeyboardMarkup([
         [KeyboardButton("📊 Cek Budget"), KeyboardButton("📈 Laporan")],
@@ -42,7 +46,23 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle receipt scanning via OCR"""
     user_id = update.effective_user.id
-    photo = await update.message.photo[-1].get_file()
+    photo_sizes = update.message.photo or []
+    if not photo_sizes:
+        await update.message.reply_text("Aku nggak nemu foto-nya. Coba kirim ulang ya.")
+        return
+
+    chosen = None
+    for p in reversed(photo_sizes):
+        if (getattr(p, "file_size", None) or 0) <= OCR_MAX_DOWNLOAD_BYTES:
+            chosen = p
+            break
+        if max(getattr(p, "width", 0) or 0, getattr(p, "height", 0) or 0) <= 1280:
+            chosen = p
+            break
+    if chosen is None:
+        chosen = photo_sizes[max(len(photo_sizes) - 2, 0)]
+
+    photo = await chosen.get_file()
     photo_path = f"temp_receipt_{user_id}.jpg"
     await photo.download_to_drive(photo_path)
     
@@ -50,9 +70,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         # 1. OCR Extraction
-        result = ocr.process_receipt(photo_path)
-        if os.path.exists(photo_path):
-            os.remove(photo_path)
+        async with OCR_SEMAPHORE:
+            result = await asyncio.to_thread(ocr.process_receipt, photo_path)
             
         if not result:
             await update.message.reply_text("Gagal membaca struk. Pastikan foto jelas ya!")
@@ -74,6 +93,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"OCR Error: {e}")
         await update.message.reply_text("Terjadi kesalahan saat memproses foto.")
+    finally:
         if os.path.exists(photo_path):
             os.remove(photo_path)
 
