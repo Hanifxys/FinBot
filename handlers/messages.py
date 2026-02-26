@@ -531,6 +531,41 @@ def _looks_like_explain_spending(text: str) -> bool:
     keys = ["diatas rata", "di atas rata", "rata2", "rata-rata", "datanya dari mana", "data nya dari mana", "dari mana", "overspending", "boros"]
     return any(k in t for k in keys)
 
+def _is_export_request(text: str) -> bool:
+    t = (text or "").lower()
+    keys = ["export", "ekspor", "csv", "download data", "unduh data", "backup data"]
+    return any(k in t for k in keys)
+
+def _export_confirm_keyboard():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Yakin export", callback_data="export_confirm"),
+            InlineKeyboardButton("❌ Tidak", callback_data="export_cancel"),
+        ]
+    ])
+
+def _looks_like_payment_method(text: str) -> str:
+    t = (text or "").lower()
+    if "qris" in t:
+        return "QRIS"
+    if "cash" in t or "tunai" in t:
+        return "Cash"
+    if "debit" in t:
+        return "Debit"
+    if "kredit" in t or "credit" in t:
+        return "Kredit"
+    if "ovo" in t:
+        return "OVO"
+    if "gopay" in t or "go pay" in t:
+        return "GoPay"
+    if "dana" in t:
+        return "DANA"
+    if "shopeepay" in t or "shopee pay" in t:
+        return "ShopeePay"
+    if "transfer" in t:
+        return "Transfer"
+    return ""
+
 async def _explain_spending(update: Update):
     user_id = update.effective_user.id
     user_db = db.get_or_create_user(user_id, update.effective_user.username)
@@ -606,6 +641,23 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
                     await update.message.reply_text("Format tanggal belum kebaca. Contoh: `16-11-2015` atau `2015-11-16`.")
                 return
 
+        if pending_tx and not state:
+            pm = _looks_like_payment_method(text)
+            if pm:
+                pending_tx["payment_method"] = pm
+                context.user_data["pending_tx"] = pending_tx
+                await update.message.reply_text(_tx_preview_message(pending_tx), parse_mode="Markdown", reply_markup=_tx_preview_keyboard())
+                return
+
+        if _is_export_request(text):
+            context.user_data["pending_action"] = {"type": "export_all"}
+            await update.message.reply_text(
+                "📥 **Export Data (CSV)**\n\nAku akan kirim semua transaksi kamu dalam 1 file CSV.\nYakin mau export sekarang?",
+                parse_mode="Markdown",
+                reply_markup=_export_confirm_keyboard(),
+            )
+            return
+
         if _looks_like_explain_spending(text):
             await _explain_spending(update)
             return
@@ -633,6 +685,10 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
                 amount = float(amount) if amount is not None else 0.0
             except Exception:
                 amount = 0.0
+            if amount <= 0:
+                fallback = parse_primary_amount_id(text)
+                if fallback:
+                    amount = float(fallback)
             
             if amount <= 0:
                 logger.warning(f"Skipping transaction with amount {amount} for user {user_id}")

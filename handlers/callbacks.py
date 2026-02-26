@@ -171,6 +171,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await tutorial_mode.handle_callback(update, context, action):
         return
 
+    if action == "export_confirm":
+        user_data.pop("pending_action", None)
+        from handlers.transactions import export_data
+        await query.edit_message_text("📥 Oke, lagi siapin CSV kamu…")
+        await export_data(update, context)
+        return
+
+    if action == "export_cancel":
+        user_data.pop("pending_action", None)
+        await query.edit_message_text("Oke, export dibatalkan. ✅")
+        return
+
     if action in ("tutorial_start_beginner", "tutorial_start_fast", "tutorial_quickstart"):
         mode = "beginner" if action != "tutorial_start_fast" else "fast"
         total = 5
@@ -422,8 +434,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if action == "export_csv":
-        from handlers.transactions import export_data
-        await export_data(update, context)
+        user_data["pending_action"] = {"type": "export_all"}
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ Yakin export", callback_data="export_confirm"),
+                InlineKeyboardButton("❌ Tidak", callback_data="export_cancel"),
+            ]
+        ])
+        await query.edit_message_text(
+            "📥 **Export Data (CSV)**\n\nAku akan kirim semua transaksi kamu dalam 1 file CSV.\nYakin mau export sekarang?",
+            parse_mode="Markdown",
+            reply_markup=keyboard,
+        )
         return
     # -------------------------
 
