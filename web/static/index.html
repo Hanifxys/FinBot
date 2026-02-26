@@ -561,11 +561,7 @@
                                         <button class="text-[10px] font-bold text-brand-400 hover:text-white transition-colors">FORCE RESET CACHE</button>
                                     </div>
                                     <div class="space-y-6">
-                                        <div v-for="model in [
-                                            { name: 'Primary (GPT-4)', status: 'ACTIVE', load: 82, color: 'bg-brand-500' },
-                                            { name: 'Fallback (Claude-3)', status: 'STANDBY', load: 12, color: 'bg-purple-500' },
-                                            { name: 'Fast (Groq/Llama)', status: 'ACTIVE', load: 6, color: 'bg-emerald-500' }
-                                        ]" :key="model.name" class="p-5 rounded-2xl bg-white/2 border border-white/5 hover:border-white/10 transition-all group">
+                                        <div v-for="model in aiStats.models" :key="model.name" class="p-5 rounded-2xl bg-white/2 border border-white/5 hover:border-white/10 transition-all group">
                                             <div class="flex justify-between items-center mb-3">
                                                 <div class="flex items-center gap-3">
                                                     <div :class="['w-2 h-2 rounded-full shadow-[0_0_8px]', model.status === 'ACTIVE' ? 'bg-success-500 shadow-success-500/50' : 'bg-amber-500 shadow-amber-500/50']"></div>
@@ -593,31 +589,31 @@
                                     
                                     <div class="flex-1 flex flex-col items-center justify-center py-6">
                                         <div class="relative mb-6">
-                                            <div class="w-32 h-32 rounded-full border-4 border-success-500/20 flex items-center justify-center">
-                                                <div class="w-24 h-24 rounded-full bg-success-500/10 flex items-center justify-center border border-success-500/30 animate-pulse-slow">
-                                                    <i class="fas fa-shield-virus text-4xl text-success-500"></i>
+                                            <div :class="['w-32 h-32 rounded-full border-4 flex items-center justify-center', aiStats.circuit_breaker.is_open ? 'border-danger-500/20' : 'border-success-500/20']">
+                                                <div :class="['w-24 h-24 rounded-full flex items-center justify-center border animate-pulse-slow', aiStats.circuit_breaker.is_open ? 'bg-danger-500/10 border-danger-500/30' : 'bg-success-500/10 border-success-500/30']">
+                                                    <i :class="['fas text-4xl', aiStats.circuit_breaker.is_open ? 'fa-exclamation-triangle text-danger-500' : 'fa-shield-virus text-success-500']"></i>
                                                 </div>
                                             </div>
                                             <!-- Orbiting Dots -->
                                             <div class="absolute inset-0 animate-spin-slow">
-                                                <div class="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-success-500 rounded-full shadow-[0_0_10px_rgba(16,185,129,0.8)]"></div>
+                                                <div :class="['absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 rounded-full shadow-[0_0_10px]', aiStats.circuit_breaker.is_open ? 'bg-danger-500 shadow-danger-500/80' : 'bg-success-500 shadow-success-500/80']"></div>
                                             </div>
                                         </div>
                                         
                                         <div class="text-center space-y-2">
-                                            <p class="text-lg font-bold text-white tracking-tight uppercase">CLOSED (NORMAL)</p>
-                                            <p class="text-[10px] text-slate-500 uppercase tracking-widest font-medium px-4 py-1 rounded-full bg-white/5 inline-block">Protection: Active</p>
+                                            <p class="text-lg font-bold text-white tracking-tight uppercase">{{ aiStats.circuit_breaker.is_open ? 'OPEN (TRIPPED)' : 'CLOSED (NORMAL)' }}</p>
+                                            <p class="text-[10px] text-slate-500 uppercase tracking-widest font-medium px-4 py-1 rounded-full bg-white/5 inline-block">Protection: {{ aiStats.circuit_breaker.is_open ? 'EMERGENCY' : 'ACTIVE' }}</p>
                                         </div>
                                     </div>
                                     
                                     <div class="mt-8 grid grid-cols-2 gap-4">
                                         <div class="p-3 rounded-xl bg-dark-800 border border-white/5">
                                             <p class="text-[9px] font-bold text-slate-500 uppercase">Failures</p>
-                                            <p class="text-sm font-bold text-white font-mono">0 / 5</p>
+                                            <p class="text-sm font-bold text-white font-mono">{{ aiStats.circuit_breaker.failures }} / 5</p>
                                         </div>
                                         <div class="p-3 rounded-xl bg-dark-800 border border-white/5">
                                             <p class="text-[9px] font-bold text-slate-500 uppercase">Recovery</p>
-                                            <p class="text-sm font-bold text-white font-mono">INSTANT</p>
+                                            <p class="text-sm font-bold text-white font-mono">{{ aiStats.circuit_breaker.is_open ? 'WAITING' : 'INSTANT' }}</p>
                                         </div>
                                     </div>
                                 </div>
@@ -770,17 +766,17 @@
                                     <div class="glass-panel p-6 rounded-2xl border border-white/5 flex-1">
                                         <h3 class="text-xs font-bold text-white uppercase tracking-widest mb-6">Recent History</h3>
                                         <div class="space-y-4">
-                                            <div v-for="i in 3" :key="i" class="p-3 rounded-xl bg-white/2 border border-white/5 hover:border-white/10 transition-colors">
+                                            <div v-for="item in broadcastHistory" :key="item.id" class="p-3 rounded-xl bg-white/2 border border-white/5 hover:border-white/10 transition-colors">
                                                 <div class="flex justify-between items-start mb-2">
-                                                    <span class="text-[10px] font-bold text-slate-400">#BRD-{{ 2024 - i }}</span>
-                                                    <span class="text-[9px] font-mono text-slate-600">Feb 24, 2026</span>
+                                                    <span class="text-[10px] font-bold text-slate-400">#BRD-{{ item.id }}</span>
+                                                    <span class="text-[9px] font-mono text-slate-600">{{ formatDateShort(item.date) }}</span>
                                                 </div>
                                                 <p class="text-[11px] text-slate-300 line-clamp-2 leading-relaxed mb-3">
-                                                    "System maintenance completed. All AI features are now back online with 2x speed..."
+                                                    {{ item.message }}
                                                 </p>
                                                 <div class="flex justify-between items-center">
-                                                    <span class="text-[9px] font-bold text-success-500 bg-success-500/5 px-1.5 py-0.5 rounded">COMPLETED</span>
-                                                    <span class="text-[10px] font-mono text-slate-500"><i class="fas fa-users mr-1"></i> 1,420</span>
+                                                    <span class="text-[9px] font-bold text-success-500 bg-success-500/5 px-1.5 py-0.5 rounded">{{ item.status }}</span>
+                                                    <span class="text-[10px] font-mono text-slate-500"><i class="fas fa-users mr-1"></i> {{ item.reach }}</span>
                                                 </div>
                                             </div>
                                         </div>
@@ -1222,9 +1218,39 @@
                 const stats = ref({ total_income: 0, total_expense: 0 });
                 const transactions = ref([]);
                 const users = ref([]);
-                const adminStats = ref({ total_users: 0, active_users: 0, system_health: 'loading...' });
-                const aiStats = ref({ total_requests: 0, error_rate: '0%', avg_latency: '0s', token_usage: '0' });
-                const adminLogs = ref([]);
+                const adminStats = ref({ 
+                    total_users: 0, 
+                    active_users: 0, 
+                    system_health: 'Nominal', 
+                    db_status: 'Connected',
+                    total_volume: 'Rp 0',
+                    platform_growth: '+0%',
+                    growth_data: {
+                        labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+                        users: [0, 0, 0, 0, 0, 0, 0],
+                        transactions: [0, 0, 0, 0, 0, 0, 0]
+                    }
+                });
+                const aiStats = ref({ 
+                    total_requests: '1,284', 
+                    error_rate: '0.1%', 
+                    avg_latency: '1.2s', 
+                    token_usage: '45.2k',
+                    circuit_breaker: { failures: 0, is_open: false },
+                    models: [
+                        { name: 'Primary (GPT-4)', status: 'ACTIVE', load: 82, color: 'bg-brand-500' },
+                        { name: 'Fallback (Claude-3)', status: 'STANDBY', load: 12, color: 'bg-purple-500' },
+                        { name: 'Fast (Groq/Llama)', status: 'ACTIVE', load: 6, color: 'bg-emerald-500' }
+                    ]
+                });
+                const adminLogs = ref([
+                    { id: 1, timestamp: new Date().toISOString(), admin_id: 'SYSTEM', action: 'BOOT', action_type: 'system', reason: 'Server started successfully', ip_address: '127.0.0.1' },
+                    { id: 2, timestamp: new Date().toISOString(), admin_id: '1512347775', action: 'LOGIN', action_type: 'auth', reason: 'Superadmin session initiated', ip_address: '127.0.0.1' }
+                ]);
+                const broadcastHistory = ref([
+                    { id: 101, date: new Date().toISOString(), message: "System maintenance completed. All AI features are now back online.", reach: 1420, status: 'COMPLETED' },
+                    { id: 102, date: new Date(Date.now() - 86400000).toISOString(), message: "New feature: Export your transactions to PDF directly from the bot!", reach: 1380, status: 'COMPLETED' }
+                ]);
                 const userSearch = ref('');
                 const flaggedTransactions = ref([]);
                 const suspiciousUsers = ref([]);
@@ -1272,10 +1298,16 @@
                 });
 
                 const currentTitle = computed(() => {
-                    if (currentView.value === 'admin_users') return 'User Directory';
-                    if (currentView.value === 'admin_broadcast') return 'System Broadcast';
-                    if (currentView.value === 'admin_logs') return 'Audit Logs';
-                    return menuItems.find(i => i.id === currentView.value)?.label || 'Dashboard';
+                    const titles = {
+                        'dashboard': 'Executive Overview',
+                        'transactions': 'Transaction Ledger',
+                        'admin_users': 'User Directory',
+                        'admin_ai': 'AI Intelligence Monitor',
+                        'admin_broadcast': 'System Broadcast Engine',
+                        'admin_moderation': 'Content Moderation',
+                        'admin_logs': 'System Audit Trail'
+                    };
+                    return titles[currentView.value] || 'FinBot Dashboard';
                 });
 
                 const currentDate = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
@@ -1542,23 +1574,25 @@
                 const setView = (view) => {
                     currentView.value = view;
                     mobileMenuOpen.value = false;
-                    
-                    // Reactive Data Fetching based on View
-                    if (view === 'dashboard') {
+                };
+
+                // Auto-fetch data when view changes
+                watch(currentView, (newView) => {
+                    if (newView === 'dashboard') {
                         setTimeout(renderChart, 300);
                         fetchAdminStats();
-                    } else if (view === 'admin_users') {
+                    } else if (newView === 'admin_users') {
                         fetchUsers();
-                    } else if (view === 'admin_ai') {
+                    } else if (newView === 'admin_ai') {
                         fetchAIStats();
-                    } else if (view === 'admin_moderation') {
+                    } else if (newView === 'admin_moderation') {
                         fetchModerationData();
-                    } else if (view === 'admin_logs') {
+                    } else if (newView === 'admin_logs') {
                         fetchLogs();
-                    } else if (view === 'transactions') {
-                        fetchData(); // Basic refresh
+                    } else if (newView === 'transactions') {
+                        fetchData();
                     }
-                };
+                });
 
                 const toggleTheme = () => {};
 
@@ -1648,7 +1682,7 @@
                 return {
                     token, isAuthenticated, isLoading, error, userId, userRole, currentView, mobileMenuOpen,
                     menuItems, isAdmin, isSuperadmin, currentTitle, currentDate, kpiCards, transactions, hasData,
-                    users, userSearch, filteredUsers, adminStats, aiStats, adminLogs, isSending, broadcastMessage, pmModal, userDrawer, toasts, health,
+                    users, userSearch, filteredUsers, adminStats, aiStats, adminLogs, broadcastHistory, isSending, broadcastMessage, pmModal, userDrawer, toasts, health,
                     flaggedTransactions, suspiciousUsers, disputes, modSettings, modActiveTab, modTabs, flaggedCount,
                     login, logout, fetchData, setView, toggleTheme, updateUserRole, toggleUserStatus, sendBroadcast, fetchLogs, fetchAdminStats, fetchAIStats, openPrivateMessage, sendPrivateMessage, openUserDrawer, removeToast,
                     fetchModerationData, saveModSettings, resolveFlag,
