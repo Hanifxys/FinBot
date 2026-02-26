@@ -1,8 +1,11 @@
 import re
 import logging
 import gc
+from typing import Dict, Any, Tuple, Optional
 from config import GROQ_API_KEY
 from modules.amounts import parse_primary_amount_id
+
+logger = logging.getLogger(__name__)
 
 class NLPProcessor:
     def __init__(self):
@@ -49,6 +52,12 @@ class NLPProcessor:
             ],
             "Gaji": ["gaji", "salary", "bonus", "transfer masuk", "income", "payroll", "pemasukan", "cashback", "refund", "jual"]
         }
+        
+        # Pre-compile regex patterns for performance
+        self._compiled_keywords = {}
+        for cat, keywords in self.category_keywords.items():
+            pattern = r'\b(' + '|'.join(map(re.escape, keywords)) + r')\b'
+            self._compiled_keywords[cat] = re.compile(pattern, re.IGNORECASE)
 
     @property
     def client(self):
@@ -67,7 +76,7 @@ class NLPProcessor:
     def client(self, value):
         self._client = value
 
-    def process_text(self, text):
+    def process_text(self, text: str) -> Tuple[float, str, str]:
         """
         New minimalist processor for bot.py
         Returns (amount, category, type)
@@ -80,7 +89,7 @@ class NLPProcessor:
         
         return amount, category, type_
 
-    def parse_message(self, text):
+    def parse_message(self, text: str) -> Dict[str, Any]:
         """
         Parses text to extract amount, category, and intent.
         Example: "makan siang 50rb" -> {amount: 50000, category: "Makanan", intent: "add_transaction"}
@@ -117,11 +126,14 @@ class NLPProcessor:
 
         return {"intent": "unknown"}
 
-    def normalize_text(self, text):
+    def normalize_text(self, text: str) -> str:
         """
         Normalizes informal text like '2jt' -> '2000000', '50rb' -> '50000', etc.
         Also handles slang and common abbreviations.
         """
+        if not text:
+            return ""
+            
         text = text.lower().strip()
         
         # 1. Standardize separators: change comma to dot for decimal parsing
@@ -143,7 +155,7 @@ class NLPProcessor:
         
         return text
 
-    def classify_intent(self, text, state="IDLE"):
+    def classify_intent(self, text: str, state: str = "IDLE") -> Dict[str, Any]:
         """
         Classifies user message into ONE intent based on text and current state.
         Returns: {"intent": "...", "confidence": 0.0-1.0}
@@ -186,7 +198,7 @@ class NLPProcessor:
 
         return {"intent": "UNKNOWN", "confidence": 0.0}
 
-    def _llm_classify_intent(self, text):
+    def _llm_classify_intent(self, text: str) -> Optional[Dict[str, Any]]:
         """
         Uses Groq LLM to classify intent when regex fails.
         """
@@ -226,7 +238,7 @@ class NLPProcessor:
         finally:
             gc.collect()
 
-    def extract_transaction_data(self, text):
+    def extract_transaction_data(self, text: str) -> Dict[str, Any]:
         """
         Extracts structured financial transaction data.
         Returns JSON-like dict.
@@ -267,7 +279,7 @@ class NLPProcessor:
             "confidence": 0.9 if amount > 0 else 0.0
         }
 
-    def validate_edit(self, field, user_message):
+    def validate_edit(self, field: str, user_message: str) -> Dict[str, Any]:
         """
         Validates input for EDIT MODE.
         """
@@ -287,11 +299,16 @@ class NLPProcessor:
             
         return {"new_value": None, "valid": False, "reason": "Field tidak valid"}
 
-    def _detect_category(self, text):
-        """Smarter category detection with improved keyword matching"""
+    def _detect_category(self, text: str) -> str:
+        """Smarter category detection with improved keyword matching using pre-compiled regex"""
+        if not text:
+            return "Lain-lain"
+            
         text = text.lower()
-        for category, keywords in self.category_keywords.items():
-            if any(re.search(rf"\b{re.escape(kw)}\b", text) for kw in keywords):
+        
+        # Check using pre-compiled regex for speed
+        for category, pattern in self._compiled_keywords.items():
+            if pattern.search(text):
                 return category
         
         # Heuristic: if text contains "beli" or "bayar" but no category found
@@ -300,7 +317,7 @@ class NLPProcessor:
             
         return "Lain-lain"
 
-    def _extract_amount(self, text):
+    def _extract_amount(self, text: str) -> float:
         val = parse_primary_amount_id(text)
         if val is None:
             return 0.0
@@ -309,7 +326,7 @@ class NLPProcessor:
         except Exception:
             return 0.0
 
-    def extract_merchant(self, text):
+    def extract_merchant(self, text: str) -> str:
         """
         Tries to extract merchant name from text.
         Example: "mixue 48rb" -> Mixue
@@ -324,8 +341,10 @@ class NLPProcessor:
             "ngopi", "buat", "pembayaran", "tagihan", "biaya", "topup", "saldo", "isi", "pemasukan",
             "gaji", "bonus", "duit", "uang", "bensin", "kopi", "makan", "sarapan", "lunch", "dinner"
         ]
-        for word in stopwords:
-            clean_text = re.sub(r'\b' + word + r'\b', '', clean_text.lower())
+        
+        # Build a regex pattern for stopwords to remove them efficiently
+        pattern = r'\b(' + '|'.join(map(re.escape, stopwords)) + r')\b'
+        clean_text = re.sub(pattern, '', clean_text.lower())
             
         # 3. Clean up punctuation and extra spaces
         clean_text = re.sub(r'[^\w\s]', ' ', clean_text)

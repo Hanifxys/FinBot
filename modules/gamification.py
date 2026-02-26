@@ -37,6 +37,9 @@ class GamificationEngine:
         Add XP to user and check for level up.
         Returns dict with status update.
         """
+        if not self.redis.client:
+            return {}
+
         xp_map = {
             "chat": 2,
             "transaction": 15,
@@ -50,22 +53,30 @@ class GamificationEngine:
         # Redis Keys
         xp_key = f"user:{user_id}:xp"
         level_key = f"user:{user_id}:level"
-        streak_key = f"user:{user_id}:streak"
         
         try:
             # Atomic increment
             current_xp = self.redis.client.incrby(xp_key, amount)
-            current_level = int(self.redis.client.get(level_key) or 1)
+            current_level_raw = self.redis.client.get(level_key)
+            current_level = int(current_level_raw) if current_level_raw else 1
             
             # Check Level Up
             new_level = current_level
             leveled_up = False
             
-            # Simple linear check for now, can be optimized with bisect
-            next_threshold = self.LEVEL_THRESHOLDS.get(current_level + 1, 999999)
+            # Use sorted keys for efficient threshold check
+            sorted_levels = sorted(self.LEVEL_THRESHOLDS.keys())
             
-            if current_xp >= next_threshold:
-                new_level = current_level + 1
+            # Determine correct level based on XP
+            calc_level = 1
+            for lvl in sorted_levels:
+                if current_xp >= self.LEVEL_THRESHOLDS[lvl]:
+                    calc_level = lvl
+                else:
+                    break
+            
+            if calc_level > current_level:
+                new_level = calc_level
                 self.redis.client.set(level_key, new_level)
                 leveled_up = True
                 
@@ -74,12 +85,15 @@ class GamificationEngine:
                 if badge:
                     self.redis.client.sadd(f"user:{user_id}:badges", badge)
 
+            # Update Leaderboard
+            self.redis.client.zadd("leaderboard:xp", {str(user_id): current_xp})
+
             return {
                 "xp_gained": amount,
                 "total_xp": current_xp,
                 "current_level": new_level,
                 "leveled_up": leveled_up,
-                "title": self.TITLES.get(new_level, "Member"),
+                "title": self.get_title_for_level(new_level),
                 "next_level_xp": self.LEVEL_THRESHOLDS.get(new_level + 1, 999999)
             }
             
@@ -89,6 +103,9 @@ class GamificationEngine:
 
     async def get_user_profile(self, user_id: int) -> Dict[str, any]:
         """Fetch full gamification profile from Redis (Low Latency)"""
+        if not self.redis.client:
+            return {"level": 1, "xp": 0, "badges": [], "streak": 0}
+
         try:
             pipe = self.redis.client.pipeline()
             pipe.get(f"user:{user_id}:xp")
@@ -98,10 +115,21 @@ class GamificationEngine:
             
             res = pipe.execute()
             
-            xp = int(res[0] or 0)
-            level = int(res[1] or 1)
-            badges = [b.decode('utf-8') for b in res[2]] if res[2] else []
-            streak = int(res[3] or 0)
+            xp = int(res[0]) if res[0] else 0
+            level = int(res[1]) if res[1] else 1
+            
+            # Handle badges (set returns list of bytes or strings depending on client config)
+            # Assuming decode_responses=True in RedisManager based on common practice, 
+            # but safer to handle both.
+            badges_raw = res[2] or []
+            badges = []
+            for b in badges_raw:
+                if isinstance(b, bytes):
+                    badges.append(b.decode('utf-8'))
+                else:
+                    badges.append(str(b))
+                    
+            streak = int(res[3]) if res[3] else 0
             
             next_xp = self.LEVEL_THRESHOLDS.get(level + 1, 999999)
             progress = min(100, int((xp / next_xp) * 100)) if next_xp > 0 else 100
@@ -126,3 +154,28 @@ class GamificationEngine:
             if level >= l:
                 title = t
         return title
+
+    async def get_leaderboard(self, limit: int = 10) -> List[Dict[str, any]]:
+        """Get top users by XP"""
+        if not self.redis.client:
+            return []
+            
+        try:
+            # ZREVRANGE to get top scores
+            top_users = self.redis.client.zrevrange("leaderboard:xp", 0, limit - 1, withscores=True)
+            
+            leaderboard = []
+            for i, (uid, score) in enumerate(top_users):
+                # Fetch basic user info (level) for context
+                # Ideally fetch username from DB, but for speed we just use ID or cache
+                lvl = self.redis.client.get(f"user:{uid}:level")
+                leaderboard.append({
+                    "rank": i + 1,
+                    "user_id": uid,
+                    "xp": int(score),
+                    "level": int(lvl) if lvl else 1
+                })
+            return leaderboard
+        except Exception as e:
+            logger.error(f"Leaderboard Error: {e}")
+            return []
