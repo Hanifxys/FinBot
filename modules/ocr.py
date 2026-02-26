@@ -5,6 +5,7 @@ import tempfile
 import shutil
 import subprocess
 import logging
+from typing import Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +54,18 @@ class OCRProcessor:
             jpeg_quality = int(os.getenv(quality_key, quality_default))
 
             prepared_path, should_cleanup = self._prepare_image(image_path, max_dim=max_dim, jpeg_quality=jpeg_quality)
-            
+
+            top_path, top_cleanup = self._crop_image(prepared_path, region="top")
+            bottom_path, bottom_cleanup = self._crop_image(prepared_path, region="bottom")
+
             try:
-                full_text, first_line = self._extract_text(prepared_path, low_mem=low_mem)
+                top_text, first_line = self._extract_text(top_path, low_mem=low_mem)
+                bottom_text, _ = self._extract_text(bottom_path, low_mem=low_mem)
+                full_text = (top_text + "\n" + bottom_text).strip()
             finally:
+                for pth, cleanup in [(top_path, top_cleanup), (bottom_path, bottom_cleanup)]:
+                    if cleanup and os.path.exists(pth):
+                        os.remove(pth)
                 if should_cleanup and os.path.exists(prepared_path):
                     os.remove(prepared_path)
 
@@ -101,6 +110,33 @@ class OCRProcessor:
             self.engine = "tesseract"
 
         return self._tesseract_ocr(image_path, low_mem=low_mem)
+
+    def _crop_image(self, image_path: str, region: str) -> Tuple[str, bool]:
+        try:
+            from PIL import Image
+            with Image.open(image_path) as img:
+                img = img.convert("RGB")
+                w, h = img.size
+                if w <= 0 or h <= 0:
+                    return image_path, False
+
+                if region == "top":
+                    y0 = 0
+                    y1 = int(h * 0.30)
+                else:
+                    y0 = int(h * 0.55)
+                    y1 = h
+
+                y0 = max(0, min(y0, h - 1))
+                y1 = max(y0 + 1, min(y1, h))
+                cropped = img.crop((0, y0, w, y1))
+
+                fd, out_path = tempfile.mkstemp(prefix=f"ocr_{region}_", suffix=".jpg")
+                os.close(fd)
+                cropped.save(out_path, format="JPEG", quality=70, optimize=True)
+                return out_path, True
+        except Exception:
+            return image_path, False
 
     def _tesseract_ocr(self, image_path: str, low_mem: bool = False):
         if shutil.which("tesseract") is None:

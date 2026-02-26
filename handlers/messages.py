@@ -1,25 +1,326 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ContextTypes
-from core import db, premium_ai, ws_server, nlp, ocr
+from core import db, premium_ai, ws_server, nlp, ocr, budget_mgr
 import logging
 import asyncio
 from datetime import datetime
 import os
 import gc
+import time
+import json
+from config import CATEGORIES
 
 logger = logging.getLogger(__name__)
 
 OCR_MAX_DOWNLOAD_BYTES = int(os.getenv("OCR_MAX_DOWNLOAD_BYTES", "1200000"))
+OCR_RATE_LIMIT_SECONDS = int(os.getenv("OCR_RATE_LIMIT_SECONDS", "60"))
+OCR_HANDLER_TIMEOUT_SECONDS = float(os.getenv("OCR_HANDLER_TIMEOUT_SECONDS", "55"))
 OCR_CONCURRENCY = int(os.getenv("OCR_CONCURRENCY", "1"))
 OCR_SEMAPHORE = asyncio.Semaphore(max(OCR_CONCURRENCY, 1))
 OCR_MAX_MEMORY_PERCENT = float(os.getenv("OCR_MAX_MEMORY_PERCENT", "80"))
 CANCEL_CANDIDATE_LIMIT = int(os.getenv("CANCEL_CANDIDATE_LIMIT", "30"))
+AI_TIMEOUT_SECONDS = float(os.getenv("AI_TIMEOUT_SECONDS", "25"))
+TUTORIAL_TIMEOUT_SECONDS = int(os.getenv("TUTORIAL_TIMEOUT_SECONDS", "900"))
+TUTORIAL_TOTAL_STEPS = 5
 
 def get_main_menu_keyboard():
     return ReplyKeyboardMarkup([
         [KeyboardButton("📊 Cek Budget"), KeyboardButton("📈 Laporan")],
         [KeyboardButton("💡 Tips Hemat"), KeyboardButton("🚀 Menu Utama")]
     ], resize_keyboard=True)
+
+def _tutorial_bar(step: int, total: int) -> str:
+    try:
+        step = int(step)
+        total = int(total)
+    except Exception:
+        return ""
+    if total <= 0:
+        return ""
+    step = max(0, min(step, total))
+    filled = int(round((step / total) * 10))
+    filled = max(0, min(filled, 10))
+    return "█" * filled + "░" * (10 - filled)
+
+def _tutorial_state(user_data: dict):
+    state = user_data.get("tutorial_mode")
+    if not isinstance(state, dict):
+        return None
+    if not state.get("active"):
+        return None
+    return state
+
+def _tutorial_log(user_id: int, event: str, payload: dict):
+    try:
+        entry = {"event": event, "ts": datetime.utcnow().isoformat() + "Z", "data": payload or {}}
+        premium_ai.redis.client.lpush(f"tutorial_events:{user_id}", json.dumps(entry))
+        premium_ai.redis.client.ltrim(f"tutorial_events:{user_id}", 0, 500)
+    except Exception:
+        pass
+
+def _tutorial_keyboard(active: bool = True):
+    if not active:
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("▶️ Mulai (Pemula)", callback_data="tutorial_start_beginner"),
+                InlineKeyboardButton("⚡ Mulai (Cepat)", callback_data="tutorial_start_fast"),
+            ],
+            [InlineKeyboardButton("🚀 Menu Utama", callback_data="suggest_help")],
+        ])
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("⏭️ Skip", callback_data="tutorial_skip"),
+            InlineKeyboardButton("🆘 Help", callback_data="tutorial_help"),
+        ],
+        [
+            InlineKeyboardButton("🚪 Keluar", callback_data="tutorial_exit"),
+        ],
+    ])
+
+def _tutorial_intro() -> str:
+    return (
+        "🎓 **Tutorial Mode (Interaktif)**\n\n"
+        "Pilih mode:\n"
+        "- **Pemula**: lengkap + banyak contoh\n"
+        "- **Cepat**: langsung praktek\n\n"
+        f"Progress: `{_tutorial_bar(0, TUTORIAL_TOTAL_STEPS)}` 0/{TUTORIAL_TOTAL_STEPS}"
+    )
+
+def _tutorial_step_message(step: int) -> str:
+    bar = _tutorial_bar(step - 1, TUTORIAL_TOTAL_STEPS)
+    if step == 1:
+        return (
+            f"🎓 **Tutorial Mode**\n\n"
+            f"Progress: `{bar}` {step-1}/{TUTORIAL_TOTAL_STEPS}\n\n"
+            "Step 1/5 — **Catat transaksi pertama**\n"
+            "Coba ketik pengeluaran pertama kamu.\n\n"
+            "Contoh:\n"
+            "- `kopi 25rb`\n"
+            "- `makan 40000`\n"
+        )
+    if step == 2:
+        bar = _tutorial_bar(1, TUTORIAL_TOTAL_STEPS)
+        return (
+            f"🎓 **Tutorial Mode**\n\n"
+            f"Progress: `{bar}` 1/{TUTORIAL_TOTAL_STEPS}\n\n"
+            "Step 2/5 — **Set pemasukan (gaji)**\n"
+            "Ketik gaji bulanan kamu.\n\n"
+            "Contoh:\n"
+            "- `gaji 7jt`\n"
+            "- `7000000`\n"
+        )
+    if step == 3:
+        bar = _tutorial_bar(2, TUTORIAL_TOTAL_STEPS)
+        cats = ", ".join(CATEGORIES)
+        return (
+            f"🎓 **Tutorial Mode**\n\n"
+            f"Progress: `{bar}` 2/{TUTORIAL_TOTAL_STEPS}\n\n"
+            "Step 3/5 — **Set budget kategori**\n"
+            f"Pilih 1 kategori dan limitnya.\n\nKategori: {cats}\n\n"
+            "Contoh:\n"
+            "- `Makanan 1.5jt`\n"
+            "- `Transportasi 300rb`\n"
+        )
+    if step == 4:
+        bar = _tutorial_bar(3, TUTORIAL_TOTAL_STEPS)
+        return (
+            f"🎓 **Tutorial Mode**\n\n"
+            f"Progress: `{bar}` 3/{TUTORIAL_TOTAL_STEPS}\n\n"
+            "Step 4/5 — **Cek budget & laporan**\n"
+            "Aku akan tampilkan ringkasan budget kamu sekarang.\n"
+            "Setelah itu balas: `lanjut`."
+        )
+    bar = _tutorial_bar(4, TUTORIAL_TOTAL_STEPS)
+    return (
+        f"🎓 **Tutorial Mode**\n\n"
+        f"Progress: `{bar}` 4/{TUTORIAL_TOTAL_STEPS}\n\n"
+        "Step 5/5 — **Latihan pembatalan transaksi**\n"
+        "Sekarang coba ketik: `batal transaksi terakhir`\n"
+        "Nanti akan muncul tombol konfirmasi 1-klik."
+    )
+
+async def _tutorial_finish(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    context.user_data.pop("tutorial_mode", None)
+    _tutorial_log(user_id, "completed", {})
+    msg = (
+        "🏁 **Tutorial selesai!**\n\n"
+        "Kamu sudah bisa:\n"
+        "- Catat transaksi\n"
+        "- Set gaji\n"
+        "- Set budget\n"
+        "- Cek laporan\n"
+        "- Batalkan transaksi dengan 1-klik\n\n"
+        "Ketik `help` atau klik **Menu Utama** untuk eksplor fitur."
+    )
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🚀 Menu Utama", callback_data="suggest_help")],
+        [InlineKeyboardButton("👤 Profil", callback_data="get_profile")],
+    ])
+    await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=keyboard)
+
+async def _handle_tutorial_input(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
+    user_id = update.effective_user.id
+    state = _tutorial_state(context.user_data)
+    if not state:
+        return False
+
+    now_ts = time.time()
+    last_ts = float(state.get("last_ts") or 0)
+    if last_ts and (now_ts - last_ts) > TUTORIAL_TIMEOUT_SECONDS:
+        _tutorial_log(user_id, "timeout", {"step": int(state.get("step") or 1)})
+        context.user_data.pop("tutorial_mode", None)
+        await update.message.reply_text("Tutorialnya sudah timeout. Ketik `tutorial` untuk mulai lagi.")
+        return True
+
+    t = (text or "").strip()
+    low = t.lower()
+    state["last_ts"] = now_ts
+
+    if low in ("skip", "lewati", "skip tutorial", "lewati tutorial"):
+        state["step"] = min(int(state.get("step") or 1) + 1, TUTORIAL_TOTAL_STEPS)
+        _tutorial_log(user_id, "skipped_step", {"step": int(state.get("step") or 1)})
+        await update.message.reply_text(_tutorial_step_message(int(state["step"])), parse_mode="Markdown", reply_markup=_tutorial_keyboard(True))
+        context.user_data["tutorial_mode"] = state
+        return True
+
+    if low in ("help", "tolong", "bantu", "bingung", "gatau", "ga tau"):
+        msg = (
+            "🆘 **Bantuan cepat**\n\n"
+            "Kalau kamu bingung, pakai format ini:\n"
+            "- Transaksi: `kopi 25rb`\n"
+            "- Gaji: `7jt`\n"
+            "- Budget: `Makanan 1jt`\n"
+            "- Lanjut: `lanjut`\n"
+            "- Batalin: `batal transaksi terakhir`\n\n"
+            "Atau klik `Skip` kalau mau loncat step."
+        )
+        await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=_tutorial_keyboard(True))
+        context.user_data["tutorial_mode"] = state
+        return True
+
+    step = int(state.get("step") or 1)
+    user_db = db.get_or_create_user(user_id, update.effective_user.username)
+
+    if step == 1:
+        amount = _parse_amount_hint(t)
+        if amount is None:
+            try:
+                pr = await asyncio.wait_for(premium_ai.process_interaction(user_id, t, update.effective_user.first_name), timeout=AI_TIMEOUT_SECONDS)
+                if pr and pr.intent == "record" and pr.structured_data:
+                    amount = pr.structured_data.get("amount")
+            except Exception:
+                amount = None
+        try:
+            amount = float(amount) if amount is not None else None
+        except Exception:
+            amount = None
+        if not amount or amount <= 0:
+            state["errors"] = int(state.get("errors") or 0) + 1
+            _tutorial_log(user_id, "invalid_input", {"step": 1, "text": t[:120]})
+            await update.message.reply_text("Belum kebaca nominalnya. Coba lagi ya, contoh: `kopi 25rb` atau `makan 40000`.", reply_markup=_tutorial_keyboard(True))
+            context.user_data["tutorial_mode"] = state
+            return True
+
+        try:
+            db.add_transaction(user_id=user_db.id, amount=amount, category="Lain-lain", description=t, trans_type="expense")
+        except Exception:
+            pass
+        _tutorial_log(user_id, "step_completed", {"step": 1})
+        state["step"] = 2
+        context.user_data["tutorial_mode"] = state
+        await update.message.reply_text(f"✅ Mantap! Transaksi pertama tercatat: **Rp{amount:,.0f}**", parse_mode="Markdown")
+        await update.message.reply_text(_tutorial_step_message(2), parse_mode="Markdown", reply_markup=_tutorial_keyboard(True))
+        return True
+
+    if step == 2:
+        amount = _parse_amount_hint(t)
+        if amount is None:
+            digits = "".join([c for c in low if c.isdigit()])
+            try:
+                amount = float(digits) if digits else None
+            except Exception:
+                amount = None
+        if not amount or amount < 10000:
+            state["errors"] = int(state.get("errors") or 0) + 1
+            _tutorial_log(user_id, "invalid_input", {"step": 2, "text": t[:120]})
+            await update.message.reply_text("Nominal gajinya belum kebaca. Contoh: `gaji 7jt` atau `7000000`.", reply_markup=_tutorial_keyboard(True))
+            context.user_data["tutorial_mode"] = state
+            return True
+
+        try:
+            db.add_monthly_income(user_db.id, amount)
+        except Exception:
+            pass
+        _tutorial_log(user_id, "step_completed", {"step": 2})
+        state["step"] = 3
+        context.user_data["tutorial_mode"] = state
+        await update.message.reply_text(f"✅ Oke! Gaji kamu tersimpan: **Rp{amount:,.0f}**", parse_mode="Markdown")
+        await update.message.reply_text(_tutorial_step_message(3), parse_mode="Markdown", reply_markup=_tutorial_keyboard(True))
+        return True
+
+    if step == 3:
+        amount = _parse_amount_hint(t)
+        cat = None
+        for c in CATEGORIES:
+            if c.lower() in low:
+                cat = c
+                break
+        if not cat:
+            for token in low.replace(",", " ").split():
+                for c in CATEGORIES:
+                    if token == c.lower():
+                        cat = c
+                        break
+                if cat:
+                    break
+        if not amount or not cat:
+            state["errors"] = int(state.get("errors") or 0) + 1
+            _tutorial_log(user_id, "invalid_input", {"step": 3, "text": t[:120]})
+            await update.message.reply_text("Formatnya gini ya: `Makanan 1jt` atau `Transportasi 300rb`.", reply_markup=_tutorial_keyboard(True))
+            context.user_data["tutorial_mode"] = state
+            return True
+
+        try:
+            db.set_budget(user_db.id, cat, amount)
+        except Exception:
+            pass
+        _tutorial_log(user_id, "step_completed", {"step": 3, "category": cat})
+        state["step"] = 4
+        context.user_data["tutorial_mode"] = state
+        await update.message.reply_text(f"✅ Budget tersimpan: **{cat} = Rp{float(amount):,.0f}**", parse_mode="Markdown")
+        await update.message.reply_text(_tutorial_step_message(4), parse_mode="Markdown", reply_markup=_tutorial_keyboard(True))
+        try:
+            status = budget_mgr.check_budget_status(user_db.id, "Semua")
+            if status:
+                await update.message.reply_text(status)
+        except Exception:
+            pass
+        return True
+
+    if step == 4:
+        if low not in ("lanjut", "ok", "oke", "gas", "next", "lanjut ya"):
+            await update.message.reply_text("Balas `lanjut` untuk masuk step terakhir ya.", reply_markup=_tutorial_keyboard(True))
+            context.user_data["tutorial_mode"] = state
+            return True
+        _tutorial_log(user_id, "step_completed", {"step": 4})
+        state["step"] = 5
+        context.user_data["tutorial_mode"] = state
+        await update.message.reply_text(_tutorial_step_message(5), parse_mode="Markdown", reply_markup=_tutorial_keyboard(True))
+        return True
+
+    if step == 5:
+        if any(k in low for k in ("batal", "undo", "hapus")):
+            state["awaiting_cancel_confirm"] = True
+            context.user_data["tutorial_mode"] = state
+            await _send_cancel_flow(update, context, user_db, {"cancel_action": "undo_last", "reason": "tutorial"}, t)
+            _tutorial_log(user_id, "step_started", {"step": 5})
+            return True
+        await update.message.reply_text("Coba ketik: `batal transaksi terakhir` ya.", reply_markup=_tutorial_keyboard(True))
+        context.user_data["tutorial_mode"] = state
+        return True
+
+    return False
 
 def _is_tutorial_request(text: str) -> bool:
     t = (text or "").strip().lower()
@@ -228,11 +529,15 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
         return
 
     try:
-        if _is_tutorial_request(text):
-            await update.message.reply_text(_tutorial_message(), parse_mode="Markdown", reply_markup=_tutorial_keyboard())
+        handled = await _handle_tutorial_input(update, context, text)
+        if handled:
             return
 
-        premium_response = await premium_ai.process_interaction(user_id, text, user_name)
+        if _is_tutorial_request(text):
+            await update.message.reply_text(_tutorial_intro(), parse_mode="Markdown", reply_markup=_tutorial_keyboard(False))
+            return
+
+        premium_response = await asyncio.wait_for(premium_ai.process_interaction(user_id, text, user_name), timeout=AI_TIMEOUT_SECONDS)
         intent = premium_response.intent
         
         response_msg = premium_response.suggested_response
@@ -365,9 +670,38 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📸 **Sedang memindai struk...**", parse_mode='Markdown')
     
     try:
+        try:
+            key = f"ocr_rl:{user_id}"
+            ok = premium_ai.redis.client.set(key, str(int(time.time())), ex=OCR_RATE_LIMIT_SECONDS, nx=True)
+            if not ok:
+                await update.message.reply_text(f"OCR lagi cooldown. Coba lagi dalam {OCR_RATE_LIMIT_SECONDS} detik ya.")
+                return
+        except Exception:
+            pass
+
         # 1. OCR Extraction
         async with OCR_SEMAPHORE:
-            result = await asyncio.to_thread(ocr.process_receipt, photo_path, low_mem)
+            cache_key = None
+            try:
+                import hashlib
+                with open(photo_path, "rb") as f:
+                    h = hashlib.sha256(f.read()).hexdigest()
+                cache_key = f"ocr_cache:{h}"
+                cached = premium_ai.redis.client.get(cache_key)
+                if cached:
+                    result = json.loads(cached)
+                else:
+                    result = await asyncio.wait_for(
+                        asyncio.to_thread(ocr.process_receipt, photo_path, low_mem),
+                        timeout=OCR_HANDLER_TIMEOUT_SECONDS
+                    )
+                    if result:
+                        premium_ai.redis.client.set(cache_key, json.dumps(result), ex=7 * 24 * 3600)
+            except Exception:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(ocr.process_receipt, photo_path, low_mem),
+                    timeout=OCR_HANDLER_TIMEOUT_SECONDS
+                )
             
         if not result:
             await update.message.reply_text("Gagal membaca struk. Pastikan foto jelas ya!")

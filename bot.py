@@ -3,6 +3,7 @@ import logging
 import os
 import threading
 import sys
+import asyncio
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes, TypeHandler
 
@@ -29,6 +30,16 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     from telegram.error import Conflict
     if isinstance(context.error, Conflict):
         logging.error("CRITICAL: Conflict error detected! Another instance is running with the same token.")
+        if os.getenv("EXIT_ON_CONFLICT", "1") == "1":
+            try:
+                await context.application.stop()
+            except Exception:
+                pass
+            try:
+                loop = asyncio.get_running_loop()
+                loop.call_later(2, lambda: os._exit(0))
+            except Exception:
+                os._exit(0)
 
 async def post_init(application):
     commands = [

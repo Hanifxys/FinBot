@@ -8,12 +8,62 @@ from datetime import datetime
 import os
 import logging
 import json
+import time
 
 def get_main_menu_keyboard():
     return ReplyKeyboardMarkup([
         [KeyboardButton("📊 Cek Budget"), KeyboardButton("📈 Laporan")],
         [KeyboardButton("💡 Tips Hemat"), KeyboardButton("🚀 Menu Utama")]
     ], resize_keyboard=True)
+
+def _tut_bar(step: int, total: int) -> str:
+    if total <= 0:
+        return ""
+    step = max(0, min(step, total))
+    filled = int(round((step / total) * 10))
+    filled = max(0, min(filled, 10))
+    return "█" * filled + "░" * (10 - filled)
+
+def _tut_kb(active: bool = True):
+    if not active:
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("▶️ Mulai (Pemula)", callback_data="tutorial_start_beginner"),
+                InlineKeyboardButton("⚡ Mulai (Cepat)", callback_data="tutorial_start_fast"),
+            ],
+            [InlineKeyboardButton("🚀 Menu Utama", callback_data="suggest_help")],
+        ])
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("⏭️ Skip", callback_data="tutorial_skip"),
+            InlineKeyboardButton("🆘 Help", callback_data="tutorial_help"),
+        ],
+        [InlineKeyboardButton("🚪 Keluar", callback_data="tutorial_exit")],
+    ])
+
+def _tut_step_msg(step: int, total: int, mode: str):
+    bar = _tut_bar(step - 1, total)
+    base = f"🎓 **Tutorial Mode**\n\nProgress: `{bar}` {step-1}/{total}\n\n"
+    if step == 1:
+        extra = "Step 1 — Catat transaksi pertama\nCoba ketik: `kopi 25rb` atau `makan 40000`"
+        if mode == "beginner":
+            extra += "\n\nTips: tulis singkat + nominal, misalnya `parkir 5rb`."
+        return base + extra
+    if step == 2:
+        extra = "Step 2 — Set gaji bulanan\nKetik: `gaji 7jt` atau `7000000`"
+        if mode == "beginner":
+            extra += "\n\nKalau kamu freelancer, isi rata-rata per bulan."
+        return base + extra
+    if step == 3:
+        extra = "Step 3 — Set budget kategori\nKetik: `Makanan 1jt` atau `Transportasi 300rb`"
+        if mode == "beginner":
+            extra += "\n\nTips: mulai dari kategori paling sering kamu pakai."
+        return base + extra
+    if step == 4:
+        extra = "Step 4 — Cek budget\nAku tampilkan ringkasan budget kamu. Balas: `lanjut`."
+        return base + extra
+    extra = "Step 5 — Latihan pembatalan\nKetik: `batal transaksi terakhir` lalu tekan tombol konfirmasi."
+    return base + extra
 
 def _tutorial_text(section: str) -> str:
     if section == "quickstart":
@@ -116,6 +166,68 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = query.data
     pending = user_data.get('pending_tx')
     pending_cancel = user_data.get("pending_cancel")
+
+    if action in ("tutorial_start_beginner", "tutorial_start_fast", "tutorial_quickstart"):
+        mode = "beginner" if action != "tutorial_start_fast" else "fast"
+        total = 5
+        user_data["tutorial_mode"] = {
+            "active": True,
+            "step": 1,
+            "mode": mode,
+            "total": total,
+            "last_ts": time.time(),
+            "errors": 0,
+        }
+        try:
+            from core import premium_ai
+            premium_ai.redis.client.lpush(f"tutorial_events:{user_id}", json.dumps({"event": "started", "ts": datetime.utcnow().isoformat() + "Z", "data": {"mode": mode}}))
+            premium_ai.redis.client.ltrim(f"tutorial_events:{user_id}", 0, 500)
+        except Exception:
+            pass
+        await query.edit_message_text(_tut_step_msg(1, total, mode), parse_mode="Markdown", reply_markup=_tut_kb(True))
+        return
+
+    if action == "tutorial_help":
+        await query.message.reply_text(
+            "🆘 **Bantuan Tutorial**\n\n"
+            "Format aman yang pasti kebaca:\n"
+            "- Transaksi: `kopi 25rb`\n"
+            "- Gaji: `7000000`\n"
+            "- Budget: `Makanan 1000000`\n"
+            "- Lanjut: `lanjut`\n\n"
+            "Kalau masih bingung, tekan `Skip` untuk loncat step.",
+            parse_mode="Markdown",
+            reply_markup=_tut_kb(True),
+        )
+        return
+
+    if action == "tutorial_exit":
+        user_data.pop("tutorial_mode", None)
+        await query.edit_message_text("Tutorial Mode selesai. Ketik `tutorial` kalau mau mulai lagi. ✅")
+        return
+
+    if action == "tutorial_skip":
+        tm = user_data.get("tutorial_mode") or {}
+        if not tm.get("active"):
+            await query.message.reply_text("Tutorial Mode belum aktif. Ketik `tutorial` untuk mulai.")
+            return
+        step = int(tm.get("step") or 1)
+        total = int(tm.get("total") or 5)
+        mode = tm.get("mode") or "beginner"
+        step = min(step + 1, total)
+        tm["step"] = step
+        tm["last_ts"] = time.time()
+        user_data["tutorial_mode"] = tm
+        if step >= total:
+            await query.edit_message_text(
+                f"🎓 **Tutorial Mode**\n\nProgress: `{_tut_bar(total, total)}` {total}/{total}\n\n"
+                "Step terakhir: ketik `batal transaksi terakhir` untuk latihan ya.",
+                parse_mode="Markdown",
+                reply_markup=_tut_kb(True),
+            )
+            return
+        await query.edit_message_text(_tut_step_msg(step, total, mode), parse_mode="Markdown", reply_markup=_tut_kb(True))
+        return
 
     if action.startswith("tutorial_"):
         section = action.replace("tutorial_", "", 1)
