@@ -11,6 +11,9 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///database/finbot.db")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
+# Redis Config
+REDIS_URL = os.getenv("REDIS_URL")
+
 # Fix for Heroku/Railway PostgreSQL URL (replace postgres:// with postgresql://)
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
