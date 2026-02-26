@@ -120,7 +120,7 @@ class PremiumAIEngine:
             
             JSON Schema:
             {{
-                "intent": "record|query|insight|warning|chat",
+                "intent": "record|query|insight|warning|chat|config",
                 "confidence": 0.0-1.0,
                 "sentiment": "positive|neutral|negative",
                 "language": "id",
@@ -128,12 +128,20 @@ class PremiumAIEngine:
                     "amount": float,
                     "category": "string",
                     "description": "string",
-                    "type": "expense|income"
+                    "type": "expense|income",
+                    "config_type": "set_budget|reset_budget|set_salary|unknown"
                 }},
                 "suggested_response": "Your witty and helpful response here",
                 "predictive_advice": "Optional short advice if pattern detected",
                 "needs_live_update": true
             }}
+
+            Intent Guide:
+            - "record": User buys something or receives money (e.g., "beli bakso", "gajian").
+            - "config": User wants to change settings (e.g., "atur gaji", "reset budget", "ubah limit").
+            - "query": User asks for data (e.g., "pengeluaran saya berapa?").
+            - "insight": User asks for advice.
+            - "chat": Casual conversation.
             """
 
             raw_res = await self._call_llm(system_prompt, user_prompt, schema=AIIntentResponse)

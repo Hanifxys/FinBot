@@ -61,24 +61,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if intent == "record" and premium_response.structured_data:
             data = premium_response.structured_data
+            amount = data.get("amount", 0)
             
-            try:
-                # [NEW] Check for Duplicates
-                is_duplicate = await premium_ai.check_reconciliation(user_id, data)
-                if is_duplicate:
-                    response_msg = "⚠️ **Potensi Duplikat Terdeteksi!**\nTransaksi serupa baru saja dicatat. Yakin mau simpan lagi?"
-                else:
-                    db.add_transaction(
-                        user_id=user_db.id, # Use DB Primary Key, NOT Telegram ID
-                        amount=data.get("amount", 0),
-                        category=data.get("category", "Lain-lain"),
-                        description=data.get("description", text),
-                        trans_type=data.get("type", "expense")
-                    )
-                    response_msg = premium_response.suggested_response
-            except Exception as e:
-                logger.error(f"Error saving transaction for {user_id}: {e}", exc_info=True)
-                response_msg = "Maaf, saya gagal menyimpan transaksi tersebut. Silakan coba lagi."
+            # [SAFETY] Ignore zero or negative transactions unless explicitly handled
+            if amount <= 0:
+                logger.warning(f"Skipping transaction with amount {amount} for user {user_id}")
+                response_msg = premium_response.suggested_response or "Hmm, nominalnya berapa ya kak? Aku belum nangkep nih. 🤔"
+            else:
+                try:
+                    # [NEW] Check for Duplicates
+                    is_duplicate = await premium_ai.check_reconciliation(user_id, data)
+                    if is_duplicate:
+                        response_msg = "⚠️ **Potensi Duplikat Terdeteksi!**\nTransaksi serupa baru saja dicatat. Yakin mau simpan lagi?"
+                    else:
+                        db.add_transaction(
+                            user_id=user_db.id, # Use DB Primary Key, NOT Telegram ID
+                            amount=amount,
+                            category=data.get("category", "Lain-lain"),
+                            description=data.get("description", text),
+                            trans_type=data.get("type", "expense")
+                        )
+                        response_msg = premium_response.suggested_response
+                except Exception as e:
+                    logger.error(f"Error saving transaction for {user_id}: {e}", exc_info=True)
+                    response_msg = "Maaf, saya gagal menyimpan transaksi tersebut. Silakan coba lagi."
 
         elif intent == "insight":
             response_msg = premium_response.predictive_advice or premium_response.suggested_response
