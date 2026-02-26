@@ -33,8 +33,15 @@ class FinBotLiveDashboard:
 
     def setup_ui(self):
         # Header
-        header = ttk.Label(self.root, text="LIVE TRANSACTION FEED", style="Header.TLabel")
+        header = ttk.Label(self.root, text="🚀 FINBOT PRO LIVE", style="Header.TLabel")
         header.pack(pady=10)
+
+        # AI Suggestion Box (New!)
+        self.ai_frame = tk.Frame(self.root, bg="#3d3d5c", padx=10, pady=10)
+        self.ai_frame.pack(fill="x", padx=20, pady=5)
+        
+        self.ai_label = tk.Label(self.ai_frame, text="AI: Menunggu input Anda...", bg="#3d3d5c", fg="#00ff88", font=("Segoe UI", 9, "italic"), wraplength=400, justify="left")
+        self.ai_label.pack(fill="x")
 
         # Summary Stats
         self.summary_frame = tk.Frame(self.root, bg="#2d2d2d", padx=10, pady=10)
@@ -65,6 +72,13 @@ class FinBotLiveDashboard:
 
         self.feed_frame.pack(side="left", fill="both", expand=True, padx=20, pady=10)
         self.feed_scroll.pack(side="right", fill="y")
+
+    def update_ai_suggestion(self, text):
+        """Update kotak saran AI secara real-time"""
+        self.ai_label.config(text=f"AI: {text}")
+        # Efek visual kilat saat ada update
+        self.ai_frame.config(bg="#4d4d7c")
+        self.root.after(200, lambda: self.ai_frame.config(bg="#3d3d5c"))
 
     def update_summary(self, amount, type_):
         """Update statistik ringkasan secara real-time"""
@@ -112,8 +126,14 @@ class FinBotLiveDashboard:
                     while True:
                         message = await websocket.recv()
                         payload = json.loads(message)
-                        if payload.get("event") == "new_transaction":
-                            self.root.after(0, self.add_feed_item, payload.get("data"))
+                        
+                        event = payload.get("event")
+                        data = payload.get("data")
+                        
+                        if event == "new_transaction":
+                            self.root.after(0, self.add_feed_item, data)
+                        elif event == "ai_interaction":
+                            self.root.after(0, self.update_ai_suggestion, data.get("response"))
             except Exception as e:
                 self.status_label.config(text=f"Status: Reconnecting...", foreground="red")
                 await asyncio.sleep(5)

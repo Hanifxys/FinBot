@@ -71,45 +71,49 @@ class AIEngine:
                 gc.collect()
         return None
 
-    def generate_smart_insight(self, analysis_data, retries=2):
+    def detect_autonomous_intent(self, text, user_context=None):
         """
-        Generates a human-like financial advice based on raw analysis data with deep intelligence.
+        Autonomous Intent Engine: Mendeteksi keinginan user tanpa command eksplisit.
+        Menganalisis teks untuk menentukan apakah user ingin:
+        - Mencatat transaksi
+        - Bertanya tentang budget
+        - Butuh saran/insight
+        - Sekadar curhat finansial
         """
         client = self.client
         if not client:
-            return "AI Key tidak ditemukan. Gunakan analisis standar."
+            return {"intent": "chat", "response": "AI sedang offline."}
 
         prompt = f"""
-        Kamu adalah FinBot Pro, CFO pribadi cerdas yang menggabungkan analisis data kuantitatif dengan saran perilaku finansial yang empatik tapi tegas.
+        User Message: "{text}"
+        User History Context: {user_context if user_context else "No previous context"}
         
-        Berdasarkan data berikut:
-        {analysis_data}
+        Tugas:
+        1. Analisis NIAT user tanpa mereka harus pakai command /slash.
+        2. Klasifikasikan ke dalam: "record", "query_budget", "need_insight", "predictive_warning", atau "general_chat".
+        3. Jika "record", berikan data terstruktur.
+        4. Jika user terlihat bingung atau butuh saran, berikan respons proaktif.
         
-        Tugasmu:
-        1. Berikan skor kesehatan keuangan (0-100) dengan alasan singkat.
-        2. Identifikasi 2 pola pengeluaran yang paling mengkhawatirkan atau menarik.
-        3. Berikan 1 "Actionable Goal" untuk minggu depan.
-        4. Gunakan gaya bahasa Gen-Z Jakarta yang profesional (santai, informatif, sedikit humor, tanpa cringe berlebih).
-        
-        Format output:
-        📊 **Financial Health Score: [Score]/100**
-        ---
-        🔍 **Analisis Pola:**
-        • [Insight 1]
-        • [2]
-        🎯 **Misi Minggu Depan:**
-        [Actionable Goal]
+        Return ONLY a JSON object:
+        {{
+            "intent": "string",
+            "confidence": 0.0-1.0,
+            "structured_data": {{}},
+            "suggested_response": "string (Gaya Gen-Z Pro)",
+            "needs_live_update": boolean
+        }}
         """
 
-        for attempt in range(retries + 1):
-            try:
-                response = client.chat.completions.create(
-                    messages=[{"role": "user", "content": prompt}],
-                    model=self.model,
-                )
-                return response.choices[0].message.content
-            except Exception as e:
-                logger.error(f"Error generating AI insight (attempt {attempt+1}): {e}")
+        try:
+            response = client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model=self.model,
+                response_format={"type": "json_object"}
+            )
+            return json.loads(response.choices[0].message.content)
+        except Exception as e:
+            logger.error(f"Intent Detection Error: {e}")
+            return {"intent": "chat", "confidence": 0.0}
                 if attempt == retries:
                     return f"Aduh, AI-nya lagi capek nih (Error: {e}). Coba lagi nanti ya!"
                 time.sleep(1)
