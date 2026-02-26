@@ -34,7 +34,17 @@ class FinBotLiveDashboard:
     def setup_ui(self):
         # Header
         header = ttk.Label(self.root, text="LIVE TRANSACTION FEED", style="Header.TLabel")
-        header.pack(pady=20)
+        header.pack(pady=10)
+
+        # Summary Stats
+        self.summary_frame = tk.Frame(self.root, bg="#2d2d2d", padx=10, pady=10)
+        self.summary_frame.pack(fill="x", padx=20, pady=5)
+        
+        self.total_expense_label = tk.Label(self.summary_frame, text="Expense: Rp 0", bg="#2d2d2d", fg="#ff4444", font=("Segoe UI", 10, "bold"))
+        self.total_expense_label.pack(side="left", expand=True)
+        
+        self.total_income_label = tk.Label(self.summary_frame, text="Income: Rp 0", bg="#2d2d2d", fg="#00ff88", font=("Segoe UI", 10, "bold"))
+        self.total_income_label.pack(side="left", expand=True)
 
         # Connection Status
         self.status_label = ttk.Label(self.root, text="Status: Disconnected", foreground="orange")
@@ -56,15 +66,32 @@ class FinBotLiveDashboard:
         self.feed_frame.pack(side="left", fill="both", expand=True, padx=20, pady=10)
         self.feed_scroll.pack(side="right", fill="y")
 
+    def update_summary(self, amount, type_):
+        """Update statistik ringkasan secara real-time"""
+        if not hasattr(self, 'total_expense'):
+            self.total_expense = 0
+            self.total_income = 0
+            
+        if type_ == 'expense':
+            self.total_expense += amount
+        else:
+            self.total_income += amount
+            
+        self.total_expense_label.config(text=f"Expense: Rp {self.total_expense:,.0f}")
+        self.total_income_label.config(text=f"Income: Rp {self.total_income:,.0f}")
+
     def add_feed_item(self, data):
         """Tambah item baru ke daftar secara real-time"""
         amount = data.get('amount', 0)
+        type_ = data.get('type', 'expense')
+        self.update_summary(amount, type_)
+        
         category = data.get('category', 'Lain-lain')
         desc = data.get('description', '-')
         time_str = datetime.now().strftime("%H:%M:%S")
 
-        color = "#ff4444" if data.get('type') == 'expense' else "#00ff88"
-        prefix = "💸" if data.get('type') == 'expense' else "💰"
+        color = "#ff4444" if type_ == 'expense' else "#00ff88"
+        prefix = "💸" if type_ == 'expense' else "💰"
 
         card = tk.Frame(self.scrollable_frame, bg="#333333", padx=10, pady=10, highlightbackground="#444444", highlightthickness=1)
         card.pack(fill="x", pady=5, padx=5)

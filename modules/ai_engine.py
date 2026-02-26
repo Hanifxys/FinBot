@@ -73,20 +73,32 @@ class AIEngine:
 
     def generate_smart_insight(self, analysis_data, retries=2):
         """
-        Generates a human-like financial advice based on raw analysis data with retry logic.
+        Generates a human-like financial advice based on raw analysis data with deep intelligence.
         """
         client = self.client
         if not client:
             return "AI Key tidak ditemukan. Gunakan analisis standar."
 
         prompt = f"""
-        Kamu adalah FinBot, asisten keuangan pribadi yang jujur, cerdas, dan sedikit humoris (ala Gen-Z Indonesia).
-        Berdasarkan data berikut, berikan insight singkat (max 3-4 bullet points) dan saran yang tajam.
+        Kamu adalah FinBot Pro, CFO pribadi cerdas yang menggabungkan analisis data kuantitatif dengan saran perilaku finansial yang empatik tapi tegas.
         
-        Data:
+        Berdasarkan data berikut:
         {analysis_data}
         
-        Gunakan bahasa Indonesia yang santai tapi profesional. Berikan apresiasi jika bagus, dan tegur dengan sopan jika boros.
+        Tugasmu:
+        1. Berikan skor kesehatan keuangan (0-100) dengan alasan singkat.
+        2. Identifikasi 2 pola pengeluaran yang paling mengkhawatirkan atau menarik.
+        3. Berikan 1 "Actionable Goal" untuk minggu depan.
+        4. Gunakan gaya bahasa Gen-Z Jakarta yang profesional (santai, informatif, sedikit humor, tanpa cringe berlebih).
+        
+        Format output:
+        📊 **Financial Health Score: [Score]/100**
+        ---
+        🔍 **Analisis Pola:**
+        • [Insight 1]
+        • [2]
+        🎯 **Misi Minggu Depan:**
+        [Actionable Goal]
         """
 
         for attempt in range(retries + 1):

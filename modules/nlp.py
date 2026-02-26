@@ -286,29 +286,39 @@ class NLPProcessor:
             
         return {"new_value": None, "valid": False, "reason": "Field tidak valid"}
 
-    def _extract_amount(self, text):
-        # 1. Normalize first to handle jt, rb, k
-        normalized = self.normalize_text(text)
-        
-        # 2. Look for numbers (including those with dots like 2.000.000)
-        match_num = re.findall(r'(\d+[\d\.]*)', normalized)
-        if match_num:
-            for num in reversed(match_num):
-                cleaned = num.replace('.', '')
-                try:
-                    val = float(cleaned)
-                    if val >= 100: # Standard threshold
-                        return val
-                except:
-                    continue
-        return 0.0
-
     def _detect_category(self, text):
-        text_lower = text.lower()
+        """Smarter category detection with improved keyword matching"""
+        text = text.lower()
         for category, keywords in self.category_keywords.items():
-            if any(kw in text_lower for kw in keywords):
+            if any(re.search(rf"\b{re.escape(kw)}\b", text) for kw in keywords):
                 return category
+        
+        # Heuristic: if text contains "beli" or "bayar" but no category found
+        if any(kw in text for kw in ["beli", "bayar", "pesan"]):
+            return "Belanja"
+            
         return "Lain-lain"
+
+    def _extract_amount(self, text):
+        """Smarter amount extraction supporting 'rb', 'jt', and common formats"""
+        text = text.lower().replace(",", "")
+        
+        # Handle 'rb' (thousands) and 'jt' (millions)
+        rb_match = re.search(r'(\d+(?:\.\d+)?)\s*rb', text)
+        if rb_match:
+            return float(rb_match.group(1)) * 1000
+            
+        jt_match = re.search(r'(\d+(?:\.\d+)?)\s*jt', text)
+        if jt_match:
+            return float(jt_match.group(1)) * 1000000
+            
+        # Regular number extraction
+        numbers = re.findall(r'\d+', text)
+        if numbers:
+            # Pick the largest number as amount (common in simple texts like "makan 50000")
+            return float(max([int(n) for n in numbers]))
+            
+        return 0.0
 
     def extract_merchant(self, text):
         """
