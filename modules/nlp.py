@@ -58,6 +58,16 @@ class NLPProcessor:
         for cat, keywords in self.category_keywords.items():
             pattern = r'\b(' + '|'.join(map(re.escape, keywords)) + r')\b'
             self._compiled_keywords[cat] = re.compile(pattern, re.IGNORECASE)
+            
+        # Fast path intent checks (compiled)
+        self._intents_map = {
+            "query_budget": re.compile(r'\b(sisa|budget|anggaran|limit|total|kuota)\b', re.IGNORECASE),
+            "get_report": re.compile(r'\b(laporan|report|rekap|summary|statistik)\b', re.IGNORECASE),
+            "roast_wallet": re.compile(r'\b(roast|julid|marah|hujat)\b', re.IGNORECASE),
+            "export_data": re.compile(r'\b(export|ekspor|download|backup)\b', re.IGNORECASE),
+            "what_if": re.compile(r'\b(what if|simulasi|kalo beli|misal beli)\b', re.IGNORECASE),
+            "greeting": re.compile(r'\b(halo|hi|hai|siang|pagi|malam|apa kabar|sehat)\b', re.IGNORECASE)
+        }
 
     @property
     def client(self):
@@ -96,13 +106,12 @@ class NLPProcessor:
         """
         text = text.lower()
         
-        # Check for budget query intent
-        if any(kw in text for kw in ["sisa", "budget", "anggaran", "limit", "total pengeluaran"]):
+        # Fast regex check
+        if self._intents_map["query_budget"].search(text):
             category = self._detect_category(text)
             return {"intent": "query_budget", "category": category}
 
-        # Check for report intent
-        if any(kw in text for kw in ["laporan", "report", "rekap"]):
+        if self._intents_map["get_report"].search(text):
             return {"intent": "get_report"}
 
         # Check for analysis intent
@@ -168,6 +177,16 @@ class NLPProcessor:
                 return {"intent": "CANCEL", "confidence": 1.0}
             return {"intent": "EDIT_TRANSACTION", "confidence": 0.9}
 
+        # Fast Regex Matching using pre-compiled patterns
+        if self._intents_map["roast_wallet"].search(normalized_text):
+            return {"intent": "ROAST_WALLET", "confidence": 0.95}
+            
+        if self._intents_map["export_data"].search(normalized_text):
+            return {"intent": "EXPORT_DATA", "confidence": 0.95}
+
+        if self._intents_map["what_if"].search(normalized_text):
+            return {"intent": "WHAT_IF", "confidence": 0.95}
+
         # 1. Natural Language Settings
         if any(kw in normalized_text for kw in ["mode", "ganti mode", "ubah mode"]):
             if any(kw in normalized_text for kw in ["coach", "galak", "tegas"]):
@@ -183,20 +202,17 @@ class NLPProcessor:
             if "off" in normalized_text or "mati" in normalized_text:
                 return {"intent": "SET_REMINDER", "value": "off", "confidence": 0.9}
 
-        if any(kw in normalized_text for kw in ["export", "ekspor", "download csv", "backup data"]):
-            return {"intent": "EXPORT_DATA", "confidence": 0.95}
-
         # 2. Check for Transaction (Amount + Category)
         amount = self._extract_amount(normalized_text)
         if amount > 0:
             return {"intent": "ADD_TRANSACTION", "confidence": 0.95}
 
         # 3. Check for Budget Query
-        if any(kw in normalized_text for kw in ["sisa", "budget", "anggaran", "limit", "kuota"]):
+        if self._intents_map["query_budget"].search(normalized_text):
             return {"intent": "CHECK_BUDGET", "confidence": 0.9}
 
         # 4. Check for Report/Summary
-        if any(kw in normalized_text for kw in ["laporan", "report", "rekap", "summary", "statistik"]):
+        if self._intents_map["get_report"].search(normalized_text):
             return {"intent": "QUERY_SUMMARY", "confidence": 0.9}
 
         # 5. Check for Help/Command List
@@ -204,7 +220,7 @@ class NLPProcessor:
             return {"intent": "HELP", "confidence": 1.0}
 
         # 6. Check for Greetings and Social Chat
-        if any(re.search(rf'\b{re.escape(kw)}\b', normalized_text) for kw in ["halo", "hi", "hai", "p", "siang", "pagi", "malam", "u", "uii", "ui", "oey", "halo", "apa kabar", "gimana", "sehat", "baik"]):
+        if self._intents_map["greeting"].search(normalized_text):
             return {"intent": "GREETING", "confidence": 1.0}
 
         # 7. LLM Fallback (Groq) for complex queries

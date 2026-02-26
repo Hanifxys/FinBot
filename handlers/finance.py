@@ -96,3 +96,82 @@ async def set_budget_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ Alert {category} diatur: Warning {warn*100:.0f}% • Limit {limit*100:.0f}%")
     except Exception as e:
         await update.message.reply_text(f"Gagal mengatur alert: {e}")
+
+async def what_if_simulator(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Simulate financial decisions.
+    Usage: /whatif [amount] [description]
+    Example: /whatif 2000000 cicil hp
+    """
+    user_id = update.effective_user.id
+    user_name = update.effective_user.first_name
+    
+    args = context.args
+    if not args or len(args) < 2:
+        await update.message.reply_text(
+            "🔮 **What-If Simulator**\n"
+            "Cek dampak keputusan finansialmu sebelum kejadian.\n\n"
+            "Contoh:\n"
+            "`/whatif 2jt cicilan hp`\n"
+            "`/whatif 500rb langganan gym`",
+            parse_mode='Markdown'
+        )
+        return
+
+    try:
+        # Parse Amount
+        from modules.amounts import parse_primary_amount_id
+        raw_amount = args[0]
+        amount = parse_primary_amount_id(raw_amount)
+        if not amount:
+            await update.message.reply_text("Nominalnya berapa? Contoh: 2jt")
+            return
+            
+        desc = " ".join(args[1:])
+        
+        # Get Current Financial State
+        from core import db
+        now = datetime.now()
+        
+        # 1. Get Monthly Income & Expenses
+        txs = db.get_monthly_report(user_id, now.month, now.year)
+        income = sum(t.amount for t in txs if t.type == 'income')
+        expense = sum(t.amount for t in txs if t.type == 'expense')
+        
+        # 2. Get Savings
+        goals = db.get_user_saving_goals(user_id)
+        savings = sum(g.current_amount for g in goals)
+        
+        # 3. AI Prediction
+        prompt = f"""
+        Analyze this financial decision for user {user_name}.
+        Current Monthly Income: Rp {income:,.0f}
+        Current Monthly Expense: Rp {expense:,.0f}
+        Current Savings: Rp {savings:,.0f}
+        
+        Proposed Expense: Rp {amount:,.0f} for "{desc}"
+        
+        Task:
+        1. Calculate projected cashflow if this expense happens.
+        2. Give a risk rating (Safe/Risky/Dangerous).
+        3. Provide specific advice.
+        
+        Output format:
+        Analysis: [Analysis]
+        Verdict: [Safe/Risky/Dangerous]
+        Advice: [Advice]
+        """
+        
+        from core import premium_ai
+        processing = await update.message.reply_text("🔮 **Meramal masa depan dompetmu...**", parse_mode='Markdown')
+        
+        analysis = await premium_ai._call_llm(
+            system_prompt="You are a financial risk analyst. Be realistic and direct.",
+            user_prompt=prompt
+        )
+        
+        await processing.edit_text(f"🔮 **Hasil Simulasi: {desc}**\n\n{analysis}", parse_mode='Markdown')
+        
+    except Exception as e:
+        logging.error(f"What-if error: {e}")
+        await update.message.reply_text("Gagal melakukan simulasi. Coba lagi nanti.")

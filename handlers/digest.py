@@ -81,7 +81,26 @@ async def daily_digest(context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
                 
+            # Send Digest
             await context.bot.send_message(chat_id=user.telegram_id, text=msg, parse_mode='Markdown')
+            
+            # Proactive AI: Send Visual Report if enabled
+            # Simple heuristic: send visual report every 7 days or end of month
+            if now.day in [1, 7, 14, 21, 28]:
+                try:
+                    from utils.visuals import generate_monthly_chart
+                    # Get recent transactions for chart
+                    chart_txs = db.get_sliding_window_transactions(user.id, days=30)
+                    chart_buf = generate_monthly_chart(chart_txs, title="Ringkasan 30 Hari")
+                    if chart_buf:
+                        await context.bot.send_photo(
+                            chat_id=user.telegram_id, 
+                            photo=chart_buf,
+                            caption="📊 **Visual Report** (Beta)"
+                        )
+                except Exception as e:
+                    logging.error(f"Visual report error for {user.telegram_id}: {e}")
+                    
         except Exception as e:
             logging.error(f"Failed to process digest for {user.telegram_id}: {e}")
 

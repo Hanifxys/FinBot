@@ -114,6 +114,12 @@ class PremiumAIEngine:
         if not self.client or self._circuit_open():
             return None
 
+        # Cache key based on prompts and model
+        cache_key = f"llm:{model}:{hash(system_prompt + user_prompt)}"
+        cached = self._cache_get(cache_key)
+        if cached:
+            return cached
+
         for _ in range(self.MAX_RETRIES + 1):
             try:
                 response = await asyncio.wait_for(
@@ -129,7 +135,11 @@ class PremiumAIEngine:
                     timeout=self.TIMEOUT
                 )
                 self._record_success()
-                return response.choices[0].message.content
+                result = response.choices[0].message.content
+                
+                # Cache successful response
+                self._cache_set(cache_key, result)
+                return result
             except Exception as e:
                 logger.warning(f"Model {model} failed: {e}")
                 self._record_failure()

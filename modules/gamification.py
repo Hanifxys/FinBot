@@ -141,20 +141,34 @@ class GamificationEngine:
         level_key = f"user:{user_id}:level"
 
         try:
+            # Optimized pipeline: Fetch current state and increment in one go? 
+            # No, logic depends on result. 
+            # But we can optimize fetching level
+            
+            # Atomic increment
             current_xp = self.redis.client.incrby(xp_key, xp_to_add)
+            
+            # Fetch level from cache or Redis
+            # For simplicity, we just fetch from Redis but could be optimized
             current_level = int(self.redis.client.get(level_key) or 1)
 
             new_level = self._calculate_level(current_xp)
 
             leveled_up = False
+            
+            # Pipeline for updates
+            pipe = self.redis.client.pipeline()
+            
             if new_level > current_level:
-                self.redis.client.set(level_key, new_level)
+                pipe.set(level_key, new_level)
                 leveled_up = True
-                self._assign_title_badge(user_id, new_level)
+                self._assign_title_badge(user_id, new_level, pipe) # Modified to accept pipe
 
             # Update leaderboards
-            self.redis.client.zadd("leaderboard:xp", {str(user_id): current_xp})
-            self.redis.client.zadd("leaderboard:xp:weekly", {str(user_id): current_xp})
+            pipe.zadd("leaderboard:xp", {str(user_id): current_xp})
+            pipe.zadd("leaderboard:xp:weekly", {str(user_id): current_xp})
+            
+            pipe.execute()
 
             streak = await self.update_streak(user_id)
 
@@ -217,10 +231,14 @@ class GamificationEngine:
                 return tier
         return "Bronze 🥉"
 
-    def _assign_title_badge(self, user_id: int, level: int):
+    def _assign_title_badge(self, user_id: int, level: int, pipe=None):
         badge = self.TITLES.get(level)
         if badge:
-            self.redis.client.sadd(f"user:{user_id}:badges", badge)
+            key = f"user:{user_id}:badges"
+            if pipe:
+                pipe.sadd(key, badge)
+            else:
+                self.redis.client.sadd(key, badge)
 
     # -----------------------------
     # STREAK SYSTEM

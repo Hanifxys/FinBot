@@ -613,6 +613,57 @@ def _is_budget_query(text: str) -> bool:
     keys = ["sisa budget", "cek budget", "anggaran", "kuota", "limit", "sisa uang"]
     return any(k in t for k in keys)
 
+async def _roast_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Viral Feature: Roast My Wallet
+    AI will analyze spending habits and give a savage/funny commentary.
+    """
+    user_id = update.effective_user.id
+    user_name = update.effective_user.first_name
+    
+    await update.message.reply_text("🔥 **Sedang menyiapkan bahan roasting...**", parse_mode='Markdown')
+    
+    try:
+        # 1. Fetch recent data
+        txs = db.get_sliding_window_transactions(user_id, days=30)
+        if not txs:
+            await update.message.reply_text("Dompetmu terlalu bersih untuk di-roast. Catat dulu sana!")
+            return
+            
+        # 2. Summarize for AI
+        total = sum(t.amount for t in txs if t.type == 'expense')
+        categories = {}
+        for t in txs:
+            if t.type == 'expense':
+                categories[t.category] = categories.get(t.category, 0) + t.amount
+        
+        top_cat = max(categories, key=categories.get) if categories else "Nothing"
+        
+        prompt = f"""
+        Roast this user's spending habits! Be savage, funny, and viral-worthy.
+        User: {user_name}
+        Total Spending (30 days): Rp {total:,.0f}
+        Top Category: {top_cat} (Rp {categories.get(top_cat, 0):,.0f})
+        Habits: {len(txs)} transactions recorded.
+        
+        Output format:
+        Title: 💀 DOMPET ATAU KUBURAN?
+        Roast: [Your savage commentary here, max 100 words]
+        Rating: [Give a score like 'Boros Level: Firaun']
+        """
+        
+        # 3. Call AI
+        roast = await premium_ai._call_llm(
+            system_prompt="You are a stand-up comedian roasting bad financial habits. Use Indonesian slang.",
+            user_prompt=prompt
+        )
+        
+        await update.message.reply_text(roast, parse_mode='Markdown')
+        
+    except Exception as e:
+        logger.error(f"Roast error: {e}")
+        await update.message.reply_text("Gagal roasting. AI-nya lagi gak tega.")
+
 async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
     user_id = update.effective_user.id
     user_name = update.effective_user.first_name
@@ -629,10 +680,35 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
     try:
         # Pre-check for simple NLP intent before heavy AI call
         simple_intent = nlp.classify_intent(text)
+        
+        if simple_intent.get("intent") == "ROAST_WALLET":
+            await _roast_wallet(update, context)
+            return
+
         if simple_intent.get("intent") == "EXPORT_DATA":
             await export_data(update, context)
             return
-            
+
+        # New Intent Handlers
+        if simple_intent.get("intent") == "WHAT_IF":
+            # Extract params for what-if (amount, desc)
+            # Since NLP regex for this is complex, we might rely on args or simple split
+            # For now, let's redirect to what_if_simulator but we need args parsing logic
+            # Simplification: pass full text to handler and let it re-parse or use regex
+            from handlers.finance import what_if_simulator
+            # We need to construct context.args from text
+            # Remove trigger words
+            clean = text.lower()
+            for w in ["what if", "simulasi", "kalau", "kalo", "misal"]:
+                clean = clean.replace(w, "")
+            parts = clean.strip().split()
+            if parts:
+                context.args = parts
+                await what_if_simulator(update, context)
+            else:
+                await update.message.reply_text("Contoh pakai: `kalo beli hp 5jt`")
+            return
+
         if simple_intent.get("intent") == "SET_MODE":
             mode = simple_intent.get("value")
             from handlers.commands import set_persona_command
