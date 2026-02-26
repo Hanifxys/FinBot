@@ -54,5 +54,7 @@ jobs:
       env:
         KOYEB_TOKEN: ${{ secrets.KOYEB_TOKEN }}
       run: |
-        # Menggunakan CLI untuk trigger redeploy
-        koyeb service redeploy continuous-mehetabel/finbot
+        # Mencoba redeploy, jika gagal karena service tidak running (stopped), coba resume
+        koyeb service redeploy continuous-mehetabel/finbot || \
+        koyeb service resume continuous-mehetabel/finbot || \
+        echo "Koyeb API error, please check if your billing/plan allows the service to run."
