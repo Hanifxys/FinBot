@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 class AIEngine:
     def __init__(self):
         self._client = None
-        # Updated to llama-3.3-70b-versatile as llama3-8b-8192 is decommissioned
+        # Updated to llama-3.3-70b-versatile for high quality and speed
         self.model = "llama-3.3-70b-versatile"
 
     @property
@@ -25,18 +25,36 @@ class AIEngine:
                 self._client = None
         return self._client
 
-    @client.setter
-    def client(self, value):
-        self._client = value
-
-    def parse_transaction(self, text, retries=2):
-        """
-        Parses natural language text into a structured transaction JSON using Groq with retry logic.
-        """
+    def _safe_ai_call(self, prompt, response_format=None, retries=2):
+        """Helper to handle AI calls with retry logic and error handling"""
         client = self.client
         if not client:
             return None
 
+        for attempt in range(retries + 1):
+            try:
+                params = {
+                    "messages": [{"role": "user", "content": prompt}],
+                    "model": self.model,
+                }
+                if response_format:
+                    params["response_format"] = response_format
+
+                response = client.chat.completions.create(**params)
+                return response.choices[0].message.content
+            except Exception as e:
+                logger.error(f"Groq API Error (attempt {attempt+1}): {e}")
+                if attempt == retries:
+                    return None
+                time.sleep(1)
+            finally:
+                gc.collect()
+        return None
+
+    def parse_transaction(self, text):
+        """
+        Parses natural language text into a structured transaction JSON.
+        """
         prompt = f"""
         Extract transaction details from this text: "{text}"
         Categories available: {', '.join(CATEGORIES)}
@@ -48,109 +66,67 @@ class AIEngine:
         - "type": ("expense" or "income")
         - "is_transaction": (boolean, false if text is just a chat)
 
-        If the text is about salary or receiving money, type is "income" and category is "Gaji".
-        If no amount is found, "is_transaction" should be false.
-        
-        Example: "beli sate 50rb" -> {{"amount": 50000, "category": "Makanan", "description": "beli sate", "type": "expense", "is_transaction": true}}
+        Rules:
+        - Salary/receiving money -> type: "income", category: "Gaji"
+        - No amount found -> "is_transaction": false
+        - Example: "beli sate 50rb" -> {{"amount": 50000, "category": "Makanan", "description": "beli sate", "type": "expense", "is_transaction": true}}
         """
-
-        for attempt in range(retries + 1):
+        
+        content = self._safe_ai_call(prompt, response_format={"type": "json_object"})
+        if content:
             try:
-                response = client.chat.completions.create(
-                    messages=[{"role": "user", "content": prompt}],
-                    model=self.model,
-                    response_format={"type": "json_object"}
-                )
-                return json.loads(response.choices[0].message.content)
-            except Exception as e:
-                logger.error(f"Groq Parsing Error (attempt {attempt+1}): {e}")
-                if attempt == retries:
-                    return None
-                time.sleep(1)
-            finally:
-                gc.collect()
+                return json.loads(content)
+            except json.JSONDecodeError:
+                logger.error("Failed to decode AI JSON response")
         return None
 
     def detect_autonomous_intent(self, text, user_context=None):
         """
         Autonomous Intent Engine: Mendeteksi keinginan user tanpa command eksplisit.
-        Menganalisis teks untuk menentukan apakah user ingin:
-        - Mencatat transaksi
-        - Bertanya tentang budget
-        - Butuh saran/insight
-        - Sekadar curhat finansial
         """
-        client = self.client
-        if not client:
-            return {"intent": "chat", "response": "AI sedang offline."}
-
         prompt = f"""
         User Message: "{text}"
         User History Context: {user_context if user_context else "No previous context"}
         
-        Tugas:
-        1. Analisis NIAT user tanpa mereka harus pakai command /slash.
-        2. Klasifikasikan ke dalam: "record", "query_budget", "need_insight", "predictive_warning", atau "general_chat".
-        3. Jika "record", berikan data terstruktur.
-        4. Jika user terlihat bingung atau butuh saran, berikan respons proaktif.
+        Analyze User Intent:
+        1. Classify: "record", "query_budget", "need_insight", "predictive_warning", or "general_chat".
+        2. If "record", provide structured data.
+        3. If user is confused, provide proactive advice.
         
         Return ONLY a JSON object:
         {{
             "intent": "string",
             "confidence": 0.0-1.0,
             "structured_data": {{}},
-            "suggested_response": "string (Gaya Gen-Z Pro)",
+            "suggested_response": "string (Professional Gen-Z Jakarta style)",
             "needs_live_update": boolean
         }}
         """
 
-        try:
-            response = client.chat.completions.create(
-                messages=[{"role": "user", "content": prompt}],
-                model=self.model,
-                response_format={"type": "json_object"}
-            )
-            return json.loads(response.choices[0].message.content)
-        except Exception as e:
-            logger.error(f"Intent Detection Error: {e}")
-            return {"intent": "chat", "confidence": 0.0}
-                if attempt == retries:
-                    return f"Aduh, AI-nya lagi capek nih (Error: {e}). Coba lagi nanti ya!"
-                time.sleep(1)
-            finally:
-                gc.collect()
-        return "Aduh, AI-nya lagi capek nih. Coba lagi nanti ya!"
+        content = self._safe_ai_call(prompt, response_format={"type": "json_object"})
+        if content:
+            try:
+                return json.loads(content)
+            except json.JSONDecodeError:
+                logger.error("Failed to decode Intent JSON response")
+        
+        return {"intent": "chat", "confidence": 0.0, "suggested_response": "Aduh, otak AI-ku lagi nge-lag nih. Coba lagi ya!"}
 
     def chat_response(self, text, user_name="Teman"):
         """
-        Handles general chat messages using Groq AI with a friendly, Gen-Z persona.
+        Handles general chat messages with a friendly Gen-Z persona.
         """
-        client = self.client
-        if not client:
-            return f"Halo {user_name}! Aku FinBot. Ada yang bisa kubantu catat hari ini?"
-
         prompt = f"""
-        Kamu adalah FinBot, asisten keuangan pribadi yang super friendly, cerdas, dan asik diajak ngobrol (ala Gen-Z Indonesia).
-        User saat ini menyapamu/bertanya: "{text}"
-        Nama user: {user_name}
+        Kamu adalah FinBot, asisten keuangan pribadi yang super friendly, cerdas, dan asik (Gen-Z Indonesia).
+        User: "{text}"
+        Nama: {user_name}
 
-        Tugasmu:
-        1. Balas dengan ramah dan nyambung dengan konteks chat user.
-        2. Gunakan bahasa gaul Jakarta/Gen-Z yang sopan (pake 'kamu', 'aku', 'kak', 'oke', 'sip', dll).
-        3. Selipkan sedikit motivasi keuangan jika memungkinkan, tapi jangan menggurui.
-        4. Jika user hanya menyapa, balas dengan ceria dan tawarkan bantuan untuk mencatat pengeluaran.
-        5. Selalu akhiri jawaban dengan pertanyaan pancingan atau ajakan agar user terus berinteraksi (contoh: "Ada lagi yang mau dicatat hari ini?", "Mau cek budget kamu nggak?", "Gimana kabar dompet hari ini?").
-        6. Jaga jawaban tetap singkat dan padat (max 2-3 kalimat).
+        Rules:
+        1. Ramah, sopan, dan nyambung konteks.
+        2. Bahasa gaul Jakarta yang profesional (aku, kamu, kak, sip).
+        3. Singkat (max 3 kalimat).
+        4. Selalu akhiri dengan pertanyaan pancingan/ajakan interaksi.
         """
 
-        try:
-            response = client.chat.completions.create(
-                messages=[{"role": "user", "content": prompt}],
-                model=self.model,
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            logger.error(f"Error in AI chat response: {e}")
-            return f"Halo {user_name}! Ada yang bisa aku bantu catat hari ini? 💸"
-        finally:
-            gc.collect()
+        response = self._safe_ai_call(prompt)
+        return response if response else f"Halo {user_name}! Ada yang bisa aku bantu catat hari ini? 💸"
