@@ -56,7 +56,10 @@
     <style>
         body { 
             font-family: 'Inter', sans-serif; 
-            @apply bg-dark-950 text-slate-200 antialiased selection:bg-brand-500/30 selection:text-brand-400;
+            background: #020617;
+            color: #e2e8f0;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
         }
         
         /* Premium Glass Effect */
@@ -1730,7 +1733,7 @@
 
                 return {
                     token, isAuthenticated, isLoading, error, userId, userRole, currentView, mobileMenuOpen,
-                    menuItems, isAdmin, isSuperadmin, currentTitle, currentDate, kpiCards, transactions, hasData,
+                    menuItems, managementMenuItems, isAdmin, isSuperadmin, currentTitle, currentDate, kpiCards, transactions, hasData,
                     users, userSearch, filteredUsers, adminStats, aiStats, adminLogs, broadcastHistory, isSending, broadcastMessage, pmModal, userDrawer, toasts, health,
                     flaggedTransactions, suspiciousUsers, disputes, modSettings, modActiveTab, modTabs, flaggedCount,
                     login, logout, fetchData, setView, toggleTheme, updateUserRole, toggleUserStatus, sendBroadcast, fetchLogs, fetchAdminStats, fetchAIStats, openPrivateMessage, sendPrivateMessage, openUserDrawer, removeToast,
