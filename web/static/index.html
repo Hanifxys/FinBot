@@ -979,6 +979,7 @@
 
                 const isAdmin = computed(() => ['admin', 'superadmin'].includes(userRole.value));
                 const isSuperadmin = computed(() => userRole.value === 'superadmin');
+                const flaggedCount = computed(() => flaggedTransactions.value.length);
 
                 const kpiCards = computed(() => {
                     if (isAdmin.value && currentView.value === 'dashboard') {
@@ -1070,6 +1071,7 @@
                             fetchUsers();
                             fetchAdminStats();
                             fetchAIStats();
+                            fetchModerationData();
                             if (isSuperadmin.value) fetchLogs();
                         }
                     } catch (e) {
@@ -1077,6 +1079,36 @@
                     } finally {
                         isLoading.value = false;
                     }
+                };
+
+                const fetchModerationData = async () => {
+                    try {
+                        const [flagRes, suspRes, dispRes, setRes] = await Promise.all([
+                            api.get('/admin/moderation/flagged'),
+                            api.get('/admin/moderation/suspicious'),
+                            api.get('/admin/moderation/disputes'),
+                            api.get('/admin/moderation/settings')
+                        ]);
+                        flaggedTransactions.value = flagRes.data;
+                        suspiciousUsers.value = suspRes.data;
+                        disputes.value = dispRes.data;
+                        modSettings.value = setRes.data;
+                    } catch (e) { console.error("Failed to fetch moderation data", e); }
+                };
+
+                const saveModSettings = async () => {
+                    try {
+                        await api.post('/admin/moderation/settings', modSettings.value);
+                        showToast("Moderation settings updated successfully", "success");
+                    } catch (e) { showToast("Failed to update settings", "error"); }
+                };
+
+                const resolveFlag = async (flag, status) => {
+                    try {
+                        await api.post(`/admin/moderation/flagged/${flag.id}/resolve`, { status });
+                        showToast(`Transaction ${status} successfully`, "success");
+                        fetchModerationData();
+                    } catch (e) { showToast("Operation failed", "error"); }
                 };
 
                 const fetchHealth = async () => {
@@ -1254,7 +1286,9 @@
                     token, isAuthenticated, isLoading, error, userId, userRole, currentView, mobileMenuOpen,
                     menuItems, isAdmin, isSuperadmin, currentTitle, currentDate, kpiCards, transactions, hasData,
                     users, userSearch, filteredUsers, adminStats, aiStats, adminLogs, isSending, broadcastMessage, pmModal, userDrawer, toasts, health,
+                    flaggedTransactions, suspiciousUsers, disputes, modSettings, modActiveTab, modTabs, flaggedCount,
                     login, logout, fetchData, setView, toggleTheme, updateUserRole, toggleUserStatus, sendBroadcast, fetchLogs, fetchAdminStats, fetchAIStats, openPrivateMessage, sendPrivateMessage, openUserDrawer, removeToast,
+                    fetchModerationData, saveModSettings, resolveFlag,
                     getRoleClass, formatCurrency, formatCompact, formatDate, formatDateShort, formatDateRelative, getCategoryIcon
                 };
             }
