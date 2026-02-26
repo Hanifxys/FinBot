@@ -9,6 +9,7 @@ from modules.ai_engine import AIEngine
 from modules.premium_ai import PremiumAIEngine
 from utils.visuals import VisualReporter
 from modules.websocket_server import WebSocketServer
+from modules.monitor import start_monitor_thread
 
 # Initialize Shared instances properly
 db = DBHandler()
@@ -31,3 +32,5 @@ def init_components():
     logging.info("Core components initialized with Supabase API")
     # Start WS Server in background
     ws_server.start_in_thread()
+    # Start Monitoring API for Koyeb Health Checks
+    start_monitor_thread()

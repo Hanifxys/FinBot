@@ -66,6 +66,39 @@ class ExpenseAnalyzer:
         
         return insight
 
+    async def get_ai_trend_analysis(self, user_id):
+        """
+        Premium Trend Analysis using the Elite AI Engine.
+        Detects month-over-month changes and hidden patterns.
+        """
+        from core import premium_ai
+        
+        # 1. Get transaction history for last 30 days
+        transactions = self.db.get_sliding_window_transactions(user_id, days=30)
+        
+        if not transactions:
+            return "Belum ada data transaksi yang cukup untuk analisis tren."
+
+        # 2. Summarize for AI
+        summary = {
+            "total_count": len(transactions),
+            "categories": {},
+            "total_amount": 0
+        }
+        for tx in transactions:
+            summary["total_amount"] += tx.amount
+            summary["categories"][tx.category] = summary["categories"].get(tx.category, 0) + tx.amount
+
+        # 3. Deep Analysis via Premium AI
+        user_context = f"Monthly Summary: {summary}"
+        analysis = await premium_ai.process_interaction(
+            user_id, 
+            "Berikan analisis tren pengeluaran bulanan saya secara mendalam.", 
+            "User"
+        )
+        
+        return analysis.predictive_advice or analysis.suggested_response
+
     def calculate_health_score(self, user_id):
         """
         Simple, transparent financial health score.
