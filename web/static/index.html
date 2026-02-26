@@ -246,20 +246,11 @@
                     </template>
                 </nav>
                 
-                <!-- User Profile -->
                 <div class="p-4 border-t border-white/5 bg-dark-900/50">
-                    <div class="flex items-center gap-3">
-                        <div class="w-9 h-9 rounded-full bg-gradient-to-tr from-slate-700 to-slate-600 flex items-center justify-center border border-white/10">
-                            <span class="text-xs font-bold text-white">{{ userRole === 'superadmin' ? 'SA' : (userRole === 'admin' ? 'AD' : 'U#') }}</span>
-                        </div>
-                        <div class="flex-1 min-w-0">
-                            <p class="text-xs font-semibold text-white truncate">{{ userId }}</p>
-                            <p class="text-[10px] text-success-500 font-mono uppercase">● {{ userRole }}</p>
-                        </div>
-                        <button @click="logout" class="text-slate-500 hover:text-danger-500 transition-colors p-2" title="Terminate Session">
-                            <i class="fas fa-power-off text-sm"></i>
-                        </button>
-                    </div>
+                    <button @click="logout" class="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-dark-800 hover:bg-dark-700 text-slate-300 hover:text-white font-bold text-xs transition-all border border-white/5 active:scale-[0.99]">
+                        <i class="fas fa-power-off text-[12px]"></i>
+                        Logout
+                    </button>
                 </div>
             </aside>
             
@@ -746,6 +737,45 @@
                                             </tr>
                                         </tbody>
                                     </table>
+                                </div>
+                            </div>
+                        </div>
+                        </transition>
+
+                        <!-- ADMIN: SYSTEM HEALTH -->
+                        <transition name="slide" mode="out-in">
+                        <div v-if="currentView === 'admin_health'" class="space-y-6" key="admin_health">
+                            <div class="glass-panel p-6 rounded-2xl border border-white/5">
+                                <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+                                    <div>
+                                        <h3 class="text-lg font-bold text-white tracking-tight">System Health Monitor</h3>
+                                        <p class="text-xs text-slate-500 mt-1">Status layanan internal secara real-time.</p>
+                                    </div>
+                                    <div class="flex items-center gap-3">
+                                        <div class="px-3 py-2 rounded-xl bg-dark-900/50 border border-white/5">
+                                            <p class="text-[9px] font-bold uppercase tracking-widest text-slate-500">Overall</p>
+                                            <p class="text-xs font-mono font-bold mt-1" :class="health.status === 'ok' ? 'text-success-500' : (health.status === 'loading' ? 'text-amber-500' : 'text-danger-500')">
+                                                {{ (health.status || 'unknown').toString().toUpperCase() }}
+                                            </p>
+                                        </div>
+                                        <button @click="fetchHealth" class="p-2.5 rounded-xl bg-dark-900/50 border border-white/5 text-slate-400 hover:text-brand-400 hover:border-white/10 transition-all active:scale-[0.98]" title="Refresh health">
+                                            <i class="fas fa-sync-alt" :class="{'animate-spin': isLoading}"></i>
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                                    <div v-for="(status, name) in health.components" :key="name" class="p-5 rounded-2xl bg-white/2 border border-white/5 hover:border-white/10 transition-all">
+                                        <div class="flex items-center justify-between gap-3">
+                                            <p class="text-[10px] font-bold uppercase tracking-widest text-slate-500 truncate">{{ name }}</p>
+                                            <span :class="['text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-widest border', (status === 'connected' || status === 'running' || status === 'ready') ? 'text-success-500 border-success-500/20 bg-success-500/5' : 'text-danger-500 border-danger-500/20 bg-danger-500/5']">
+                                                {{ (status || 'unknown').toString().toUpperCase() }}
+                                            </span>
+                                        </div>
+                                        <div class="mt-4 h-1.5 w-full bg-dark-800 rounded-full overflow-hidden">
+                                            <div :class="['h-full transition-all duration-700', (status === 'connected' || status === 'running' || status === 'ready') ? 'bg-success-500' : 'bg-danger-500']" style="width: 100%"></div>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -1439,6 +1469,7 @@
                     const base = [
                         { id: 'admin_users', label: 'User Management', icon: 'fas fa-users-cog', superadminOnly: false },
                         { id: 'admin_ai', label: 'AI Intelligence', icon: 'fas fa-brain', superadminOnly: false },
+                        { id: 'admin_health', label: 'System Health', icon: 'fas fa-heart-pulse', superadminOnly: false },
                         { id: 'admin_broadcast', label: 'Broadcast System', icon: 'fas fa-bullhorn', superadminOnly: true },
                         { id: 'admin_moderation', label: 'Content Moderation', icon: 'fas fa-shield-halved', superadminOnly: true },
                         { id: 'admin_logs', label: 'Audit Trail', icon: 'fas fa-history', superadminOnly: true }
@@ -1453,6 +1484,7 @@
                     if (view === 'transactions') return true;
                     if (view === 'admin_users') return isAdmin.value;
                     if (view === 'admin_ai') return isAdmin.value;
+                    if (view === 'admin_health') return isAdmin.value;
                     if (view === 'admin_broadcast') return isSuperadmin.value;
                     if (view === 'admin_moderation') return isSuperadmin.value;
                     if (view === 'admin_logs') return isSuperadmin.value;
@@ -1481,6 +1513,7 @@
                         'transactions': 'Transaction Ledger',
                         'admin_users': 'User Directory',
                         'admin_ai': 'AI Intelligence Monitor',
+                        'admin_health': 'System Health Monitor',
                         'admin_broadcast': 'System Broadcast Engine',
                         'admin_moderation': 'Content Moderation',
                         'admin_logs': 'System Audit Trail'
@@ -1789,6 +1822,8 @@
                         if (isAdmin.value) fetchUsers();
                     } else if (newView === 'admin_ai') {
                         if (isAdmin.value) fetchAIStats();
+                    } else if (newView === 'admin_health') {
+                        if (isAdmin.value) fetchHealth();
                     } else if (newView === 'admin_moderation') {
                         if (isSuperadmin.value) fetchModerationData();
                     } else if (newView === 'admin_logs') {
@@ -1902,7 +1937,7 @@
                     users, userSearch, filteredUsers, adminStats, aiStats, adminLogs, broadcastHistory, isSending, broadcastMessage, pmModal, userDrawer, toasts, health,
                     flaggedTransactions, suspiciousUsers, disputes, modSettings, modActiveTab, modTabs, flaggedCount,
                     isDarkTheme, normalizedRole, profileMenuOpen, profileMenuRoot, profileAvatarUrl,
-                    login, logout, fetchData, setView, toggleTheme, updateUserRole, toggleUserStatus, sendBroadcast, fetchLogs, fetchAdminStats, fetchAIStats, openPrivateMessage, sendPrivateMessage, openUserDrawer, removeToast,
+                    login, logout, fetchData, fetchHealth, setView, toggleTheme, updateUserRole, toggleUserStatus, sendBroadcast, fetchLogs, fetchAdminStats, fetchAIStats, openPrivateMessage, sendPrivateMessage, openUserDrawer, removeToast,
                     toggleProfileMenu, onProfileAction,
                     fetchModerationData, saveModSettings, resolveFlag,
                     getRoleClass, formatCurrency, formatCompact, formatDate, formatDateShort, formatDateRelative, getCategoryIcon
