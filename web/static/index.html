@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FinBot Pro Dashboard</title>
+    <title>FinBot Pro | Enterprise Dashboard</title>
     
-    <!-- Scripts & Styles -->
+    <!-- Core Dependencies -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
@@ -14,367 +14,350 @@
                 extend: {
                     colors: {
                         dark: {
+                            950: '#020617', // Deeper black
                             900: '#0f172a',
                             800: '#1e293b',
                             700: '#334155',
                             600: '#475569'
                         },
                         brand: {
+                            400: '#60a5fa',
                             500: '#3b82f6',
-                            600: '#2563eb'
-                        }
+                            600: '#2563eb',
+                            glow: 'rgba(59, 130, 246, 0.5)'
+                        },
+                        success: { 500: '#10b981' },
+                        danger: { 500: '#ef4444' }
                     },
                     fontFamily: {
-                        sans: ['Inter', 'sans-serif'],
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                    animation: {
+                        'float': 'float 6s ease-in-out infinite',
+                        'pulse-slow': 'pulse 4s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                    },
+                    keyframes: {
+                        float: {
+                            '0%, 100%': { transform: 'translateY(0)' },
+                            '50%': { transform: 'translateY(-10px)' },
+                        }
                     }
                 }
             }
         }
     </script>
-    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     
     <style>
-        body { font-family: 'Inter', sans-serif; @apply bg-dark-900 text-slate-200; }
-        
-        /* Glassmorphism */
-        .glass { 
-            background: rgba(30, 41, 59, 0.4); 
-            backdrop-filter: blur(12px); 
-            -webkit-backdrop-filter: blur(12px);
-            border: 1px solid rgba(255, 255, 255, 0.05); 
-            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
+        body { 
+            font-family: 'Inter', sans-serif; 
+            @apply bg-dark-950 text-slate-200 antialiased selection:bg-brand-500/30 selection:text-brand-400;
         }
         
-        /* Animations */
-        @keyframes blob {
-            0% { transform: translate(0px, 0px) scale(1); }
-            33% { transform: translate(30px, -50px) scale(1.1); }
-            66% { transform: translate(-20px, 20px) scale(0.9); }
-            100% { transform: translate(0px, 0px) scale(1); }
+        /* Premium Glass Effect */
+        .glass-panel { 
+            background: rgba(15, 23, 42, 0.6); 
+            backdrop-filter: blur(16px); 
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.08); 
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
         }
-        .animate-blob { animation: blob 7s infinite; }
-        .animation-delay-2000 { animation-delay: 2s; }
-        .animation-delay-4000 { animation-delay: 4s; }
         
+        .glass-card {
+            background: linear-gradient(145deg, rgba(30, 41, 59, 0.4) 0%, rgba(15, 23, 42, 0.6) 100%);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        
+        .glass-card:hover {
+            border-color: rgba(59, 130, 246, 0.3);
+            transform: translateY(-2px);
+            box-shadow: 0 10px 40px -10px rgba(0, 0, 0, 0.5);
+        }
+
         /* Custom Scrollbar */
         ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
         ::-webkit-scrollbar-thumb:hover { background: #475569; }
 
-        .sidebar-link { @apply relative overflow-hidden; }
-        .sidebar-link::after {
-            content: '';
-            position: absolute;
-            left: 0;
-            top: 0;
-            height: 100%;
-            width: 3px;
-            background: #3b82f6;
-            transform: scaleY(0);
-            transition: transform 0.2s;
-        }
-        .sidebar-link.active::after { transform: scaleY(1); }
-        .sidebar-link.active { @apply bg-brand-500/10 text-brand-500; }
+        /* Transitions */
+        .fade-enter-active, .fade-leave-active { transition: opacity 0.3s ease; }
+        .fade-enter-from, .fade-leave-to { opacity: 0; }
+        
+        .slide-enter-active, .slide-leave-active { transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
+        .slide-enter-from, .slide-leave-to { transform: translateX(20px); opacity: 0; }
+
+        /* Utilities */
+        .text-glow { text-shadow: 0 0 20px rgba(59, 130, 246, 0.5); }
     </style>
 </head>
 <body>
-    <div id="app" class="h-screen flex flex-col overflow-hidden">
+    <div id="app" class="h-screen flex flex-col overflow-hidden bg-[url('https://grainy-gradients.vercel.app/noise.svg')]">
         
         <!-- LOGIN SCREEN -->
-        <div v-if="!isAuthenticated" class="flex-1 flex items-center justify-center bg-dark-900 relative">
-            <!-- Dynamic Background -->
-            <div class="absolute inset-0 overflow-hidden pointer-events-none">
-                <div class="absolute top-0 left-1/4 w-96 h-96 bg-brand-500/20 rounded-full blur-3xl animate-blob"></div>
-                <div class="absolute bottom-0 right-1/4 w-96 h-96 bg-purple-500/20 rounded-full blur-3xl animate-blob animation-delay-2000"></div>
-                <div class="absolute top-1/2 left-1/2 w-80 h-80 bg-pink-500/20 rounded-full blur-3xl animate-blob animation-delay-4000"></div>
+        <transition name="fade">
+        <div v-if="!isAuthenticated" class="flex-1 flex items-center justify-center relative overflow-hidden">
+            <!-- Animated Background -->
+            <div class="absolute inset-0 pointer-events-none">
+                <div class="absolute top-[-10%] left-[-10%] w-[500px] h-[500px] bg-brand-600/20 rounded-full blur-[120px] animate-pulse-slow"></div>
+                <div class="absolute bottom-[-10%] right-[-10%] w-[500px] h-[500px] bg-purple-600/20 rounded-full blur-[120px] animate-pulse-slow" style="animation-delay: 2s;"></div>
             </div>
             
-            <div class="z-10 glass p-8 md:p-10 rounded-3xl shadow-2xl w-full max-w-md border border-white/5 mx-4 transform transition-all duration-500 hover:scale-[1.01]">
-                <div class="text-center mb-8">
-                    <div class="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-gradient-to-tr from-brand-600 to-purple-600 mb-6 shadow-lg shadow-brand-500/20">
-                        <i class="fas fa-chart-pie text-4xl text-white"></i>
+            <div class="z-10 glass-panel p-10 rounded-2xl w-full max-w-md mx-4 shadow-2xl relative overflow-hidden group">
+                <div class="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000"></div>
+                
+                <div class="text-center mb-10">
+                    <div class="inline-flex items-center justify-center w-16 h-16 rounded-xl bg-gradient-to-br from-brand-500 to-purple-600 mb-6 shadow-lg shadow-brand-500/30 animate-float">
+                        <i class="fas fa-cube text-3xl text-white"></i>
                     </div>
-                    <h1 class="text-3xl font-bold text-white mb-2 tracking-tight">FinBot Pro</h1>
-                    <p class="text-slate-400">Financial Intelligence Dashboard</p>
+                    <h1 class="text-3xl font-bold text-white mb-2 tracking-tight">FinBot <span class="text-brand-400">Enterprise</span></h1>
+                    <p class="text-slate-400 text-sm font-medium">Secure Financial Intelligence</p>
                 </div>
                 
                 <form @submit.prevent="login" class="space-y-6">
-                    <div class="relative group">
-                        <i class="fas fa-key absolute left-4 top-3.5 text-slate-500 group-focus-within:text-brand-500 transition-colors"></i>
-                        <input v-model="token" type="password" placeholder="Tempel Access Token disini..." 
-                            class="w-full pl-12 pr-4 py-3 bg-dark-800/50 border border-dark-700 rounded-xl focus:ring-2 focus:ring-brand-500 focus:border-transparent text-white placeholder-slate-500 transition-all outline-none hover:bg-dark-800">
+                    <div class="space-y-2">
+                        <label class="text-xs font-semibold text-slate-500 uppercase tracking-wider ml-1">Access Token</label>
+                        <div class="relative group/input">
+                            <i class="fas fa-shield-alt absolute left-4 top-3.5 text-slate-500 group-focus-within/input:text-brand-400 transition-colors"></i>
+                            <input v-model="token" type="password" placeholder="Enter your secure token..." 
+                                class="w-full pl-11 pr-4 py-3 bg-dark-900/50 border border-dark-700 rounded-xl focus:ring-2 focus:ring-brand-500/50 focus:border-brand-500 text-white placeholder-slate-600 transition-all outline-none font-mono text-sm">
+                        </div>
                     </div>
                     
                     <button type="submit" :disabled="isLoading"
-                        class="w-full py-3.5 px-4 bg-gradient-to-r from-brand-600 to-purple-600 hover:from-brand-500 hover:to-purple-500 text-white font-semibold rounded-xl shadow-lg shadow-brand-500/25 transform transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                        class="w-full py-3.5 bg-brand-600 hover:bg-brand-500 text-white font-semibold rounded-xl shadow-lg shadow-brand-600/20 transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 group/btn">
                         <i v-if="isLoading" class="fas fa-circle-notch fa-spin"></i>
-                        <span v-else>Masuk Dashboard</span>
-                        <i v-if="!isLoading" class="fas fa-arrow-right text-sm opacity-70"></i>
+                        <span v-else>Authenticate System</span>
+                        <i v-if="!isLoading" class="fas fa-arrow-right text-xs opacity-0 -translate-x-2 group-hover/btn:opacity-100 group-hover/btn:translate-x-0 transition-all"></i>
                     </button>
-                    
-                    <div class="text-center">
-                        <p class="text-xs text-slate-500">
-                            Belum punya token? Ketik <span class="bg-dark-800 px-1.5 py-0.5 rounded text-brand-500 font-mono">/auth</span> di Telegram Bot.
-                        </p>
-                    </div>
                 </form>
                 
-                <div v-if="error" class="mt-6 p-4 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-sm flex items-center gap-3 animate-pulse">
-                    <i class="fas fa-exclamation-circle text-lg"></i>
-                    <span>{{ error }}</span>
+                <div v-if="error" class="mt-6 p-4 bg-danger-500/10 border border-danger-500/20 text-danger-500 rounded-xl text-xs font-medium flex items-center gap-3">
+                    <i class="fas fa-exclamation-triangle"></i> {{ error }}
                 </div>
             </div>
         </div>
+        </transition>
 
         <!-- MAIN DASHBOARD -->
-        <div v-else class="flex-1 flex overflow-hidden bg-dark-900">
+        <transition name="fade">
+        <div v-if="isAuthenticated" class="flex-1 flex overflow-hidden bg-dark-950">
             <!-- Sidebar -->
-            <aside :class="['fixed inset-y-0 left-0 z-50 w-72 bg-dark-800/90 backdrop-blur-xl border-r border-white/5 transition-transform duration-300 md:translate-x-0 md:static md:inset-0 flex flex-col', mobileMenuOpen ? 'translate-x-0' : '-translate-x-full']">
-                <!-- Logo -->
+            <aside :class="['fixed inset-y-0 left-0 z-50 w-72 bg-dark-900/80 backdrop-blur-xl border-r border-white/5 transition-transform duration-300 md:translate-x-0 md:static md:inset-0 flex flex-col', mobileMenuOpen ? 'translate-x-0' : '-translate-x-full']">
+                <!-- Brand -->
                 <div class="h-20 flex items-center px-8 border-b border-white/5">
-                    <div class="w-10 h-10 bg-gradient-to-tr from-brand-600 to-purple-600 rounded-xl flex items-center justify-center mr-3 shadow-lg shadow-brand-500/20">
-                        <i class="fas fa-robot text-white text-lg"></i>
+                    <div class="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center mr-3 shadow-lg shadow-brand-500/20">
+                        <i class="fas fa-bolt text-white text-sm"></i>
                     </div>
-                    <div>
-                        <h1 class="font-bold text-xl text-white tracking-tight">FinBot</h1>
-                        <p class="text-xs text-brand-500 font-medium tracking-wider">PRO DASHBOARD</p>
-                    </div>
+                    <span class="font-bold text-lg text-white tracking-tight">FinBot<span class="text-brand-400">Pro</span></span>
                 </div>
                 
                 <!-- Navigation -->
-                <nav class="flex-1 px-4 py-6 space-y-1 overflow-y-auto">
-                    <p class="px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Menu Utama</p>
+                <nav class="flex-1 px-4 py-8 space-y-1 overflow-y-auto">
+                    <p class="px-4 text-[10px] font-bold text-slate-600 uppercase tracking-widest mb-4">Analytics</p>
                     <a v-for="item in menuItems" :key="item.id" @click="setView(item.id)"
-                        :class="['sidebar-link flex items-center gap-3 px-4 py-3.5 rounded-xl cursor-pointer transition-all duration-200 group font-medium', currentView === item.id ? 'active' : 'text-slate-400 hover:bg-white/5 hover:text-white']">
-                        <i :class="[item.icon, 'text-lg w-6 text-center transition-colors', currentView === item.id ? 'text-brand-500' : 'text-slate-500 group-hover:text-white']"></i>
+                        :class="['flex items-center gap-3 px-4 py-3 rounded-lg cursor-pointer transition-all duration-200 group text-sm font-medium', currentView === item.id ? 'bg-brand-500/10 text-brand-400 border border-brand-500/20' : 'text-slate-400 hover:text-white hover:bg-white/5']">
+                        <i :class="[item.icon, 'w-5 text-center transition-colors', currentView === item.id ? 'text-brand-400' : 'text-slate-500 group-hover:text-slate-300']"></i>
                         <span>{{ item.label }}</span>
-                        <i v-if="currentView === item.id" class="fas fa-chevron-right ml-auto text-xs text-brand-500"></i>
+                        <div v-if="currentView === item.id" class="ml-auto w-1.5 h-1.5 rounded-full bg-brand-400 shadow-[0_0_8px_rgba(96,165,250,0.6)]"></div>
                     </a>
                 </nav>
                 
                 <!-- User Profile -->
-                <div class="p-4 border-t border-white/5">
-                    <div class="glass p-4 rounded-xl flex items-center gap-3 group cursor-pointer hover:bg-white/5 transition-colors">
-                        <div class="w-10 h-10 rounded-full bg-gradient-to-br from-slate-700 to-slate-600 flex items-center justify-center border-2 border-dark-900 shadow-sm">
-                            <i class="fas fa-user text-slate-300"></i>
+                <div class="p-4 border-t border-white/5 bg-dark-900/50">
+                    <div class="flex items-center gap-3">
+                        <div class="w-9 h-9 rounded-full bg-gradient-to-tr from-slate-700 to-slate-600 flex items-center justify-center border border-white/10">
+                            <span class="text-xs font-bold text-white">U#</span>
                         </div>
                         <div class="flex-1 min-w-0">
-                            <p class="text-sm font-semibold text-white truncate">User #{{ userId }}</p>
-                            <p class="text-xs text-green-400 flex items-center gap-1">
-                                <span class="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse"></span> Online
-                            </p>
+                            <p class="text-xs font-semibold text-white truncate">User ID: {{ userId }}</p>
+                            <p class="text-[10px] text-success-500 font-mono">● SYSTEM ACTIVE</p>
                         </div>
-                        <button @click="logout" class="text-slate-500 hover:text-red-400 transition-colors p-2 rounded-lg hover:bg-white/5" title="Logout">
-                            <i class="fas fa-sign-out-alt"></i>
+                        <button @click="logout" class="text-slate-500 hover:text-danger-500 transition-colors p-2" title="Terminate Session">
+                            <i class="fas fa-power-off text-sm"></i>
                         </button>
                     </div>
                 </div>
             </aside>
             
             <!-- Mobile Overlay -->
-            <div v-if="mobileMenuOpen" @click="mobileMenuOpen = false" class="fixed inset-0 bg-black/50 z-40 backdrop-blur-sm md:hidden"></div>
+            <div v-if="mobileMenuOpen" @click="mobileMenuOpen = false" class="fixed inset-0 bg-black/60 z-40 backdrop-blur-sm md:hidden"></div>
 
             <!-- Content Area -->
-            <main class="flex-1 flex flex-col min-w-0 bg-dark-900 relative">
+            <main class="flex-1 flex flex-col min-w-0 bg-dark-950 relative">
                 <!-- Topbar -->
-                <header class="h-20 border-b border-white/5 flex items-center justify-between px-4 md:px-8 bg-dark-900/80 backdrop-blur-md sticky top-0 z-30">
+                <header class="h-20 border-b border-white/5 flex items-center justify-between px-6 md:px-10 bg-dark-950/80 backdrop-blur-md sticky top-0 z-30">
                     <div class="flex items-center gap-4">
                         <button @click="mobileMenuOpen = true" class="md:hidden text-slate-400 hover:text-white p-2">
-                            <i class="fas fa-bars text-xl"></i>
+                            <i class="fas fa-bars"></i>
                         </button>
                         <div>
-                            <h2 class="text-xl font-bold text-white hidden md:block">{{ currentTitle }}</h2>
-                            <p class="text-sm text-slate-400 hidden md:block">{{ currentDate }}</p>
+                            <h2 class="text-lg font-bold text-white tracking-tight">{{ currentTitle }}</h2>
+                            <p class="text-xs text-slate-500 font-mono mt-0.5">{{ currentDate }}</p>
                         </div>
                     </div>
                     
-                    <div class="flex items-center gap-3">
-                        <button @click="fetchData" :class="['p-2.5 rounded-xl bg-dark-800 text-slate-400 hover:text-white hover:bg-dark-700 transition-all border border-white/5', {'animate-spin text-brand-500': isLoading}]" title="Refresh Data">
+                    <div class="flex items-center gap-4">
+                        <div class="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full bg-dark-800 border border-white/5">
+                            <span class="w-2 h-2 rounded-full bg-success-500 animate-pulse"></span>
+                            <span class="text-[10px] font-mono text-slate-400">LIVE DATA</span>
+                        </div>
+                        <button @click="toggleTheme" class="p-2 text-slate-400 hover:text-white transition-colors">
+                            <i class="fas fa-moon"></i>
+                        </button>
+                        <button @click="fetchData" :class="['p-2 text-slate-400 hover:text-brand-400 transition-colors', {'animate-spin': isLoading}]">
                             <i class="fas fa-sync-alt"></i>
                         </button>
-                        <div class="h-8 w-[1px] bg-white/10 mx-1"></div>
-                        <span class="text-sm font-medium px-3 py-1.5 rounded-full bg-green-500/10 text-green-400 border border-green-500/20">
-                            v2.1 Pro
-                        </span>
                     </div>
                 </header>
 
                 <!-- Scrollable View -->
-                <div class="flex-1 overflow-y-auto p-4 md:p-8 scroll-smooth custom-scrollbar">
+                <div class="flex-1 overflow-y-auto p-6 md:p-10 scroll-smooth custom-scrollbar">
                     <div class="max-w-7xl mx-auto space-y-8">
                         
                         <!-- DASHBOARD VIEW -->
-                        <div v-if="currentView === 'dashboard'" class="space-y-6 animate-fade-in">
-                            <!-- Stats Cards -->
+                        <transition name="slide" mode="out-in">
+                        <div v-if="currentView === 'dashboard'" class="space-y-8" key="dashboard">
+                            <!-- KPI Cards -->
                             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                                <!-- Income -->
-                                <div class="glass p-6 rounded-2xl relative overflow-hidden group hover:bg-white/5 transition-all duration-300">
-                                    <div class="absolute right-0 top-0 p-3 opacity-5 group-hover:opacity-10 transition-opacity transform group-hover:scale-110 duration-500">
-                                        <i class="fas fa-wallet text-8xl text-green-500"></i>
-                                    </div>
-                                    <div class="flex items-center gap-4 mb-4">
-                                        <div class="w-12 h-12 rounded-xl bg-green-500/20 flex items-center justify-center text-green-500 text-xl">
-                                            <i class="fas fa-arrow-down"></i>
-                                        </div>
+                                <div v-for="(card, index) in kpiCards" :key="index" class="glass-card p-6 rounded-2xl relative overflow-hidden group">
+                                    <div class="flex justify-between items-start mb-4">
                                         <div>
-                                            <p class="text-slate-400 text-sm font-medium">Pemasukan</p>
-                                            <h3 class="text-2xl font-bold text-white">Rp {{ formatNumber(stats.total_income) }}</h3>
+                                            <p class="text-slate-400 text-xs font-medium uppercase tracking-wider">{{ card.label }}</p>
+                                            <h3 class="text-2xl font-bold text-white mt-1 font-mono tracking-tight">{{ formatCurrency(card.value) }}</h3>
+                                        </div>
+                                        <div :class="['p-2 rounded-lg bg-opacity-10', card.colorClass]">
+                                            <i :class="[card.icon, card.textClass]"></i>
                                         </div>
                                     </div>
-                                    <div class="w-full bg-dark-900/50 rounded-full h-1.5 mb-2 overflow-hidden">
-                                        <div class="bg-green-500 h-1.5 rounded-full" style="width: 75%"></div>
+                                    <div class="flex items-center gap-2 text-xs">
+                                        <span :class="['font-medium', card.trend > 0 ? 'text-success-500' : 'text-danger-500']">
+                                            <i :class="['fas', card.trend > 0 ? 'fa-arrow-up' : 'fa-arrow-down']"></i> {{ Math.abs(card.trend) }}%
+                                        </span>
+                                        <span class="text-slate-600">vs last month</span>
                                     </div>
-                                    <p class="text-green-400 text-xs font-medium">+12% vs bulan lalu</p>
-                                </div>
-                                
-                                <!-- Expense -->
-                                <div class="glass p-6 rounded-2xl relative overflow-hidden group hover:bg-white/5 transition-all duration-300">
-                                    <div class="absolute right-0 top-0 p-3 opacity-5 group-hover:opacity-10 transition-opacity transform group-hover:scale-110 duration-500">
-                                        <i class="fas fa-money-bill-wave text-8xl text-red-500"></i>
-                                    </div>
-                                    <div class="flex items-center gap-4 mb-4">
-                                        <div class="w-12 h-12 rounded-xl bg-red-500/20 flex items-center justify-center text-red-500 text-xl">
-                                            <i class="fas fa-arrow-up"></i>
-                                        </div>
-                                        <div>
-                                            <p class="text-slate-400 text-sm font-medium">Pengeluaran</p>
-                                            <h3 class="text-2xl font-bold text-white">Rp {{ formatNumber(stats.total_expense) }}</h3>
-                                        </div>
-                                    </div>
-                                    <div class="w-full bg-dark-900/50 rounded-full h-1.5 mb-2 overflow-hidden">
-                                        <div class="bg-red-500 h-1.5 rounded-full" :style="`width: ${Math.min((stats.total_expense / (stats.total_income || 1)) * 100, 100)}%`"></div>
-                                    </div>
-                                    <p class="text-red-400 text-xs font-medium">{{ ((stats.total_expense / (stats.total_income || 1)) * 100).toFixed(1) }}% dari income</p>
-                                </div>
-
-                                <!-- Balance -->
-                                <div class="glass p-6 rounded-2xl relative overflow-hidden group hover:bg-white/5 transition-all duration-300 border-t-2 border-brand-500">
-                                    <div class="absolute right-0 top-0 p-3 opacity-5 group-hover:opacity-10 transition-opacity transform group-hover:scale-110 duration-500">
-                                        <i class="fas fa-vault text-8xl text-brand-500"></i>
-                                    </div>
-                                    <div class="flex items-center gap-4 mb-4">
-                                        <div class="w-12 h-12 rounded-xl bg-brand-500/20 flex items-center justify-center text-brand-500 text-xl">
-                                            <i class="fas fa-balance-scale"></i>
-                                        </div>
-                                        <div>
-                                            <p class="text-slate-400 text-sm font-medium">Cashflow Bersih</p>
-                                            <h3 class="text-2xl font-bold text-white">Rp {{ formatNumber(stats.total_income - stats.total_expense) }}</h3>
-                                        </div>
-                                    </div>
-                                    <p class="text-brand-400 text-xs font-medium bg-brand-500/10 inline-block px-2 py-1 rounded">
-                                        <i class="fas fa-check-circle mr-1"></i> Kondisi Aman
-                                    </p>
+                                    <!-- Decorative Glow -->
+                                    <div class="absolute -right-6 -bottom-6 w-24 h-24 bg-gradient-to-br from-white/5 to-transparent rounded-full blur-2xl group-hover:bg-brand-500/10 transition-colors duration-500"></div>
                                 </div>
                             </div>
 
                             <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                                <!-- Chart Section -->
-                                <div class="lg:col-span-2 glass p-6 rounded-2xl">
-                                    <div class="flex items-center justify-between mb-6">
-                                        <h3 class="text-lg font-bold text-white">Breakdown Pengeluaran</h3>
-                                        <button class="text-xs bg-dark-800 hover:bg-dark-700 text-slate-300 px-3 py-1.5 rounded-lg transition-colors">
-                                            Bulan Ini <i class="fas fa-chevron-down ml-1"></i>
-                                        </button>
+                                <!-- Main Chart -->
+                                <div class="lg:col-span-2 glass-panel p-6 rounded-2xl">
+                                    <div class="flex items-center justify-between mb-8">
+                                        <h3 class="text-sm font-bold text-white uppercase tracking-wider">Expense Distribution</h3>
+                                        <div class="flex gap-2">
+                                            <span class="w-3 h-3 rounded-full bg-brand-500"></span>
+                                            <span class="text-xs text-slate-400">Current Period</span>
+                                        </div>
                                     </div>
-                                    <div class="h-72 w-full flex items-center justify-center relative">
+                                    <div class="h-80 w-full relative flex items-center justify-center">
                                         <canvas id="expenseChart"></canvas>
-                                        <div v-if="transactions.length === 0" class="absolute inset-0 flex items-center justify-center text-slate-500 text-sm">
-                                            Belum ada data
+                                        <div v-if="!hasData" class="absolute inset-0 flex flex-col items-center justify-center text-slate-600">
+                                            <i class="fas fa-chart-pie text-4xl mb-2 opacity-50"></i>
+                                            <span class="text-xs font-mono">NO DATA AVAILABLE</span>
                                         </div>
                                     </div>
                                 </div>
 
-                                <!-- Recent Transactions List -->
-                                <div class="glass p-0 rounded-2xl overflow-hidden flex flex-col">
-                                    <div class="p-6 border-b border-white/5 flex justify-between items-center">
-                                        <h3 class="text-lg font-bold text-white">Transaksi Terakhir</h3>
-                                        <button @click="setView('transactions')" class="text-xs text-brand-400 hover:text-brand-300 font-medium">Lihat Semua</button>
+                                <!-- Recent Activity -->
+                                <div class="glass-panel p-0 rounded-2xl overflow-hidden flex flex-col">
+                                    <div class="p-6 border-b border-white/5 flex justify-between items-center bg-white/2">
+                                        <h3 class="text-sm font-bold text-white uppercase tracking-wider">Recent Activity</h3>
+                                        <button @click="setView('transactions')" class="text-xs text-brand-400 hover:text-white transition-colors">View All</button>
                                     </div>
-                                    <div class="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-3 max-h-[350px]">
-                                        <div v-for="tx in transactions.slice(0, 5)" :key="tx.id" class="flex items-center gap-4 p-3 rounded-xl hover:bg-white/5 transition-colors group">
-                                            <div :class="['w-10 h-10 rounded-full flex items-center justify-center text-lg shrink-0 transition-transform group-hover:scale-110', tx.type === 'expense' ? 'bg-red-500/10 text-red-500' : 'bg-green-500/10 text-green-500']">
+                                    <div class="flex-1 overflow-y-auto custom-scrollbar p-2">
+                                        <div v-if="transactions.length === 0" class="p-8 text-center text-slate-600 text-xs font-mono">No recent activity found.</div>
+                                        <div v-for="tx in transactions.slice(0, 6)" :key="tx.id" 
+                                            class="flex items-center gap-3 p-3 rounded-xl hover:bg-white/5 transition-all cursor-default group border border-transparent hover:border-white/5">
+                                            <div :class="['w-10 h-10 rounded-lg flex items-center justify-center text-lg shrink-0 transition-colors', tx.type === 'expense' ? 'bg-danger-500/10 text-danger-500 group-hover:bg-danger-500/20' : 'bg-success-500/10 text-success-500 group-hover:bg-success-500/20']">
                                                 <i :class="getCategoryIcon(tx.category)"></i>
                                             </div>
                                             <div class="flex-1 min-w-0">
-                                                <h4 class="text-sm font-semibold text-white truncate">{{ tx.description || tx.category }}</h4>
-                                                <p class="text-xs text-slate-500">{{ formatDate(tx.date) }} • {{ tx.category }}</p>
-                                            </div>
-                                            <div class="text-right">
-                                                <p :class="['text-sm font-bold', tx.type === 'expense' ? 'text-red-400' : 'text-green-400']">
-                                                    {{ tx.type === 'expense' ? '-' : '+' }} {{ formatNumberCompact(tx.amount) }}
-                                                </p>
+                                                <div class="flex justify-between items-baseline mb-0.5">
+                                                    <h4 class="text-sm font-medium text-white truncate group-hover:text-brand-400 transition-colors">{{ tx.description || tx.category }}</h4>
+                                                    <span :class="['text-xs font-mono font-bold', tx.type === 'expense' ? 'text-danger-500' : 'text-success-500']">
+                                                        {{ tx.type === 'expense' ? '-' : '+' }}{{ formatCompact(tx.amount) }}
+                                                    </span>
+                                                </div>
+                                                <div class="flex justify-between items-center">
+                                                    <span class="text-[10px] text-slate-500 font-medium px-1.5 py-0.5 rounded bg-dark-800 border border-white/5">{{ tx.category }}</span>
+                                                    <span class="text-[10px] text-slate-600">{{ formatDateRelative(tx.date) }}</span>
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
                                 </div>
                             </div>
                         </div>
+                        </transition>
 
                         <!-- TRANSACTIONS VIEW -->
-                        <div v-if="currentView === 'transactions'" class="glass rounded-2xl overflow-hidden animate-fade-in">
-                            <div class="p-6 border-b border-white/5 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                                <h3 class="text-lg font-bold text-white">Riwayat Transaksi</h3>
-                                <div class="flex items-center gap-3">
-                                    <div class="relative">
-                                        <i class="fas fa-search absolute left-3 top-2.5 text-slate-500"></i>
-                                        <input type="text" placeholder="Cari transaksi..." class="bg-dark-900 border border-dark-700 text-sm rounded-xl pl-10 pr-4 py-2 text-white focus:ring-2 focus:ring-brand-500 w-full md:w-64 outline-none">
+                        <transition name="slide" mode="out-in">
+                        <div v-if="currentView === 'transactions'" class="glass-panel rounded-2xl overflow-hidden" key="transactions">
+                            <div class="p-6 border-b border-white/5 flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white/2">
+                                <h3 class="text-sm font-bold text-white uppercase tracking-wider">Transaction Ledger</h3>
+                                <div class="flex items-center gap-3 w-full md:w-auto">
+                                    <div class="relative flex-1 md:flex-none group">
+                                        <i class="fas fa-search absolute left-3 top-2.5 text-slate-600 group-focus-within:text-brand-500 transition-colors"></i>
+                                        <input type="text" placeholder="Search ledger..." class="bg-dark-900 border border-dark-700 text-xs rounded-lg pl-9 pr-4 py-2 text-white focus:ring-1 focus:ring-brand-500 focus:border-brand-500 w-full md:w-64 outline-none placeholder-slate-600 transition-all">
                                     </div>
-                                    <button class="p-2 bg-dark-800 rounded-xl text-slate-400 hover:text-white border border-dark-700">
-                                        <i class="fas fa-filter"></i>
+                                    <button class="p-2 bg-dark-800 rounded-lg text-slate-400 hover:text-white border border-dark-700 hover:border-brand-500/50 transition-all">
+                                        <i class="fas fa-filter text-xs"></i>
                                     </button>
                                 </div>
                             </div>
                             <div class="overflow-x-auto">
                                 <table class="w-full text-sm text-left text-slate-400">
-                                    <thead class="text-xs text-slate-500 uppercase bg-dark-900/50 font-semibold tracking-wider">
+                                    <thead class="text-xs text-slate-500 uppercase bg-dark-900/80 font-bold tracking-wider">
                                         <tr>
-                                            <th class="px-6 py-4">Tanggal</th>
-                                            <th class="px-6 py-4">Kategori</th>
-                                            <th class="px-6 py-4">Deskripsi</th>
-                                            <th class="px-6 py-4 text-right">Nominal</th>
-                                            <th class="px-6 py-4 text-center">Tipe</th>
+                                            <th class="px-6 py-4">Date</th>
+                                            <th class="px-6 py-4">Category</th>
+                                            <th class="px-6 py-4">Description</th>
+                                            <th class="px-6 py-4 text-right">Amount</th>
+                                            <th class="px-6 py-4 text-center">Status</th>
                                         </tr>
                                     </thead>
                                     <tbody class="divide-y divide-white/5">
+                                        <tr v-if="transactions.length === 0">
+                                            <td colspan="5" class="px-6 py-8 text-center text-slate-600 font-mono text-xs">No records found</td>
+                                        </tr>
                                         <tr v-for="tx in transactions" :key="tx.id" class="hover:bg-white/5 transition-colors group">
-                                            <td class="px-6 py-4 whitespace-nowrap text-slate-300">{{ formatDate(tx.date) }}</td>
+                                            <td class="px-6 py-4 whitespace-nowrap font-mono text-xs text-slate-500">{{ formatDate(tx.date) }}</td>
                                             <td class="px-6 py-4">
-                                                <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-dark-800 border border-white/5 text-slate-300 group-hover:border-white/10 transition-colors">
-                                                    <i :class="[getCategoryIcon(tx.category), 'text-[10px] opacity-70']"></i> {{ tx.category }}
+                                                <span class="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-dark-800 border border-white/5 text-[10px] font-bold uppercase tracking-wide text-slate-300 group-hover:border-brand-500/30 transition-colors">
+                                                    <i :class="[getCategoryIcon(tx.category), 'text-brand-500']"></i> {{ tx.category }}
                                                 </span>
                                             </td>
-                                            <td class="px-6 py-4 text-white font-medium">{{ tx.description || '-' }}</td>
-                                            <td :class="['px-6 py-4 text-right font-bold tabular-nums', tx.type === 'expense' ? 'text-red-400' : 'text-green-400']">
-                                                {{ tx.type === 'expense' ? '-' : '+' }} Rp {{ formatNumber(tx.amount) }}
+                                            <td class="px-6 py-4 text-slate-300 font-medium">{{ tx.description || 'Unspecified Transaction' }}</td>
+                                            <td class="px-6 py-4 text-right font-mono font-bold tracking-tight" :class="tx.type === 'expense' ? 'text-danger-400' : 'text-success-400'">
+                                                {{ tx.type === 'expense' ? '-' : '+' }}{{ formatCurrency(tx.amount) }}
                                             </td>
                                             <td class="px-6 py-4 text-center">
-                                                <span :class="['px-2 py-1 rounded text-[10px] uppercase font-bold tracking-wide', tx.type === 'expense' ? 'bg-red-500/10 text-red-500' : 'bg-green-500/10 text-green-500']">
-                                                    {{ tx.type }}
-                                                </span>
+                                                <i class="fas fa-check-circle text-success-500/50 text-xs"></i>
                                             </td>
                                         </tr>
                                     </tbody>
                                 </table>
                             </div>
-                            <!-- Pagination -->
-                            <div class="p-4 border-t border-white/5 flex justify-center">
-                                <button class="text-xs text-brand-400 hover:text-white font-medium">Muat Lebih Banyak</button>
-                            </div>
                         </div>
+                        </transition>
 
                     </div>
                 </div>
             </main>
         </div>
+        </transition>
     </div>
 
     <script>
-        const { createApp, ref, onMounted, computed, watch } = Vue;
+        const { createApp, ref, computed, watch } = Vue;
 
         createApp({
             setup() {
@@ -390,37 +373,49 @@
                 const transactions = ref([]);
                 
                 const menuItems = [
-                    { id: 'dashboard', label: 'Dashboard', icon: 'fas fa-th-large' },
-                    { id: 'transactions', label: 'Transaksi', icon: 'fas fa-exchange-alt' },
-                    { id: 'analysis', label: 'Analisis AI', icon: 'fas fa-magic' },
-                    { id: 'settings', label: 'Pengaturan', icon: 'fas fa-sliders-h' }
+                    { id: 'dashboard', label: 'Overview', icon: 'fas fa-layer-group' },
+                    { id: 'transactions', label: 'Ledger', icon: 'fas fa-table' },
+                    { id: 'analysis', label: 'Intelligence', icon: 'fas fa-brain' },
+                    { id: 'settings', label: 'System', icon: 'fas fa-cog' }
                 ];
 
-                const currentTitle = computed(() => {
-                    return menuItems.find(i => i.id === currentView.value)?.label || 'Dashboard';
+                const kpiCards = computed(() => {
+                    const balance = stats.value.total_income - stats.value.total_expense;
+                    return [
+                        { label: 'Total Revenue', value: stats.value.total_income, icon: 'fas fa-arrow-down', colorClass: 'bg-success-500/10', textClass: 'text-success-500', trend: 12.5 },
+                        { label: 'Total Expenses', value: stats.value.total_expense, icon: 'fas fa-arrow-up', colorClass: 'bg-danger-500/10', textClass: 'text-danger-500', trend: -2.4 },
+                        { label: 'Net Cashflow', value: balance, icon: 'fas fa-wallet', colorClass: 'bg-brand-500/10', textClass: 'text-brand-500', trend: 8.1 }
+                    ];
                 });
 
-                const currentDate = new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+                const currentTitle = computed(() => menuItems.find(i => i.id === currentView.value)?.label || 'Dashboard');
+                const currentDate = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+                const hasData = computed(() => transactions.value.length > 0);
+
+                // --- API Methods ---
+                const api = axios.create({
+                    baseURL: '/',
+                    timeout: 10000
+                });
 
                 const login = async () => {
-                    if (!token.value) { error.value = 'Token tidak boleh kosong'; return; }
+                    if (!token.value) return;
                     isLoading.value = true;
                     error.value = '';
                     
                     try {
-                        const res = await axios.get('/auth/verify', {
-                            headers: { 'Authorization': `Bearer ${token.value}` }
-                        });
+                        // Simulate delay for effect
+                        await new Promise(r => setTimeout(r, 800));
+                        const res = await api.get('/auth/verify', { headers: { 'Authorization': `Bearer ${token.value}` } });
                         
                         if (res.data.status === 'ok') {
                             isAuthenticated.value = true;
                             userId.value = res.data.user_id;
                             localStorage.setItem('finbot_token', token.value);
-                            await fetchData();
+                            fetchData();
                         }
                     } catch (e) {
-                        error.value = 'Token tidak valid atau kadaluarsa';
-                        isAuthenticated.value = false;
+                        error.value = 'Invalid authentication credentials';
                         localStorage.removeItem('finbot_token');
                     } finally {
                         isLoading.value = false;
@@ -437,48 +432,42 @@
                     isLoading.value = true;
                     try {
                         const headers = { 'Authorization': `Bearer ${token.value}` };
-                        
                         const date = new Date();
-                        const reportRes = await axios.get(`/reports/monthly?month=${date.getMonth() + 1}&year=${date.getFullYear()}`, { headers });
-                        stats.value = reportRes.data;
+                        
+                        const [reportRes, txRes] = await Promise.all([
+                            api.get(`/reports/monthly?month=${date.getMonth() + 1}&year=${date.getFullYear()}`, { headers }),
+                            api.get('/transactions?limit=20', { headers })
+                        ]);
 
-                        const txRes = await axios.get('/transactions?limit=20', { headers });
+                        stats.value = reportRes.data;
                         transactions.value = txRes.data;
 
-                        if (currentView.value === 'dashboard') {
-                            renderChart();
-                        }
+                        if (currentView.value === 'dashboard') setTimeout(renderChart, 300);
                     } catch (e) {
-                        console.error(e);
-                        if (e.response && e.response.status === 401) logout();
+                        if (e.response?.status === 401) logout();
                     } finally {
                         isLoading.value = false;
                     }
                 };
 
-                const formatNumber = (num) => new Intl.NumberFormat('id-ID').format(num);
-                const formatNumberCompact = (num) => new Intl.NumberFormat('id-ID', { notation: "compact", compactDisplay: "short" }).format(num);
-
-                const formatDate = (dateStr) => {
-                    if (!dateStr) return '-';
-                    const date = new Date(dateStr);
-                    return date.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+                // --- Formatting ---
+                const formatCurrency = (val) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(val);
+                const formatCompact = (val) => new Intl.NumberFormat('id-ID', { notation: "compact", compactDisplay: "short" }).format(val);
+                const formatDate = (d) => new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                const formatDateRelative = (d) => {
+                    const diff = new Date() - new Date(d);
+                    const hours = Math.floor(diff / 3600000);
+                    if (hours < 24) return `${hours}h ago`;
+                    return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
                 };
 
                 const getCategoryIcon = (cat) => {
                     const map = {
-                        'Makanan': 'fas fa-utensils',
-                        'Minuman': 'fas fa-coffee',
-                        'Jajanan': 'fas fa-cookie-bite',
-                        'Transportasi': 'fas fa-car-side',
-                        'Belanja': 'fas fa-shopping-bag',
-                        'Tagihan': 'fas fa-file-invoice-dollar',
-                        'Gaji': 'fas fa-wallet',
-                        'Kesehatan': 'fas fa-heartbeat',
-                        'Investasi': 'fas fa-chart-line',
-                        'Pendidikan': 'fas fa-graduation-cap'
+                        'Makanan': 'fas fa-utensils', 'Minuman': 'fas fa-coffee', 'Jajanan': 'fas fa-cookie',
+                        'Transportasi': 'fas fa-car', 'Belanja': 'fas fa-shopping-bag', 'Tagihan': 'fas fa-bolt',
+                        'Gaji': 'fas fa-coins', 'Investasi': 'fas fa-chart-line'
                     };
-                    return map[cat] || 'fas fa-tag';
+                    return map[cat] || 'fas fa-circle';
                 };
 
                 const setView = (view) => {
@@ -486,69 +475,57 @@
                     mobileMenuOpen.value = false;
                 };
 
-                let chartInstance = null;
+                const toggleTheme = () => {
+                    // Future implementation
+                };
+
+                // --- Chart ---
+                let chart = null;
                 const renderChart = () => {
                     const ctx = document.getElementById('expenseChart');
-                    if (!ctx) return;
-                    
-                    if (chartInstance) chartInstance.destroy();
+                    if (!ctx || !hasData.value) return;
+                    if (chart) chart.destroy();
 
-                    const categories = {};
-                    transactions.value.filter(t => t.type === 'expense').forEach(t => {
-                        categories[t.category] = (categories[t.category] || 0) + t.amount;
-                    });
-                    
-                    if (Object.keys(categories).length === 0) return;
+                    const cats = {};
+                    transactions.value.filter(t => t.type === 'expense').forEach(t => cats[t.category] = (cats[t.category] || 0) + t.amount);
 
-                    chartInstance = new Chart(ctx, {
+                    chart = new Chart(ctx, {
                         type: 'doughnut',
                         data: {
-                            labels: Object.keys(categories),
+                            labels: Object.keys(cats),
                             datasets: [{
-                                data: Object.values(categories),
-                                backgroundColor: [
-                                    '#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#6366f1'
-                                ],
+                                data: Object.values(cats),
+                                backgroundColor: ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'],
                                 borderWidth: 0,
-                                hoverOffset: 10
+                                hoverOffset: 15
                             }]
                         },
                         options: {
                             responsive: true,
                             maintainAspectRatio: false,
-                            cutout: '75%',
+                            cutout: '80%',
                             plugins: {
-                                legend: { 
-                                    position: 'right', 
-                                    labels: { 
-                                        color: '#94a3b8', 
-                                        font: { family: 'Inter', size: 11 },
-                                        usePointStyle: true,
-                                        pointStyle: 'circle',
-                                        padding: 15
-                                    } 
+                                legend: {
+                                    position: 'right',
+                                    labels: { color: '#94a3b8', font: { family: 'Inter', size: 12 }, padding: 20, usePointStyle: true }
                                 }
-                            }
+                            },
+                            animation: { animateScale: true, animateRotate: true }
                         }
                     });
                 };
 
-                watch(currentView, () => {
-                    if (currentView.value === 'dashboard') {
-                        setTimeout(renderChart, 100);
-                    }
+                watch(currentView, (val) => {
+                    if (val === 'dashboard') setTimeout(renderChart, 300);
                 });
 
-                if (token.value) {
-                    login();
-                }
+                if (token.value) login();
 
                 return {
                     token, isAuthenticated, isLoading, error, userId, currentView, mobileMenuOpen,
-                    menuItems, currentTitle, currentDate,
-                    stats, transactions,
-                    login, logout, fetchData, setView,
-                    formatNumber, formatNumberCompact, formatDate, getCategoryIcon
+                    menuItems, currentTitle, currentDate, kpiCards, transactions, hasData,
+                    login, logout, fetchData, setView, toggleTheme,
+                    formatCurrency, formatCompact, formatDate, formatDateRelative, getCategoryIcon
                 };
             }
         }).mount('#app');

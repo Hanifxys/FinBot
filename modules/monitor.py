@@ -114,6 +114,14 @@ async def health_check():
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE
     )
 
+# --- Serve index.html for root path ---
+@app.get("/")
+async def serve_spa():
+    index_path = os.path.join(static_dir, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    return {"message": "FinBot Dashboard API is running. Static files not found."}
+
 @app.get("/stats")
 def get_stats():
     """Quick diagnostic for premium engine"""
