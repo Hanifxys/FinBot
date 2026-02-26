@@ -156,7 +156,6 @@ def get_current_user(
             raise HTTPException(status_code=401, detail="Invalid authorization type")
         
         token = token.strip()
-        logger.info(f"Auth attempt: token={token[:5]}... (full_len={len(token)})")
     except ValueError:
         logger.warning(f"Auth failed: Malformed Authorization header: {authorization}")
         raise HTTPException(status_code=401, detail="Malformed Authorization header")
