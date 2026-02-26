@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import gc
+import asyncio
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field, validator
 from groq import AsyncGroq
