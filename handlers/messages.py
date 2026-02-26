@@ -557,6 +557,10 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
         confidence = classification.get("confidence", 0.0)
 
         # 2. Dispatch Based on Intent
+        if intent == "STOP_NOTIF":
+             await update.message.reply_text("Siap! Aku bakal kurangi frekuensi daily digest kamu. Pengaturan notifikasi bisa kamu atur lebih detail di `/settings` ya.")
+             return
+
         if intent == "CANCEL":
              # This is handled inside _handle_pending_states usually, but explicit intent is safer
              context.user_data.pop("state", None)

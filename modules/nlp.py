@@ -101,6 +101,12 @@ class NLPProcessor:
             "set_gaji": re.compile(r'\b(set|atur|ubah|ganti|masukkan).*(gaji|pemasukan|income|pendapatan)\b', re.IGNORECASE),
         }
 
+        # New: Command-like patterns for feedback and control
+        self._control_patterns = {
+            "STOP_NOTIF": re.compile(r'\b(jangan|janganlah|stop|berhenti|henti|ga usah|gak usah|kurangi|kurangin|matiin|matikan).*(daily|digest|notif|notifikasi|pesan|laporan|sering|digestnya)\b', re.IGNORECASE),
+            "ASK_FOR_NOTIF": re.compile(r'\b(kapan|jadwal|jam berapa|aktifin|nyalain|hidupin).*(daily|digest|notif|notifikasi)\b', re.IGNORECASE),
+        }
+
     @property
     def client(self):
         """Lazy load Groq client to save memory on startup"""
@@ -168,6 +174,11 @@ class NLPProcessor:
         """
         normalized_text = self.normalize_text(text)
         
+        # 0. Quick Control/Feedback check (High Priority)
+        for intent, pattern in self._control_patterns.items():
+            if pattern.search(normalized_text):
+                return {"intent": intent, "confidence": 1.0}
+
         # 1. Handle Critical States (Edit/Cancel) - Priority 1
         if state.startswith("WAITING_EDIT"):
             if any(kw in normalized_text for kw in ["batal", "cancel", "gak jadi", "stop", "abaikan"]):
