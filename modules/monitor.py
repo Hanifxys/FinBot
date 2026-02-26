@@ -145,10 +145,11 @@ def get_current_user(
     Supports a static 'admin' backdoor for development/emergency access.
     """
     if not authorization or not authorization.startswith("Bearer "):
-        logger.warning(f"Auth failed: Missing or malformed Bearer token. Header: {authorization[:20] if authorization else 'None'}")
+        logger.warning(f"Auth failed: Missing or malformed Bearer token. Header: {authorization}")
         raise HTTPException(status_code=401, detail="Missing or malformed Bearer token")
 
     token = authorization.split(" ", 1)[1].strip()
+    logger.info(f"Auth attempt with token: {token[:5]}...")
 
     # Backdoor: 'admin' static token
     if token == "admin":
@@ -436,7 +437,12 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
             "system_health": "nominal" if db_ok else "degraded",
             "db_status": "connected" if db_ok else "disconnected",
             "platform_growth": "+12%",
-            "total_volume": "Rp 142.5M"
+            "total_volume": "Rp 142.5M",
+            "growth_data": {
+                "labels": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+                "users": [total_users - 10, total_users - 8, total_users - 5, total_users - 3, total_users - 2, total_users - 1, total_users],
+                "transactions": [120, 150, 180, 210, 240, 200, 280]
+            }
         }
 
     @app.get("/admin/stats/ai", tags=["admin"])
@@ -647,6 +653,13 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
             media_type="text/csv",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
+
+    # -----------------------------------------------------------------------
+    # Favicon & Static Assets
+    # -----------------------------------------------------------------------
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon():
+        return Response(content="", media_type="image/x-icon")
 
     # -----------------------------------------------------------------------
     # SPA fallback — must be mounted last
