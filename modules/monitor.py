@@ -1,5 +1,7 @@
 from fastapi import FastAPI, Response, status, Depends, HTTPException
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import uvicorn
 import threading
@@ -8,7 +10,16 @@ import logging
 import json
 from typing import Optional, Dict, Any
 
-app = FastAPI(title="FinBot Pro Monitoring")
+app = FastAPI(title="FinBot Pro Dashboard")
+
+# CORS for development
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # --- Dependency placeholders to avoid circular import ---
 _db = None
@@ -201,6 +212,11 @@ def export_csv(authorization: Optional[str] = None):
     if not result:
         raise HTTPException(status_code=404, detail="No transactions to export")
     return FileResponse(filepath, filename=filename, media_type="text/csv")
+
+# Mount Static Files (Frontend)
+static_dir = os.path.join(os.getcwd(), "web", "static")
+if os.path.exists(static_dir):
+    app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
 
 def start_monitor():
     port = int(os.getenv("PORT", 8000))

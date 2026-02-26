@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="id" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FinBot Pro Dashboard</title>
+    
+    <!-- Scripts & Styles -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        dark: {
+                            900: '#0f172a',
+                            800: '#1e293b',
+                            700: '#334155',
+                            600: '#475569'
+                        },
+                        brand: {
+                            500: '#3b82f6',
+                            600: '#2563eb'
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        body { font-family: 'Inter', sans-serif; @apply bg-dark-900 text-slate-200; }
+        
+        /* Glassmorphism */
+        .glass { 
+            background: rgba(30, 41, 59, 0.4); 
+            backdrop-filter: blur(12px); 
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.05); 
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
+        }
+        
+        /* Animations */
+        @keyframes blob {
+            0% { transform: translate(0px, 0px) scale(1); }
+            33% { transform: translate(30px, -50px) scale(1.1); }
+            66% { transform: translate(-20px, 20px) scale(0.9); }
+            100% { transform: translate(0px, 0px) scale(1); }
+        }
+        .animate-blob { animation: blob 7s infinite; }
+        .animation-delay-2000 { animation-delay: 2s; }
+        .animation-delay-4000 { animation-delay: 4s; }
+        
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+        .sidebar-link { @apply relative overflow-hidden; }
+        .sidebar-link::after {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            height: 100%;
+            width: 3px;
+            background: #3b82f6;
+            transform: scaleY(0);
+            transition: transform 0.2s;
+        }
+        .sidebar-link.active::after { transform: scaleY(1); }
+        .sidebar-link.active { @apply bg-brand-500/10 text-brand-500; }
+    </style>
+</head>
+<body>
+    <div id="app" class="h-screen flex flex-col overflow-hidden">
+        
+        <!-- LOGIN SCREEN -->
+        <div v-if="!isAuthenticated" class="flex-1 flex items-center justify-center bg-dark-900 relative">
+            <!-- Dynamic Background -->
+            <div class="absolute inset-0 overflow-hidden pointer-events-none">
+                <div class="absolute top-0 left-1/4 w-96 h-96 bg-brand-500/20 rounded-full blur-3xl animate-blob"></div>
+                <div class="absolute bottom-0 right-1/4 w-96 h-96 bg-purple-500/20 rounded-full blur-3xl animate-blob animation-delay-2000"></div>
+                <div class="absolute top-1/2 left-1/2 w-80 h-80 bg-pink-500/20 rounded-full blur-3xl animate-blob animation-delay-4000"></div>
+            </div>
+            
+            <div class="z-10 glass p-8 md:p-10 rounded-3xl shadow-2xl w-full max-w-md border border-white/5 mx-4 transform transition-all duration-500 hover:scale-[1.01]">
+                <div class="text-center mb-8">
+                    <div class="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-gradient-to-tr from-brand-600 to-purple-600 mb-6 shadow-lg shadow-brand-500/20">
+                        <i class="fas fa-chart-pie text-4xl text-white"></i>
+                    </div>
+                    <h1 class="text-3xl font-bold text-white mb-2 tracking-tight">FinBot Pro</h1>
+                    <p class="text-slate-400">Financial Intelligence Dashboard</p>
+                </div>
+                
+                <form @submit.prevent="login" class="space-y-6">
+                    <div class="relative group">
+                        <i class="fas fa-key absolute left-4 top-3.5 text-slate-500 group-focus-within:text-brand-500 transition-colors"></i>
+                        <input v-model="token" type="password" placeholder="Tempel Access Token disini..." 
+                            class="w-full pl-12 pr-4 py-3 bg-dark-800/50 border border-dark-700 rounded-xl focus:ring-2 focus:ring-brand-500 focus:border-transparent text-white placeholder-slate-500 transition-all outline-none hover:bg-dark-800">
+                    </div>
+                    
+                    <button type="submit" :disabled="isLoading"
+                        class="w-full py-3.5 px-4 bg-gradient-to-r from-brand-600 to-purple-600 hover:from-brand-500 hover:to-purple-500 text-white font-semibold rounded-xl shadow-lg shadow-brand-500/25 transform transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                        <i v-if="isLoading" class="fas fa-circle-notch fa-spin"></i>
+                        <span v-else>Masuk Dashboard</span>
+                        <i v-if="!isLoading" class="fas fa-arrow-right text-sm opacity-70"></i>
+                    </button>
+                    
+                    <div class="text-center">
+                        <p class="text-xs text-slate-500">
+                            Belum punya token? Ketik <span class="bg-dark-800 px-1.5 py-0.5 rounded text-brand-500 font-mono">/auth</span> di Telegram Bot.
+                        </p>
+                    </div>
+                </form>
+                
+                <div v-if="error" class="mt-6 p-4 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-sm flex items-center gap-3 animate-pulse">
+                    <i class="fas fa-exclamation-circle text-lg"></i>
+                    <span>{{ error }}</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- MAIN DASHBOARD -->
+        <div v-else class="flex-1 flex overflow-hidden bg-dark-900">
+            <!-- Sidebar -->
+            <aside :class="['fixed inset-y-0 left-0 z-50 w-72 bg-dark-800/90 backdrop-blur-xl border-r border-white/5 transition-transform duration-300 md:translate-x-0 md:static md:inset-0 flex flex-col', mobileMenuOpen ? 'translate-x-0' : '-translate-x-full']">
+                <!-- Logo -->
+                <div class="h-20 flex items-center px-8 border-b border-white/5">
+                    <div class="w-10 h-10 bg-gradient-to-tr from-brand-600 to-purple-600 rounded-xl flex items-center justify-center mr-3 shadow-lg shadow-brand-500/20">
+                        <i class="fas fa-robot text-white text-lg"></i>
+                    </div>
+                    <div>
+                        <h1 class="font-bold text-xl text-white tracking-tight">FinBot</h1>
+                        <p class="text-xs text-brand-500 font-medium tracking-wider">PRO DASHBOARD</p>
+                    </div>
+                </div>
+                
+                <!-- Navigation -->
+                <nav class="flex-1 px-4 py-6 space-y-1 overflow-y-auto">
+                    <p class="px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Menu Utama</p>
+                    <a v-for="item in menuItems" :key="item.id" @click="setView(item.id)"
+                        :class="['sidebar-link flex items-center gap-3 px-4 py-3.5 rounded-xl cursor-pointer transition-all duration-200 group font-medium', currentView === item.id ? 'active' : 'text-slate-400 hover:bg-white/5 hover:text-white']">
+                        <i :class="[item.icon, 'text-lg w-6 text-center transition-colors', currentView === item.id ? 'text-brand-500' : 'text-slate-500 group-hover:text-white']"></i>
+                        <span>{{ item.label }}</span>
+                        <i v-if="currentView === item.id" class="fas fa-chevron-right ml-auto text-xs text-brand-500"></i>
+                    </a>
+                </nav>
+                
+                <!-- User Profile -->
+                <div class="p-4 border-t border-white/5">
+                    <div class="glass p-4 rounded-xl flex items-center gap-3 group cursor-pointer hover:bg-white/5 transition-colors">
+                        <div class="w-10 h-10 rounded-full bg-gradient-to-br from-slate-700 to-slate-600 flex items-center justify-center border-2 border-dark-900 shadow-sm">
+                            <i class="fas fa-user text-slate-300"></i>
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <p class="text-sm font-semibold text-white truncate">User #{{ userId }}</p>
+                            <p class="text-xs text-green-400 flex items-center gap-1">
+                                <span class="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse"></span> Online
+                            </p>
+                        </div>
+                        <button @click="logout" class="text-slate-500 hover:text-red-400 transition-colors p-2 rounded-lg hover:bg-white/5" title="Logout">
+                            <i class="fas fa-sign-out-alt"></i>
+                        </button>
+                    </div>
+                </div>
+            </aside>
+            
+            <!-- Mobile Overlay -->
+            <div v-if="mobileMenuOpen" @click="mobileMenuOpen = false" class="fixed inset-0 bg-black/50 z-40 backdrop-blur-sm md:hidden"></div>
+
+            <!-- Content Area -->
+            <main class="flex-1 flex flex-col min-w-0 bg-dark-900 relative">
+                <!-- Topbar -->
+                <header class="h-20 border-b border-white/5 flex items-center justify-between px-4 md:px-8 bg-dark-900/80 backdrop-blur-md sticky top-0 z-30">
+                    <div class="flex items-center gap-4">
+                        <button @click="mobileMenuOpen = true" class="md:hidden text-slate-400 hover:text-white p-2">
+                            <i class="fas fa-bars text-xl"></i>
+                        </button>
+                        <div>
+                            <h2 class="text-xl font-bold text-white hidden md:block">{{ currentTitle }}</h2>
+                            <p class="text-sm text-slate-400 hidden md:block">{{ currentDate }}</p>
+                        </div>
+                    </div>
+                    
+                    <div class="flex items-center gap-3">
+                        <button @click="fetchData" :class="['p-2.5 rounded-xl bg-dark-800 text-slate-400 hover:text-white hover:bg-dark-700 transition-all border border-white/5', {'animate-spin text-brand-500': isLoading}]" title="Refresh Data">
+                            <i class="fas fa-sync-alt"></i>
+                        </button>
+                        <div class="h-8 w-[1px] bg-white/10 mx-1"></div>
+                        <span class="text-sm font-medium px-3 py-1.5 rounded-full bg-green-500/10 text-green-400 border border-green-500/20">
+                            v2.1 Pro
+                        </span>
+                    </div>
+                </header>
+
+                <!-- Scrollable View -->
+                <div class="flex-1 overflow-y-auto p-4 md:p-8 scroll-smooth custom-scrollbar">
+                    <div class="max-w-7xl mx-auto space-y-8">
+                        
+                        <!-- DASHBOARD VIEW -->
+                        <div v-if="currentView === 'dashboard'" class="space-y-6 animate-fade-in">
+                            <!-- Stats Cards -->
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                <!-- Income -->
+                                <div class="glass p-6 rounded-2xl relative overflow-hidden group hover:bg-white/5 transition-all duration-300">
+                                    <div class="absolute right-0 top-0 p-3 opacity-5 group-hover:opacity-10 transition-opacity transform group-hover:scale-110 duration-500">
+                                        <i class="fas fa-wallet text-8xl text-green-500"></i>
+                                    </div>
+                                    <div class="flex items-center gap-4 mb-4">
+                                        <div class="w-12 h-12 rounded-xl bg-green-500/20 flex items-center justify-center text-green-500 text-xl">
+                                            <i class="fas fa-arrow-down"></i>
+                                        </div>
+                                        <div>
+                                            <p class="text-slate-400 text-sm font-medium">Pemasukan</p>
+                                            <h3 class="text-2xl font-bold text-white">Rp {{ formatNumber(stats.total_income) }}</h3>
+                                        </div>
+                                    </div>
+                                    <div class="w-full bg-dark-900/50 rounded-full h-1.5 mb-2 overflow-hidden">
+                                        <div class="bg-green-500 h-1.5 rounded-full" style="width: 75%"></div>
+                                    </div>
+                                    <p class="text-green-400 text-xs font-medium">+12% vs bulan lalu</p>
+                                </div>
+                                
+                                <!-- Expense -->
+                                <div class="glass p-6 rounded-2xl relative overflow-hidden group hover:bg-white/5 transition-all duration-300">
+                                    <div class="absolute right-0 top-0 p-3 opacity-5 group-hover:opacity-10 transition-opacity transform group-hover:scale-110 duration-500">
+                                        <i class="fas fa-money-bill-wave text-8xl text-red-500"></i>
+                                    </div>
+                                    <div class="flex items-center gap-4 mb-4">
+                                        <div class="w-12 h-12 rounded-xl bg-red-500/20 flex items-center justify-center text-red-500 text-xl">
+                                            <i class="fas fa-arrow-up"></i>
+                                        </div>
+                                        <div>
+                                            <p class="text-slate-400 text-sm font-medium">Pengeluaran</p>
+                                            <h3 class="text-2xl font-bold text-white">Rp {{ formatNumber(stats.total_expense) }}</h3>
+                                        </div>
+                                    </div>
+                                    <div class="w-full bg-dark-900/50 rounded-full h-1.5 mb-2 overflow-hidden">
+                                        <div class="bg-red-500 h-1.5 rounded-full" :style="`width: ${Math.min((stats.total_expense / (stats.total_income || 1)) * 100, 100)}%`"></div>
+                                    </div>
+                                    <p class="text-red-400 text-xs font-medium">{{ ((stats.total_expense / (stats.total_income || 1)) * 100).toFixed(1) }}% dari income</p>
+                                </div>
+
+                                <!-- Balance -->
+                                <div class="glass p-6 rounded-2xl relative overflow-hidden group hover:bg-white/5 transition-all duration-300 border-t-2 border-brand-500">
+                                    <div class="absolute right-0 top-0 p-3 opacity-5 group-hover:opacity-10 transition-opacity transform group-hover:scale-110 duration-500">
+                                        <i class="fas fa-vault text-8xl text-brand-500"></i>
+                                    </div>
+                                    <div class="flex items-center gap-4 mb-4">
+                                        <div class="w-12 h-12 rounded-xl bg-brand-500/20 flex items-center justify-center text-brand-500 text-xl">
+                                            <i class="fas fa-balance-scale"></i>
+                                        </div>
+                                        <div>
+                                            <p class="text-slate-400 text-sm font-medium">Cashflow Bersih</p>
+                                            <h3 class="text-2xl font-bold text-white">Rp {{ formatNumber(stats.total_income - stats.total_expense) }}</h3>
+                                        </div>
+                                    </div>
+                                    <p class="text-brand-400 text-xs font-medium bg-brand-500/10 inline-block px-2 py-1 rounded">
+                                        <i class="fas fa-check-circle mr-1"></i> Kondisi Aman
+                                    </p>
+                                </div>
+                            </div>
+
+                            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                                <!-- Chart Section -->
+                                <div class="lg:col-span-2 glass p-6 rounded-2xl">
+                                    <div class="flex items-center justify-between mb-6">
+                                        <h3 class="text-lg font-bold text-white">Breakdown Pengeluaran</h3>
+                                        <button class="text-xs bg-dark-800 hover:bg-dark-700 text-slate-300 px-3 py-1.5 rounded-lg transition-colors">
+                                            Bulan Ini <i class="fas fa-chevron-down ml-1"></i>
+                                        </button>
+                                    </div>
+                                    <div class="h-72 w-full flex items-center justify-center relative">
+                                        <canvas id="expenseChart"></canvas>
+                                        <div v-if="transactions.length === 0" class="absolute inset-0 flex items-center justify-center text-slate-500 text-sm">
+                                            Belum ada data
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Recent Transactions List -->
+                                <div class="glass p-0 rounded-2xl overflow-hidden flex flex-col">
+                                    <div class="p-6 border-b border-white/5 flex justify-between items-center">
+                                        <h3 class="text-lg font-bold text-white">Transaksi Terakhir</h3>
+                                        <button @click="setView('transactions')" class="text-xs text-brand-400 hover:text-brand-300 font-medium">Lihat Semua</button>
+                                    </div>
+                                    <div class="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-3 max-h-[350px]">
+                                        <div v-for="tx in transactions.slice(0, 5)" :key="tx.id" class="flex items-center gap-4 p-3 rounded-xl hover:bg-white/5 transition-colors group">
+                                            <div :class="['w-10 h-10 rounded-full flex items-center justify-center text-lg shrink-0 transition-transform group-hover:scale-110', tx.type === 'expense' ? 'bg-red-500/10 text-red-500' : 'bg-green-500/10 text-green-500']">
+                                                <i :class="getCategoryIcon(tx.category)"></i>
+                                            </div>
+                                            <div class="flex-1 min-w-0">
+                                                <h4 class="text-sm font-semibold text-white truncate">{{ tx.description || tx.category }}</h4>
+                                                <p class="text-xs text-slate-500">{{ formatDate(tx.date) }} • {{ tx.category }}</p>
+                                            </div>
+                                            <div class="text-right">
+                                                <p :class="['text-sm font-bold', tx.type === 'expense' ? 'text-red-400' : 'text-green-400']">
+                                                    {{ tx.type === 'expense' ? '-' : '+' }} {{ formatNumberCompact(tx.amount) }}
+                                                </p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- TRANSACTIONS VIEW -->
+                        <div v-if="currentView === 'transactions'" class="glass rounded-2xl overflow-hidden animate-fade-in">
+                            <div class="p-6 border-b border-white/5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                                <h3 class="text-lg font-bold text-white">Riwayat Transaksi</h3>
+                                <div class="flex items-center gap-3">
+                                    <div class="relative">
+                                        <i class="fas fa-search absolute left-3 top-2.5 text-slate-500"></i>
+                                        <input type="text" placeholder="Cari transaksi..." class="bg-dark-900 border border-dark-700 text-sm rounded-xl pl-10 pr-4 py-2 text-white focus:ring-2 focus:ring-brand-500 w-full md:w-64 outline-none">
+                                    </div>
+                                    <button class="p-2 bg-dark-800 rounded-xl text-slate-400 hover:text-white border border-dark-700">
+                                        <i class="fas fa-filter"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="overflow-x-auto">
+                                <table class="w-full text-sm text-left text-slate-400">
+                                    <thead class="text-xs text-slate-500 uppercase bg-dark-900/50 font-semibold tracking-wider">
+                                        <tr>
+                                            <th class="px-6 py-4">Tanggal</th>
+                                            <th class="px-6 py-4">Kategori</th>
+                                            <th class="px-6 py-4">Deskripsi</th>
+                                            <th class="px-6 py-4 text-right">Nominal</th>
+                                            <th class="px-6 py-4 text-center">Tipe</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y divide-white/5">
+                                        <tr v-for="tx in transactions" :key="tx.id" class="hover:bg-white/5 transition-colors group">
+                                            <td class="px-6 py-4 whitespace-nowrap text-slate-300">{{ formatDate(tx.date) }}</td>
+                                            <td class="px-6 py-4">
+                                                <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-dark-800 border border-white/5 text-slate-300 group-hover:border-white/10 transition-colors">
+                                                    <i :class="[getCategoryIcon(tx.category), 'text-[10px] opacity-70']"></i> {{ tx.category }}
+                                                </span>
+                                            </td>
+                                            <td class="px-6 py-4 text-white font-medium">{{ tx.description || '-' }}</td>
+                                            <td :class="['px-6 py-4 text-right font-bold tabular-nums', tx.type === 'expense' ? 'text-red-400' : 'text-green-400']">
+                                                {{ tx.type === 'expense' ? '-' : '+' }} Rp {{ formatNumber(tx.amount) }}
+                                            </td>
+                                            <td class="px-6 py-4 text-center">
+                                                <span :class="['px-2 py-1 rounded text-[10px] uppercase font-bold tracking-wide', tx.type === 'expense' ? 'bg-red-500/10 text-red-500' : 'bg-green-500/10 text-green-500']">
+                                                    {{ tx.type }}
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <!-- Pagination -->
+                            <div class="p-4 border-t border-white/5 flex justify-center">
+                                <button class="text-xs text-brand-400 hover:text-white font-medium">Muat Lebih Banyak</button>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script>
+        const { createApp, ref, onMounted, computed, watch } = Vue;
+
+        createApp({
+            setup() {
+                const token = ref(localStorage.getItem('finbot_token') || '');
+                const isAuthenticated = ref(false);
+                const isLoading = ref(false);
+                const error = ref('');
+                const userId = ref('');
+                const currentView = ref('dashboard');
+                const mobileMenuOpen = ref(false);
+                
+                const stats = ref({ total_income: 0, total_expense: 0 });
+                const transactions = ref([]);
+                
+                const menuItems = [
+                    { id: 'dashboard', label: 'Dashboard', icon: 'fas fa-th-large' },
+                    { id: 'transactions', label: 'Transaksi', icon: 'fas fa-exchange-alt' },
+                    { id: 'analysis', label: 'Analisis AI', icon: 'fas fa-magic' },
+                    { id: 'settings', label: 'Pengaturan', icon: 'fas fa-sliders-h' }
+                ];
+
+                const currentTitle = computed(() => {
+                    return menuItems.find(i => i.id === currentView.value)?.label || 'Dashboard';
+                });
+
+                const currentDate = new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+
+                const login = async () => {
+                    if (!token.value) { error.value = 'Token tidak boleh kosong'; return; }
+                    isLoading.value = true;
+                    error.value = '';
+                    
+                    try {
+                        const res = await axios.get('/auth/verify', {
+                            headers: { 'Authorization': `Bearer ${token.value}` }
+                        });
+                        
+                        if (res.data.status === 'ok') {
+                            isAuthenticated.value = true;
+                            userId.value = res.data.user_id;
+                            localStorage.setItem('finbot_token', token.value);
+                            await fetchData();
+                        }
+                    } catch (e) {
+                        error.value = 'Token tidak valid atau kadaluarsa';
+                        isAuthenticated.value = false;
+                        localStorage.removeItem('finbot_token');
+                    } finally {
+                        isLoading.value = false;
+                    }
+                };
+
+                const logout = () => {
+                    token.value = '';
+                    isAuthenticated.value = false;
+                    localStorage.removeItem('finbot_token');
+                };
+
+                const fetchData = async () => {
+                    isLoading.value = true;
+                    try {
+                        const headers = { 'Authorization': `Bearer ${token.value}` };
+                        
+                        const date = new Date();
+                        const reportRes = await axios.get(`/reports/monthly?month=${date.getMonth() + 1}&year=${date.getFullYear()}`, { headers });
+                        stats.value = reportRes.data;
+
+                        const txRes = await axios.get('/transactions?limit=20', { headers });
+                        transactions.value = txRes.data;
+
+                        if (currentView.value === 'dashboard') {
+                            renderChart();
+                        }
+                    } catch (e) {
+                        console.error(e);
+                        if (e.response && e.response.status === 401) logout();
+                    } finally {
+                        isLoading.value = false;
+                    }
+                };
+
+                const formatNumber = (num) => new Intl.NumberFormat('id-ID').format(num);
+                const formatNumberCompact = (num) => new Intl.NumberFormat('id-ID', { notation: "compact", compactDisplay: "short" }).format(num);
+
+                const formatDate = (dateStr) => {
+                    if (!dateStr) return '-';
+                    const date = new Date(dateStr);
+                    return date.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+                };
+
+                const getCategoryIcon = (cat) => {
+                    const map = {
+                        'Makanan': 'fas fa-utensils',
+                        'Minuman': 'fas fa-coffee',
+                        'Jajanan': 'fas fa-cookie-bite',
+                        'Transportasi': 'fas fa-car-side',
+                        'Belanja': 'fas fa-shopping-bag',
+                        'Tagihan': 'fas fa-file-invoice-dollar',
+                        'Gaji': 'fas fa-wallet',
+                        'Kesehatan': 'fas fa-heartbeat',
+                        'Investasi': 'fas fa-chart-line',
+                        'Pendidikan': 'fas fa-graduation-cap'
+                    };
+                    return map[cat] || 'fas fa-tag';
+                };
+
+                const setView = (view) => {
+                    currentView.value = view;
+                    mobileMenuOpen.value = false;
+                };
+
+                let chartInstance = null;
+                const renderChart = () => {
+                    const ctx = document.getElementById('expenseChart');
+                    if (!ctx) return;
+                    
+                    if (chartInstance) chartInstance.destroy();
+
+                    const categories = {};
+                    transactions.value.filter(t => t.type === 'expense').forEach(t => {
+                        categories[t.category] = (categories[t.category] || 0) + t.amount;
+                    });
+                    
+                    if (Object.keys(categories).length === 0) return;
+
+                    chartInstance = new Chart(ctx, {
+                        type: 'doughnut',
+                        data: {
+                            labels: Object.keys(categories),
+                            datasets: [{
+                                data: Object.values(categories),
+                                backgroundColor: [
+                                    '#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#6366f1'
+                                ],
+                                borderWidth: 0,
+                                hoverOffset: 10
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            cutout: '75%',
+                            plugins: {
+                                legend: { 
+                                    position: 'right', 
+                                    labels: { 
+                                        color: '#94a3b8', 
+                                        font: { family: 'Inter', size: 11 },
+                                        usePointStyle: true,
+                                        pointStyle: 'circle',
+                                        padding: 15
+                                    } 
+                                }
+                            }
+                        }
+                    });
+                };
+
+                watch(currentView, () => {
+                    if (currentView.value === 'dashboard') {
+                        setTimeout(renderChart, 100);
+                    }
+                });
+
+                if (token.value) {
+                    login();
+                }
+
+                return {
+                    token, isAuthenticated, isLoading, error, userId, currentView, mobileMenuOpen,
+                    menuItems, currentTitle, currentDate,
+                    stats, transactions,
+                    login, logout, fetchData, setView,
+                    formatNumber, formatNumberCompact, formatDate, getCategoryIcon
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
