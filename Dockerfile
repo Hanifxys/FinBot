@@ -36,17 +36,19 @@ ENV PATH=/root/.local/bin:$PATH
 # Pre-download EasyOCR models (id and en) with retry logic
 # This makes the image larger but startup MUCH faster
 RUN python -c "import easyocr; import time; \
-    for i in range(5): \
-        try: \
-            easyocr.Reader(['id', 'en'], gpu=False); \
-            print('Download success'); \
-            break; \
-        except Exception as e: \
-            print(f'Attempt {i+1} failed: {e}'); \
-            time.sleep(5); \
-    else: \
-        print('Failed to download models after 5 attempts'); \
-        exit(1)"
+success = False; \
+for i in range(5): \
+    try: \
+        easyocr.Reader(['id', 'en'], gpu=False); \
+        print('Download success'); \
+        success = True; \
+        break; \
+    except Exception as e: \
+        print(f'Attempt {i+1} failed: {e}'); \
+        time.sleep(5); \
+if not success: \
+    print('Failed to download models after 5 attempts'); \
+    exit(1)"
 
 # Copy application code
 COPY . .
