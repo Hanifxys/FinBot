@@ -10,6 +10,7 @@ from modules.premium_ai import PremiumAIEngine
 from utils.visuals import VisualReporter
 from modules.websocket_server import WebSocketServer
 from modules.monitor import start_monitor_thread
+from modules.gamification import GamificationEngine
 
 # Initialize Shared instances properly
 db = DBHandler()
@@ -21,6 +22,7 @@ budget_mgr = BudgetManager(db)
 analyzer = ExpenseAnalyzer(db)
 rules = RuleEngine()
 visual_reporter = VisualReporter()
+gamify = GamificationEngine(premium_ai.redis)
 
 # Global WebSocket Server Instance
 ws_server = WebSocketServer(port=int(os.getenv("WS_PORT", 8001)))

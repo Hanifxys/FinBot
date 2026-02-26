@@ -76,9 +76,21 @@ class FinBotLiveDashboard:
         self.status_label = ttk.Label(self.root, text="Status: Disconnected", foreground="orange")
         self.status_label.pack(side="bottom")
 
-    def update_ai_suggestion(self, text):
-        """Update kotak saran AI secara real-time"""
+    def update_ai_suggestion(self, data):
+        """Update kotak saran AI dan stats gamifikasi secara real-time"""
+        text = data.get("response")
         self.ai_label.config(text=f"AI: {text}")
+        
+        # [NEW] Update Gamification Stats
+        gamify_data = data.get("gamify", {})
+        if gamify_data:
+            self.status_label.config(
+                text=f"● Live (User: {self.user_id}) | Level: {gamify_data.get('level')} (XP: {gamify_data.get('total_xp')})",
+                foreground="#00ff88"
+            )
+            if gamify_data.get("leveled_up"):
+                messagebox.showinfo("LEVELED UP! 🚀", f"Selamat! Kamu naik ke Level {gamify_data.get('level')}!")
+
         # Efek visual kilat saat ada update
         self.ai_frame.config(bg="#4d4d7c")
         self.root.after(200, lambda: self.ai_frame.config(bg="#3d3d5c"))

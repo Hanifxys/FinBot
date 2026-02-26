@@ -69,17 +69,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 3. Real-time Multi-channel Broadcast
     if premium_response.needs_live_update:
+        # [NEW] Add XP for interaction
+        from core import gamify
+        xp_status = await gamify.add_xp(user_id, "transaction" if intent == "record" else "insight")
+        
         asyncio.run_coroutine_threadsafe(
-            ws_server.broadcast({
-                "event": "premium_ai_insight",
-                "data": {
-                    "text": text,
-                    "sentiment": premium_response.sentiment,
-                    "language": premium_response.language,
-                    "response": response_msg,
-                    "advice": premium_response.predictive_advice
+            ws_server.broadcast_to_user(
+                user_id=user_id,
+                message={
+                    "event": "premium_ai_insight",
+                    "data": {
+                        "text": text,
+                        "sentiment": premium_response.sentiment,
+                        "language": premium_response.language,
+                        "response": response_msg,
+                        "advice": premium_response.predictive_advice,
+                        "gamify": xp_status
+                    }
                 }
-            }),
+            ),
             ws_server.loop
         )
 
