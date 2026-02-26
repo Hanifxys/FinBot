@@ -89,6 +89,11 @@ def test_nlp_extract_merchant():
     assert nlp.extract_merchant("ngopi di mixue 48rb") == "Mixue"
     assert nlp.extract_merchant("beli bensin pertamina 100k") == "Pertamina"
 
+def test_nlp_disables_groq_for_blank_key():
+    with patch('modules.nlp.GROQ_API_KEY', '   '):
+        nlp = NLPProcessor()
+        assert nlp.groq_enabled is False
+
 # --- OCR TESTS ---
 def test_ocr_cleaning():
     ocr = OCRProcessor()
