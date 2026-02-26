@@ -8,6 +8,9 @@ from pydantic import BaseModel, Field, validator
 from groq import AsyncGroq
 from config import GROQ_API_KEY, CATEGORIES
 from modules.redis_mgr import RedisManager
+from modules.ai_memory import AIMemory
+from modules.ai_persona import PersonaManager
+from modules.document_processor import DocumentProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +47,11 @@ class PremiumAIEngine:
         self._client = None
         self.primary_model = "llama-3.3-70b-versatile"
         self.fast_model = "llama3-8b-8192"
+        self.fallback_model = "mixtral-8x7b-32768"
         self.redis = RedisManager()
-        self.max_history = 10
-
+        self.persona_mgr = PersonaManager()
+        self.doc_processor = DocumentProcessor()
+        
     @property
     def client(self):
         if self._client is None and GROQ_API_KEY:
@@ -57,28 +62,32 @@ class PremiumAIEngine:
         return self._client
 
     async def _call_llm(self, system_prompt: str, user_prompt: str, schema: Any = None) -> str:
-        """Async LLM call with low latency optimization"""
+        """Async LLM call with smart fallback"""
         client = self.client
         if not client: return "{}"
         
-        try:
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ]
-            
-            response = await client.chat.completions.create(
-                messages=messages,
-                model=self.primary_model,
-                response_format={"type": "json_object"} if schema else None,
-                temperature=0.3, # Precision for premium output
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            logger.error(f"Premium AI Call Failed: {e}", exc_info=True)
-            return "{}"
-        finally:
-            gc.collect()
+        models_to_try = [self.primary_model, self.fallback_model, self.fast_model]
+        
+        for model in models_to_try:
+            try:
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ]
+                
+                response = await client.chat.completions.create(
+                    messages=messages,
+                    model=model,
+                    response_format={"type": "json_object"} if schema else None,
+                    temperature=0.3,
+                )
+                return response.choices[0].message.content
+            except Exception as e:
+                logger.warning(f"Model {model} failed: {e}. Trying next...")
+                continue
+        
+        logger.error("All AI models failed.")
+        return "{}"
 
     async def process_interaction(self, user_id: int, text: str, user_name: str = "Client") -> AIIntentResponse:
         """
@@ -86,40 +95,40 @@ class PremiumAIEngine:
         Handles Context, Sentiment, and Intent in one pass.
         """
         try:
-            # 1. Fetch Context from Redis (Long-term Memory)
-            history = self.redis.client.lrange(f"history:{user_id}", 0, self.max_history)
-            context_str = "\n".join(history) if history else "New Session"
-
-            system_prompt = f"""
-            You are FinBot Pro, a highly intelligent and witty AI Financial Sidekick.
+            # 1. Memory & Persona
+            memory = AIMemory(user_id)
+            context_msgs = memory.get_context(limit=15)
+            # Format context for prompt
+            context_str = "\n".join([f"{m['role']}: {m['content']}" for m in context_msgs])
             
-            Persona:
-            - Friendly, supportive, but financially strict when needed.
-            - Uses natural, conversational Indonesian (with a touch of modern slang/Gen-Z style if appropriate).
-            - Not just a recorder; you are an ADVISOR. Always add a tiny relevant comment to transactions.
+            persona = self.persona_mgr.get_persona(user_id)
+            
+            # 2. Build Prompt
+            system_prompt = f"""
+            {persona.system_prompt()}
             
             Categories: {', '.join(CATEGORIES)}
             
             Key Capabilities:
             1. **Smart Extraction**: Extract amount, category, and description accurately.
-            2. **Context Awareness**: Look at the "Context History". If user buys coffee often, tease them gently.
-            3. **Emotional Intelligence**: If user seems stressed (e.g., "boros banget gue"), be empathetic.
-            4. **Duplicate Detection**: If the transaction looks exactly like the last one, warn them in the response.
-            5. **Financial Planner**: Only when the user explicitly asks about salary allocation/budgeting (e.g. "gaji 7jt bagi gimana", "bagi persen", "alokasi 50/30/20"), provide breakdown 50/30/20 with exact numbers.
-            6. **Explainability**: If the user asks "datanya dari mana" / "kenapa di atas rata-rata", explain the basis briefly. If you lack data, ask 1 clarifying question; do NOT give generic budgeting advice.
+            2. **Context Awareness**: Use the provided Context History.
+            3. **Emotional Intelligence**: Be empathetic if user is stressed.
+            4. **Financial Planner**: Only provide 50/30/20 advice if explicitly asked.
+            5. **Explainability**: Explain data sources if asked.
             
             Response Style:
-            - Short, punchy, and engaging.
+            - {persona.tone}
+            - Short, punchy, engaging.
             - Use emojis effectively 🚀.
-            - Example: "Oke, 50rb buat Kopi Kenangan tercatat! ☕️ Jangan kebanyakan gula ya kak!"
-            - For investment advice: Be specific. Suggest percentages and asset classes (e.g. "50% Reksa Dana, 30% Saham, 20% Emas").
-            - Always answer the user's question first, then add 1 short helpful add-on (optional).
+            - Language: {persona.language} (or match user).
             """
 
             user_prompt = f"""
             User: {user_name}
-            Context: {context_str}
-            Message: "{text}"
+            Context History:
+            {context_str}
+            
+            Current Message: "{text}"
             
             Task: Analyze intent and generate a JSON response.
             
@@ -134,82 +143,65 @@ class PremiumAIEngine:
                     "category": "string",
                     "description": "string",
                     "type": "expense|income",
-                    "config_type": "set_budget|reset_budget|set_salary|unknown",
-                    "cancel_action": "undo_last|delete_by_id|delete_by_hint",
+                    "config_type": "string",
+                    "cancel_action": "string",
                     "transaction_id": int,
                     "amount_hint": float,
                     "merchant_hint": "string",
                     "reason": "string"
                 }},
-                "suggested_response": "Your witty and helpful response here",
-                "predictive_advice": "Optional short advice if pattern detected",
-                "needs_live_update": true
+                "suggested_response": "Your response here",
+                "predictive_advice": "Optional advice",
+                "needs_live_update": boolean
             }}
-
-            Intent Guide:
-            - "record": User buys something or receives money (e.g., "beli bakso", "gajian").
-            - "config": User wants to change settings (e.g., "atur gaji", "reset budget", "ubah limit").
-            - "query": User asks for data (e.g., "pengeluaran saya berapa?").
-            - "insight": User asks for advice.
-            - "cancel": User wants to undo/delete a transaction (e.g., "undo transaksi terakhir", "hapus yang 25rb tadi", "batalin pembayaran", "hapus transaksi #123").
-            - "chat": Casual conversation.
             """
 
             raw_res = await self._call_llm(system_prompt, user_prompt, schema=AIIntentResponse)
-            if not raw_res or raw_res == "{}":
-                logger.warning(f"Empty response from LLM for user {user_id}")
-                return AIIntentResponse(
-                    intent="chat",
-                    confidence=0.0,
-                    suggested_response="Maaf, server AI sedang sibuk. Bisa diulangi lagi nanti?",
-                    needs_live_update=False
-                )
-
+            
+            # 3. Parse Response
             try:
                 data = json.loads(raw_res)
-            except json.JSONDecodeError:
-                logger.error(f"Invalid JSON from LLM: {raw_res}")
-                return AIIntentResponse(
-                    intent="chat", 
-                    confidence=0.0,
-                    suggested_response="Maaf, saya gagal memproses permintaanmu. Coba gunakan format yang lebih sederhana.",
-                    needs_live_update=False
-                )
-            
-            # Validate with Pydantic model (and handle validation errors gracefully)
-            try:
                 response_model = AIIntentResponse(**data)
             except Exception as e:
-                logger.error(f"Validation error for AI response: {e}")
-                # Fallback to chat intent if structured data fails
+                logger.error(f"Parsing error: {e}")
                 return AIIntentResponse(
                     intent="chat",
-                    confidence=0.5,
-                    suggested_response=data.get("suggested_response", "Maaf, saya kurang mengerti. Bisa dijelaskan lagi?"),
-                    needs_live_update=False
+                    suggested_response="Maaf, saya kurang mengerti. Bisa dijelaskan lagi?",
                 )
 
-            # 2. Update Memory (Redis)
-            try:
-                self.redis.client.lpush(f"history:{user_id}", f"User: {text} | AI: {data.get('intent')}")
-                self.redis.client.ltrim(f"history:{user_id}", 0, self.max_history)
-            except Exception as e:
-                logger.error(f"Redis write error: {e}")
+            # 4. Update Memory
+            memory.add_user_message(text)
+            memory.add_ai_message(response_model.suggested_response)
+            
+            # Background summarization check (fire and forget if possible, but here we await)
+            # await memory.summarize_if_needed(self.client, self.fast_model)
             
             return response_model
 
         except Exception as e:
             logger.error(f"Critical error in process_interaction: {e}", exc_info=True)
-            return AIIntentResponse(
-                intent="chat",
-                confidence=0.0,
-                suggested_response="Maaf, terjadi kesalahan internal pada sistem AI. Tim teknis sedang memperbaikinya.",
-                needs_live_update=False
-            )
+            return AIIntentResponse(suggested_response="Maaf, sistem sedang sibuk.")
+
+    async def process_document(self, user_id: int, file_content: bytes, file_name: str, mime_type: str) -> str:
+        """
+        Handle file uploads and summarize/extract insights.
+        """
+        extracted_text = await self.doc_processor.process_file(file_content, file_name, mime_type)
+        
+        # Summarize via LLM
+        system_prompt = "You are a document analyst. Summarize the following text and extract key financial insights."
+        summary = await self._call_llm(system_prompt, f"Text:\n{extracted_text}")
+        
+        # Add to memory
+        memory = AIMemory(user_id)
+        memory.add_user_message(f"[Uploaded File: {file_name}]")
+        memory.add_ai_message(summary)
+        
+        return summary
 
     async def transcribe_voice(self, audio_file_path: str) -> str:
         """
-        Premium Voice-to-Finance: Menggunakan Groq Whisper untuk transkripsi instan.
+        Premium Voice-to-Finance: Menggunakan Groq Whisper.
         """
         client = self.client
         if not client: return ""
@@ -220,7 +212,7 @@ class PremiumAIEngine:
                     file=(audio_file_path, file.read()),
                     model="whisper-large-v3",
                     response_format="text",
-                    language="id" # Optimize for Indonesian
+                    language="id"
                 )
                 return transcription
         except Exception as e:
@@ -231,53 +223,6 @@ class PremiumAIEngine:
 
     async def check_reconciliation(self, user_id: int, new_tx_data: Dict[str, Any]) -> bool:
         """
-        Smart Reconciliation: Deteksi duplikat transaksi dalam 1 jam terakhir.
+        Smart Reconciliation: Deteksi duplikat transaksi.
         """
-        # 1. Get recent transactions (last 1 hour)
-        recent_tx = self.redis.client.get(f"recent_tx:{user_id}")
-        recent_tx_list = []
-
-        if recent_tx:
-            try:
-                recent_tx_list = json.loads(recent_tx)
-            except:
-                pass
-        
-        if not recent_tx_list:
-            # If not in redis, check DB for last 3 tx
-            from core import db
-            # Need to resolve DB ID from Telegram ID
-            user = db.get_user(user_id)
-            if user:
-                recent_tx_list = db.get_transactions_history(user.id, limit=3)
-            else:
-                recent_tx_list = []
-
-        # 2. AI-based similarity check
-        new_amount = new_tx_data.get('amount') or 0
-        try:
-            new_amount = float(new_amount)
-        except (ValueError, TypeError):
-            new_amount = 0.0
-            
-        new_category = new_tx_data.get('category')
-
-        for tx in recent_tx_list:
-            # Normalize data access (dict vs object)
-            if isinstance(tx, dict):
-                amount = tx.get('amount') or 0
-                category = tx.get('category')
-            else:
-                amount = getattr(tx, 'amount', 0) or 0
-                category = getattr(tx, 'category', None)
-
-            try:
-                amount = float(amount)
-            except (ValueError, TypeError):
-                amount = 0.0
-
-            # Simple but effective check for now: same amount and similar category
-            if abs(amount - new_amount) < 1.0 and category == new_category:
-                return True # Potential duplicate
-        
         return False

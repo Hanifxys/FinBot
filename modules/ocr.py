@@ -266,3 +266,24 @@ class OCRProcessor:
                 return float(digits_only)
             except:
                 return 0.0
+
+async def extract_text_from_image(image_path: str) -> str:
+    """
+    Extract raw text from an image for general AI processing.
+    """
+    ocr = OCRProcessor()
+    import asyncio
+    
+    loop = asyncio.get_running_loop()
+    
+    def _run_ocr():
+        try:
+            full_text, _ = ocr._extract_text(image_path)
+            return full_text
+        except Exception as e:
+            return f"Error: {e}"
+
+    return await loop.run_in_executor(None, _run_ocr)
+
+def extract_text_from_url(url: str) -> str:
+    return ""

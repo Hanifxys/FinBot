@@ -872,3 +872,35 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     await _process_text(update, context, text)
+
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    doc = update.message.document
+    if not doc:
+        return
+
+    # Limit file size (e.g., 10MB)
+    if (doc.file_size or 0) > 10 * 1024 * 1024:
+        await update.message.reply_text("Ukuran file terlalu besar (maks 10MB).")
+        return
+
+    await update.message.reply_text("📄 **Menganalisis dokumen...**", parse_mode='Markdown')
+
+    file_path = f"temp_doc_{user_id}_{doc.file_name}"
+    try:
+        f = await doc.get_file()
+        await f.download_to_drive(file_path)
+        
+        with open(file_path, "rb") as file_obj:
+            content = file_obj.read()
+            
+        summary = await premium_ai.process_document(user_id, content, doc.file_name, doc.mime_type or "")
+        
+        await update.message.reply_text(f"📑 **Ringkasan Dokumen**\n\n{summary}", parse_mode='Markdown')
+        
+    except Exception as e:
+        logger.error(f"Document Error: {e}")
+        await update.message.reply_text("Gagal memproses dokumen.")
+    finally:
+        if os.path.exists(file_path):
+            os.remove(file_path)
