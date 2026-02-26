@@ -3,7 +3,7 @@ import json
 import logging
 import gc
 from typing import List, Dict, Any, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from groq import AsyncGroq
 from config import GROQ_API_KEY, CATEGORIES
 from modules.redis_mgr import RedisManager
@@ -22,10 +22,14 @@ class AIIntentResponse(BaseModel):
     confidence: float = Field(default=0.0)
     sentiment: str = Field(default="neutral")
     language: str = Field(default="id")
-    structured_data: Dict[str, Any] = Field(default_factory=dict)
+    structured_data: Optional[Dict[str, Any]] = Field(default_factory=dict)
     suggested_response: str = Field(default="Maaf, saya sedang mengalami gangguan koneksi. Bisa diulangi?")
     predictive_advice: Optional[str] = None
     needs_live_update: bool = Field(default=False)
+
+    @validator('structured_data', pre=True, always=True)
+    def set_structured_data(cls, v):
+        return v or {}
 
 class PremiumAIEngine:
     """
@@ -212,19 +216,39 @@ class PremiumAIEngine:
         """
         # 1. Get recent transactions (last 1 hour)
         recent_tx = self.redis.client.get(f"recent_tx:{user_id}")
-        if not recent_tx:
+        recent_tx_list = []
+
+        if recent_tx:
+            try:
+                recent_tx_list = json.loads(recent_tx)
+            except:
+                pass
+        
+        if not recent_tx_list:
             # If not in redis, check DB for last 3 tx
             from core import db
-            recent_tx_list = db.get_transactions_history(user_id, limit=3)
-        else:
-            recent_tx_list = json.loads(recent_tx)
+            # Need to resolve DB ID from Telegram ID
+            user = db.get_user(user_id)
+            if user:
+                recent_tx_list = db.get_transactions_history(user.id, limit=3)
+            else:
+                recent_tx_list = []
 
         # 2. AI-based similarity check
+        new_amount = new_tx_data.get('amount', 0)
+        new_category = new_tx_data.get('category')
+
         for tx in recent_tx_list:
+            # Normalize data access (dict vs object)
+            if isinstance(tx, dict):
+                amount = tx.get('amount', 0)
+                category = tx.get('category')
+            else:
+                amount = getattr(tx, 'amount', 0)
+                category = getattr(tx, 'category', None)
+
             # Simple but effective check for now: same amount and similar category
-            # Can be upgraded to full AI comparison if needed
-            if abs(tx.amount - new_tx_data.get('amount', 0)) < 1.0 and \
-               tx.category == new_tx_data.get('category'):
+            if abs(amount - new_amount) < 1.0 and category == new_category:
                 return True # Potential duplicate
         
         return False

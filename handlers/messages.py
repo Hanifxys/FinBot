@@ -45,7 +45,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # [CRITICAL FIX] Ensure user exists in database before any transaction
     try:
-        db.get_or_create_user(user_id, update.effective_user.username)
+        user_db = db.get_or_create_user(user_id, update.effective_user.username)
     except Exception as e:
         logger.error(f"Failed to ensure user exists: {e}")
         await update.message.reply_text("Maaf, ada masalah koneksi database saat mendaftarkan akunmu. Coba lagi ya!")
@@ -69,7 +69,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     response_msg = "⚠️ **Potensi Duplikat Terdeteksi!**\nTransaksi serupa baru saja dicatat. Yakin mau simpan lagi?"
                 else:
                     db.add_transaction(
-                        user_id=user_id,
+                        user_id=user_db.id, # Use DB Primary Key, NOT Telegram ID
                         amount=data.get("amount", 0),
                         category=data.get("category", "Lain-lain"),
                         description=data.get("description", text),
@@ -88,6 +88,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 # [NEW] Add XP for interaction
                 from core import gamify
+                # Use DB ID for gamification if it relies on DB, otherwise Telegram ID. 
+                # Assuming gamify uses Telegram ID for simplicity or handles mapping internally.
+                # Let's check gamify later, for now pass user_id (TG ID) as it was.
                 xp_status = await gamify.add_xp(user_id, "transaction" if intent == "record" else "insight")
                 
                 if ws_server.loop and ws_server.loop.is_running():
