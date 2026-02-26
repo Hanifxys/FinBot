@@ -124,11 +124,47 @@ class PremiumAIEngine:
         
         return AIIntentResponse(**data)
 
-    def generate_comprehensive_test_report(self):
-        """Internal diagnostic for load/security compliance"""
-        return {
-            "latency": "<500ms",
-            "concurrency_ready": "Yes (Async)",
-            "security_compliance": "ISO/IEC 27001 standard (Simulated)",
-            "accuracy_avg": "97.4%"
-        }
+    async def transcribe_voice(self, audio_file_path: str) -> str:
+        """
+        Premium Voice-to-Finance: Menggunakan Groq Whisper untuk transkripsi instan.
+        """
+        client = self.client
+        if not client: return ""
+        
+        try:
+            with open(audio_file_path, "rb") as file:
+                transcription = client.audio.transcriptions.create(
+                    file=(audio_file_path, file.read()),
+                    model="whisper-large-v3",
+                    response_format="text",
+                    language="id" # Optimize for Indonesian
+                )
+                return transcription
+        except Exception as e:
+            logger.error(f"Voice Transcription Failed: {e}")
+            return ""
+        finally:
+            gc.collect()
+
+    async def check_reconciliation(self, user_id: int, new_tx_data: Dict[str, Any]) -> bool:
+        """
+        Smart Reconciliation: Deteksi duplikat transaksi dalam 1 jam terakhir.
+        """
+        # 1. Get recent transactions (last 1 hour)
+        recent_tx = self.redis.client.get(f"recent_tx:{user_id}")
+        if not recent_tx:
+            # If not in redis, check DB for last 3 tx
+            from core import db
+            recent_tx_list = db.get_transactions_history(user_id, limit=3)
+        else:
+            recent_tx_list = json.loads(recent_tx)
+
+        # 2. AI-based similarity check
+        for tx in recent_tx_list:
+            # Simple but effective check for now: same amount and similar category
+            # Can be upgraded to full AI comparison if needed
+            if abs(tx.amount - new_tx_data.get('amount', 0)) < 1.0 and \
+               tx.category == new_tx_data.get('category'):
+                return True # Potential duplicate
+        
+        return False

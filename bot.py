@@ -12,7 +12,7 @@ from handlers.commands import start, help_command
 from handlers.finance import set_gaji, set_budget, get_ai_insight
 from handlers.transactions import undo, hapus_transaksi, history, export_data
 from handlers.saving import set_target, add_savings, list_targets
-from handlers.messages import handle_message, handle_photo
+from handlers.messages import handle_message, handle_photo, handle_voice
 from handlers.callbacks import handle_callback
 from handlers.digest import daily_digest
 from middlewares.logging import log_update
@@ -109,6 +109,7 @@ if __name__ == '__main__':
     
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    application.add_handler(MessageHandler(filters.VOICE, handle_voice))
     application.add_handler(CallbackQueryHandler(handle_callback))
     
     logging.info("FinBot sedang berjalan...")

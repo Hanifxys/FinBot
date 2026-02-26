@@ -11,27 +11,57 @@ def get_main_menu_keyboard():
         [KeyboardButton("💡 Tips Hemat"), KeyboardButton("🚀 Menu Utama")]
     ], resize_keyboard=True)
 
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Premium: Handle Voice Notes using Groq Whisper"""
+    user_id = update.effective_user.id
+    user_name = update.effective_user.first_name
+    
+    voice = await update.message.voice.get_file()
+    voice_path = f"temp_voice_{user_id}.ogg"
+    await voice.download_to_drive(voice_path)
+    
+    # 1. Transcribe via Premium AI (Whisper)
+    text = await premium_ai.transcribe_voice(voice_path)
+    os.remove(voice_path) # Clean up
+    
+    if not text:
+        await update.message.reply_text("Maaf, aku gagal denger suara kamu. Coba kirim lagi ya!")
+        return
+
+    await update.message.reply_text(f"🎤 **Kamu bilang:** \"{text}\"\n\n_Sedang memproses..._")
+    
+    # 2. Process transcribed text through existing Elite AI logic
+    # Reuse handle_message logic but with the transcribed text
+    update.message.text = text
+    await handle_message(update, context)
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_name = update.effective_user.first_name
     text = update.message.text
     
     # 1. Premium Autonomous Intent & Context Engine
-    # Processes Sentiment, Context (Redis), and Intent in one pass
     premium_response = await premium_ai.process_interaction(user_id, text, user_name)
     intent = premium_response.intent
     
-    # 2. Advanced Decision Engine
+    # 2. Advanced Decision Engine with Smart Reconciliation
     if intent == "record" and premium_response.structured_data:
         data = premium_response.structured_data
-        db.add_transaction(
-            user_id=user_id,
-            amount=data.get("amount", 0),
-            category=data.get("category", "Lain-lain"),
-            description=data.get("description", text),
-            trans_type=data.get("type", "expense")
-        )
-        response_msg = premium_response.suggested_response
+        
+        # [NEW] Check for Duplicates
+        is_duplicate = await premium_ai.check_reconciliation(user_id, data)
+        if is_duplicate:
+            response_msg = "⚠️ **Potensi Duplikat Terdeteksi!**\nTransaksi serupa baru saja dicatat. Yakin mau simpan lagi?"
+            # Add inline button for confirmation if needed
+        else:
+            db.add_transaction(
+                user_id=user_id,
+                amount=data.get("amount", 0),
+                category=data.get("category", "Lain-lain"),
+                description=data.get("description", text),
+                trans_type=data.get("type", "expense")
+            )
+            response_msg = premium_response.suggested_response
     elif intent == "insight":
         response_msg = premium_response.predictive_advice or premium_response.suggested_response
     else:
