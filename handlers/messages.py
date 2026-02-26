@@ -9,6 +9,7 @@ import gc
 import time
 import json
 from config import CATEGORIES
+from handlers import tutorial_mode
 
 logger = logging.getLogger(__name__)
 
@@ -515,6 +516,75 @@ async def _send_cancel_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     ]
     await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
+def _tx_preview_message(pending: dict) -> str:
+    amount = pending.get("amount", 0) or 0
+    category = pending.get("category") or "Lain-lain"
+    merchant = pending.get("merchant") or pending.get("description") or "Transaksi"
+    payment = pending.get("payment_method") or "-"
+    date = pending.get("date") or datetime.now().strftime("%d-%m-%Y")
+    return (
+        "🧾 **Preview Transaksi**\n\n"
+        f"• Item: **{merchant}**\n"
+        f"• Nominal: **Rp{float(amount):,.0f}**\n"
+        f"• Kategori: **{category}**\n"
+        f"• Metode: **{payment}**\n"
+        f"• Tanggal: **{date}**\n\n"
+        "Lanjut simpan atau edit dulu?"
+    )
+
+def _tx_preview_keyboard():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Simpan", callback_data="tx_confirm"),
+            InlineKeyboardButton("✎ Edit", callback_data="tx_edit"),
+        ],
+        [
+            InlineKeyboardButton("❌ Batal", callback_data="tx_ignore"),
+        ],
+    ])
+
+def _looks_like_explain_spending(text: str) -> bool:
+    t = (text or "").lower()
+    keys = ["diatas rata", "di atas rata", "rata2", "rata-rata", "datanya dari mana", "data nya dari mana", "dari mana", "overspending", "boros"]
+    return any(k in t for k in keys)
+
+async def _explain_spending(update: Update):
+    user_id = update.effective_user.id
+    user_db = db.get_or_create_user(user_id, update.effective_user.username)
+    now = datetime.now()
+    try:
+        txs = db.get_sliding_window_transactions(user_db.id, days=7)
+    except Exception:
+        txs = db.get_monthly_report(user_db.id, now.month, now.year)
+
+    expenses = [t for t in (txs or []) if getattr(t, "type", "") == "expense"]
+    if not expenses:
+        await update.message.reply_text("Belum ada cukup data untuk bandingin rata-rata. Coba catat 3-5 transaksi dulu ya.")
+        return
+
+    by_day = {}
+    for t in expenses:
+        d = getattr(t, "date", None)
+        key = d.date().isoformat() if hasattr(d, "date") else str(d)[:10]
+        by_day[key] = by_day.get(key, 0) + float(getattr(t, "amount", 0) or 0)
+
+    days = max(1, len(by_day))
+    avg = sum(by_day.values()) / days
+    today_key = now.date().isoformat()
+    today_total = float(by_day.get(today_key, 0))
+    delta = today_total - avg
+    status = "di atas" if delta > 0 else "di bawah"
+
+    msg = (
+        "📌 **Penjelasan 'di atas rata-rata'**\n\n"
+        f"• Data: total pengeluaran per hari (window {days} hari terakhir)\n"
+        f"• Rata-rata harian: **Rp{avg:,.0f}**\n"
+        f"• Hari ini: **Rp{today_total:,.0f}**\n"
+        f"• Selisih: **Rp{abs(delta):,.0f}** ({status} rata-rata)\n\n"
+        "Kalau kamu mau, aku bisa breakdown kategori paling besar hari ini."
+    )
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
 async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
     user_id = update.effective_user.id
     user_name = update.effective_user.first_name
@@ -529,12 +599,39 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
         return
 
     try:
-        handled = await _handle_tutorial_input(update, context, text)
-        if handled:
+        state = context.user_data.get("state")
+        pending_tx = context.user_data.get("pending_tx")
+        if state and pending_tx:
+            if state == "WAITING_EDIT_AMOUNT":
+                v = nlp.validate_edit("amount", text)
+                if v.get("valid"):
+                    pending_tx["amount"] = v.get("new_value")
+                    context.user_data["pending_tx"] = pending_tx
+                    context.user_data.pop("state", None)
+                    await update.message.reply_text(_tx_preview_message(pending_tx), parse_mode="Markdown", reply_markup=_tx_preview_keyboard())
+                else:
+                    await update.message.reply_text("Nominalnya belum valid. Contoh: `25rb` atau `25000`.")
+                return
+            if state == "WAITING_EDIT_DATE":
+                t = (text or "").strip()
+                if len(t) >= 8:
+                    pending_tx["date"] = t
+                    context.user_data["pending_tx"] = pending_tx
+                    context.user_data.pop("state", None)
+                    await update.message.reply_text(_tx_preview_message(pending_tx), parse_mode="Markdown", reply_markup=_tx_preview_keyboard())
+                else:
+                    await update.message.reply_text("Format tanggal belum kebaca. Contoh: `16-11-2015` atau `2015-11-16`.")
+                return
+
+        if _looks_like_explain_spending(text):
+            await _explain_spending(update)
             return
 
-        if _is_tutorial_request(text):
-            await update.message.reply_text(_tutorial_intro(), parse_mode="Markdown", reply_markup=_tutorial_keyboard(False))
+        if await tutorial_mode.handle_text(update, context, text):
+            return
+
+        if tutorial_mode.is_tutorial_request(text):
+            await update.message.reply_text(tutorial_mode.intro_text(), parse_mode="Markdown", reply_markup=tutorial_mode.intro_keyboard())
             return
 
         premium_response = await asyncio.wait_for(premium_ai.process_interaction(user_id, text, user_name), timeout=AI_TIMEOUT_SECONDS)
@@ -559,14 +656,17 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
                     if is_duplicate:
                         response_msg = "⚠️ **Potensi Duplikat Terdeteksi!**\nTransaksi serupa baru saja dicatat. Yakin mau simpan lagi?"
                     else:
-                        db.add_transaction(
-                            user_id=user_db.id,
-                            amount=amount,
-                            category=data.get("category", "Lain-lain"),
-                            description=data.get("description", text),
-                            trans_type=data.get("type", "expense")
-                        )
-                        response_msg = premium_response.suggested_response
+                        pending = {
+                            "amount": float(amount),
+                            "category": data.get("category", "Lain-lain"),
+                            "merchant": data.get("description", text),
+                            "date": datetime.now().strftime("%d-%m-%Y"),
+                            "payment_method": data.get("payment_method", None),
+                        }
+                        context.user_data["pending_tx"] = pending
+                        context.user_data.pop("state", None)
+                        await update.message.reply_text(_tx_preview_message(pending), parse_mode="Markdown", reply_markup=_tx_preview_keyboard())
+                        return
                 except Exception as e:
                     logger.error(f"Error saving transaction for {user_id}: {e}", exc_info=True)
                     response_msg = "Maaf, saya gagal menyimpan transaksi tersebut. Silakan coba lagi."

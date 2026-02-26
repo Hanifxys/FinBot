@@ -37,7 +37,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
             try:
                 rm = RedisManager()
                 if rm.client:
-                    backoff_s = int(os.getenv("CONFLICT_BACKOFF_SECONDS", "300"))
+                    backoff_s = int(os.getenv("CONFLICT_BACKOFF_SECONDS", "60"))
                     rm.client.set("finbot:polling_backoff_until", str(int(_time.time()) + backoff_s), ex=backoff_s)
             except Exception:
                 pass

@@ -9,6 +9,7 @@ import os
 import logging
 import json
 import time
+from handlers import tutorial_mode
 
 def get_main_menu_keyboard():
     return ReplyKeyboardMarkup([
@@ -166,6 +167,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = query.data
     pending = user_data.get('pending_tx')
     pending_cancel = user_data.get("pending_cancel")
+
+    if await tutorial_mode.handle_callback(update, context, action):
+        return
 
     if action in ("tutorial_start_beginner", "tutorial_start_fast", "tutorial_quickstart"):
         mode = "beginner" if action != "tutorial_start_fast" else "fast"
