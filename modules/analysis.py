@@ -99,6 +99,47 @@ class ExpenseAnalyzer:
         
         return analysis.predictive_advice or analysis.suggested_response
 
+    async def get_predictive_forecast(self, user_id):
+        """
+        Engine Prediksi: Memproyeksikan saldo akhir bulan berdasarkan kecepatan belanja saat ini.
+        """
+        now = datetime.now()
+        days_in_month = 30 # Simple approximation
+        days_passed = now.day
+        days_remaining = days_in_month - days_passed
+        
+        # 1. Get spending this month
+        transactions = self.db.get_monthly_report(user_id, now.month, now.year)
+        total_expense = sum(t.amount for t in transactions if t.type == 'expense')
+        
+        if total_expense == 0 or days_passed == 0:
+            return "Data belum cukup untuk membuat prediksi."
+
+        # 2. Calculate Burn Rate (Pengeluaran per hari)
+        burn_rate = total_expense / days_passed
+        projected_expense = total_expense + (burn_rate * days_remaining)
+        
+        # 3. Compare with Income
+        income = self.db.get_latest_income(user_id)
+        total_income = income.amount if income else 0
+        
+        projected_balance = total_income - projected_expense
+        
+        # 4. Generate Elite AI Insight about this forecast
+        from core import premium_ai
+        analysis = await premium_ai.process_interaction(
+            user_id, 
+            f"Proyeksi pengeluaranku bulan ini Rp{projected_expense:,.0f} dengan sisa saldo Rp{projected_balance:,.0f}. Apa sarannya?", 
+            "User"
+        )
+        
+        return {
+            "burn_rate": burn_rate,
+            "projected_expense": projected_expense,
+            "projected_balance": projected_balance,
+            "ai_advice": analysis.suggested_response
+        }
+
     def calculate_health_score(self, user_id):
         """
         Simple, transparent financial health score.

@@ -8,10 +8,11 @@ import os
 from datetime import datetime
 
 class FinBotLiveDashboard:
-    def __init__(self, root):
+    def __init__(self, root, user_id=None):
         self.root = root
-        self.root.title("🚀 FinBot Pro - Real-time Desktop Monitor")
-        self.root.geometry("500x400")
+        self.user_id = user_id or os.getenv("USER_ID", "default_user")
+        self.root.title(f"🚀 FinBot Pro - User {self.user_id}")
+        self.root.geometry("600x500")
         self.root.configure(bg="#1e1e1e")
 
         # Styling
@@ -36,42 +37,44 @@ class FinBotLiveDashboard:
         header = ttk.Label(self.root, text="🚀 FINBOT PRO LIVE", style="Header.TLabel")
         header.pack(pady=10)
 
-        # AI Suggestion Box (New!)
-        self.ai_frame = tk.Frame(self.root, bg="#3d3d5c", padx=10, pady=10)
-        self.ai_frame.pack(fill="x", padx=20, pady=5)
+        # Tab Control (New!)
+        self.tab_control = ttk.Notebook(self.root)
         
-        self.ai_label = tk.Label(self.ai_frame, text="AI: Menunggu input Anda...", bg="#3d3d5c", fg="#00ff88", font=("Segoe UI", 9, "italic"), wraplength=400, justify="left")
+        self.feed_tab = ttk.Frame(self.tab_control)
+        self.insight_tab = ttk.Frame(self.tab_control)
+        
+        self.tab_control.add(self.feed_tab, text="Live Feed")
+        self.tab_control.add(self.insight_tab, text="Smart Analysis")
+        self.tab_control.pack(expand=1, fill="both")
+
+        # --- Feed Tab ---
+        # AI Suggestion Box
+        self.ai_frame = tk.Frame(self.feed_tab, bg="#3d3d5c", padx=10, pady=10)
+        self.ai_frame.pack(fill="x", padx=20, pady=5)
+        self.ai_label = tk.Label(self.ai_frame, text="AI: Menunggu input...", bg="#3d3d5c", fg="#00ff88", font=("Segoe UI", 9, "italic"), wraplength=450, justify="left")
         self.ai_label.pack(fill="x")
 
-        # Summary Stats
-        self.summary_frame = tk.Frame(self.root, bg="#2d2d2d", padx=10, pady=10)
-        self.summary_frame.pack(fill="x", padx=20, pady=5)
+        # Feed Container
+        self.feed_frame = tk.Canvas(self.feed_tab, bg="#1e1e1e", highlightthickness=0)
+        self.feed_scroll = ttk.Scrollbar(self.feed_tab, orient="vertical", command=self.feed_frame.yview)
+        self.scrollable_frame = ttk.Frame(self.feed_frame, style="Card.TFrame")
+        self.feed_frame.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        self.feed_frame.configure(yscrollcommand=self.feed_scroll.set)
+        self.feed_frame.pack(side="left", fill="both", expand=True, padx=20, pady=10)
+        self.feed_scroll.pack(side="right", fill="y")
+
+        # --- Insight Tab ---
+        self.forecast_label = tk.Label(self.insight_tab, text="📊 Proyeksi Saldo Akhir Bulan", font=("Segoe UI", 12, "bold"))
+        self.forecast_label.pack(pady=20)
+        self.forecast_val = tk.Label(self.insight_tab, text="Rp --", font=("Segoe UI", 20), fg="#00ff88")
+        self.forecast_val.pack()
         
-        self.total_expense_label = tk.Label(self.summary_frame, text="Expense: Rp 0", bg="#2d2d2d", fg="#ff4444", font=("Segoe UI", 10, "bold"))
-        self.total_expense_label.pack(side="left", expand=True)
-        
-        self.total_income_label = tk.Label(self.summary_frame, text="Income: Rp 0", bg="#2d2d2d", fg="#00ff88", font=("Segoe UI", 10, "bold"))
-        self.total_income_label.pack(side="left", expand=True)
+        self.burn_label = tk.Label(self.insight_tab, text="Burn Rate: Rp 0/hari", font=("Segoe UI", 10))
+        self.burn_label.pack(pady=10)
 
         # Connection Status
         self.status_label = ttk.Label(self.root, text="Status: Disconnected", foreground="orange")
-        self.status_label.pack()
-
-        # Feed Container
-        self.feed_frame = tk.Canvas(self.root, bg="#1e1e1e", highlightthickness=0)
-        self.feed_scroll = ttk.Scrollbar(self.root, orient="vertical", command=self.feed_frame.yview)
-        self.scrollable_frame = ttk.Frame(self.feed_frame, style="Card.TFrame")
-
-        self.scrollable_frame.bind(
-            "<Configure>",
-            lambda e: self.feed_frame.configure(scrollregion=self.feed_frame.bbox("all"))
-        )
-
-        self.feed_frame.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
-        self.feed_frame.configure(yscrollcommand=self.feed_scroll.set)
-
-        self.feed_frame.pack(side="left", fill="both", expand=True, padx=20, pady=10)
-        self.feed_scroll.pack(side="right", fill="y")
+        self.status_label.pack(side="bottom")
 
     def update_ai_suggestion(self, text):
         """Update kotak saran AI secara real-time"""
@@ -120,22 +123,24 @@ class FinBotLiveDashboard:
     async def ws_listener(self):
         while True:
             try:
-                self.status_label.config(text=f"Connecting to {self.ws_url}...", foreground="yellow")
+                self.status_label.config(text=f"Connecting...", foreground="yellow")
                 async with websockets.connect(self.ws_url) as websocket:
-                    self.status_label.config(text="● Connected (Live)", foreground="#00ff88")
+                    # Authenticate/Register User ID
+                    await websocket.send(json.dumps({"user_id": self.user_id}))
+                    
+                    self.status_label.config(text=f"● Live (User: {self.user_id})", foreground="#00ff88")
                     while True:
                         message = await websocket.recv()
                         payload = json.loads(message)
-                        
                         event = payload.get("event")
                         data = payload.get("data")
                         
                         if event == "new_transaction":
                             self.root.after(0, self.add_feed_item, data)
-                        elif event == "ai_interaction":
+                        elif event == "premium_ai_insight":
                             self.root.after(0, self.update_ai_suggestion, data.get("response"))
-            except Exception as e:
-                self.status_label.config(text=f"Status: Reconnecting...", foreground="red")
+            except Exception:
+                self.status_label.config(text=f"Reconnecting...", foreground="red")
                 await asyncio.sleep(5)
 
     def start_ws_thread(self):

@@ -70,15 +70,18 @@ class DBHandler:
         
         response = self.supabase.table(Tables.TRANSACTIONS).insert(data).execute()
         
-        # Real-time Broadcast via WebSocket
+        # Real-time Broadcast via WebSocket (Secure)
         try:
             from core import ws_server
             import asyncio
             asyncio.run_coroutine_threadsafe(
-                ws_server.broadcast({
-                    "event": "new_transaction",
-                    "data": data
-                }),
+                ws_server.broadcast_to_user(
+                    user_id=user_id,
+                    message={
+                        "event": "new_transaction",
+                        "data": data
+                    }
+                ),
                 ws_server.loop
             )
         except Exception as e:
