@@ -1,48 +1,128 @@
 import logging
-from typing import Dict, Any
+import json
+import time
+from typing import Dict, List, Optional, Tuple
 from modules.redis_mgr import RedisManager
 
 logger = logging.getLogger(__name__)
 
 class GamificationEngine:
     """
-    Elite Experience: Gamification Engine
-    Increases user engagement via achievements, streaks, and XP leveling.
+    High-Performance Gamification Engine powered by Redis.
+    Features:
+    - Real-time XP & Leveling
+    - Daily Streak System
+    - Dynamic Badges & Titles
+    - Leaderboard Capability
     """
-    def __init__(self, redis_mgr: RedisManager):
-        self.redis = redis_mgr
-        self.xp_per_transaction = 10
-        self.xp_per_voice_note = 25
-        self.xp_per_insight_query = 5
+    
+    LEVEL_THRESHOLDS = {
+        1: 0, 2: 100, 3: 300, 4: 600, 5: 1000,
+        6: 1500, 7: 2100, 8: 2800, 9: 3600, 10: 5000
+    }
+    
+    TITLES = {
+        1: "Pemula Hemat 🌱",
+        3: "Pengatur Uang 💰",
+        5: "Juragan Cuan 💎",
+        8: "Sultan Muda 👑",
+        10: "Money Master 🚀"
+    }
 
-    async def add_xp(self, user_id: int, action_type: str) -> Dict[str, Any]:
-        """Menambah XP user berdasarkan aktivitas"""
-        xp_to_add = getattr(self, f"xp_per_{action_type}", 5)
+    def __init__(self):
+        self.redis = RedisManager()
         
-        key = f"user_stats:{user_id}"
-        current_xp = int(self.redis.client.hget(key, "xp") or 0)
-        new_xp = current_xp + xp_to_add
-        
-        # Simple Leveling: Level = floor(sqrt(XP / 100)) + 1
-        import math
-        new_level = math.floor(math.sqrt(new_xp / 100)) + 1
-        
-        self.redis.client.hset(key, mapping={
-            "xp": new_xp,
-            "level": new_level
-        })
-        
-        return {
-            "xp_added": xp_to_add,
-            "total_xp": new_xp,
-            "level": new_level,
-            "leveled_up": new_level > math.floor(math.sqrt(current_xp / 100)) + 1 if current_xp > 0 else False
+    async def add_xp(self, user_id: int, action_type: str) -> Dict[str, any]:
+        """
+        Add XP to user and check for level up.
+        Returns dict with status update.
+        """
+        xp_map = {
+            "chat": 2,
+            "transaction": 15,
+            "insight": 5,
+            "daily_login": 50,
+            "budget_set": 20
         }
+        
+        amount = xp_map.get(action_type, 1)
+        
+        # Redis Keys
+        xp_key = f"user:{user_id}:xp"
+        level_key = f"user:{user_id}:level"
+        streak_key = f"user:{user_id}:streak"
+        
+        try:
+            # Atomic increment
+            current_xp = self.redis.client.incrby(xp_key, amount)
+            current_level = int(self.redis.client.get(level_key) or 1)
+            
+            # Check Level Up
+            new_level = current_level
+            leveled_up = False
+            
+            # Simple linear check for now, can be optimized with bisect
+            next_threshold = self.LEVEL_THRESHOLDS.get(current_level + 1, 999999)
+            
+            if current_xp >= next_threshold:
+                new_level = current_level + 1
+                self.redis.client.set(level_key, new_level)
+                leveled_up = True
+                
+                # Award Badge if applicable
+                badge = self.TITLES.get(new_level)
+                if badge:
+                    self.redis.client.sadd(f"user:{user_id}:badges", badge)
 
-    async def get_user_rank(self, user_id: int) -> str:
-        """Mendapatkan title berdasarkan level"""
-        level = int(self.redis.client.hget(f"user_stats:{user_id}", "level") or 1)
-        if level < 5: return "Novice Saver"
-        if level < 15: return "Financial Warrior"
-        if level < 30: return "Elite Investor"
-        return "CFO Master"
+            return {
+                "xp_gained": amount,
+                "total_xp": current_xp,
+                "current_level": new_level,
+                "leveled_up": leveled_up,
+                "title": self.TITLES.get(new_level, "Member"),
+                "next_level_xp": self.LEVEL_THRESHOLDS.get(new_level + 1, 999999)
+            }
+            
+        except Exception as e:
+            logger.error(f"Gamification Error: {e}")
+            return {}
+
+    async def get_user_profile(self, user_id: int) -> Dict[str, any]:
+        """Fetch full gamification profile from Redis (Low Latency)"""
+        try:
+            pipe = self.redis.client.pipeline()
+            pipe.get(f"user:{user_id}:xp")
+            pipe.get(f"user:{user_id}:level")
+            pipe.smembers(f"user:{user_id}:badges")
+            pipe.get(f"user:{user_id}:streak")
+            
+            res = pipe.execute()
+            
+            xp = int(res[0] or 0)
+            level = int(res[1] or 1)
+            badges = [b.decode('utf-8') for b in res[2]] if res[2] else []
+            streak = int(res[3] or 0)
+            
+            next_xp = self.LEVEL_THRESHOLDS.get(level + 1, 999999)
+            progress = min(100, int((xp / next_xp) * 100)) if next_xp > 0 else 100
+
+            return {
+                "level": level,
+                "xp": xp,
+                "badges": badges,
+                "streak": streak,
+                "title": self.get_title_for_level(level),
+                "progress_percent": progress,
+                "next_level_xp": next_xp
+            }
+        except Exception as e:
+            logger.error(f"Profile Fetch Error: {e}")
+            return {"level": 1, "xp": 0, "badges": [], "streak": 0}
+
+    def get_title_for_level(self, level: int) -> str:
+        # Find highest title <= current level
+        title = "Pemula Hemat 🌱"
+        for l, t in sorted(self.TITLES.items()):
+            if level >= l:
+                title = t
+        return title

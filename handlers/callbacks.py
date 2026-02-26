@@ -68,6 +68,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await get_ai_insight(update, context)
         return
 
+    if action == "get_profile":
+        from handlers.commands import profile_command
+        await profile_command(update, context)
+        return
+
     if action == "settings_menu":
         help_text = (
             "⚙️ **Pengaturan**\n\n"

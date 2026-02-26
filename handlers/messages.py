@@ -1,9 +1,12 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ContextTypes
-from core import db, premium_ai, ws_server, nlp
+from core import db, premium_ai, ws_server, nlp, ocr
 import logging
 import asyncio
 from datetime import datetime
+import os
+
+logger = logging.getLogger(__name__)
 
 def get_main_menu_keyboard():
     return ReplyKeyboardMarkup([
@@ -22,7 +25,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # 1. Transcribe via Premium AI (Whisper)
     text = await premium_ai.transcribe_voice(voice_path)
-    os.remove(voice_path) # Clean up
+    if os.path.exists(voice_path):
+        os.remove(voice_path) # Clean up
     
     if not text:
         await update.message.reply_text("Maaf, aku gagal denger suara kamu. Coba kirim lagi ya!")
@@ -35,12 +39,49 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     update.message.text = text
     await handle_message(update, context)
 
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle receipt scanning via OCR"""
+    user_id = update.effective_user.id
+    photo = await update.message.photo[-1].get_file()
+    photo_path = f"temp_receipt_{user_id}.jpg"
+    await photo.download_to_drive(photo_path)
+    
+    await update.message.reply_text("📸 **Sedang memindai struk...**", parse_mode='Markdown')
+    
+    try:
+        # 1. OCR Extraction
+        result = ocr.process_receipt(photo_path)
+        if os.path.exists(photo_path):
+            os.remove(photo_path)
+            
+        if not result:
+            await update.message.reply_text("Gagal membaca struk. Pastikan foto jelas ya!")
+            return
+
+        merchant = result.get('merchant', 'Transaksi')
+        amount = result.get('amount', 0)
+        
+        # Construct natural language text for AI processing
+        text = f"Beli {merchant} seharga {amount}"
+
+        # 2. AI Parsing
+        await update.message.reply_text(f"🔍 **Data Terbaca:**\n{merchant}: {amount}\n\n_Menganalisis detail..._")
+        
+        # Reuse handle_message logic
+        update.message.text = text
+        await handle_message(update, context)
+        
+    except Exception as e:
+        logger.error(f"OCR Error: {e}")
+        await update.message.reply_text("Terjadi kesalahan saat memproses foto.")
+        if os.path.exists(photo_path):
+            os.remove(photo_path)
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_name = update.effective_user.first_name
     text = update.message.text
     
-    logger = logging.getLogger(__name__)
     logger.info(f"Processing message from {user_id} ({user_name}): {text[:50]}...")
     
     # [CRITICAL FIX] Ensure user exists in database before any transaction
@@ -89,15 +130,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif intent == "insight":
             response_msg = premium_response.predictive_advice or premium_response.suggested_response
 
-        # 3. Real-time Multi-channel Broadcast
+        # 3. Real-time Multi-channel Broadcast & Gamification
         if premium_response.needs_live_update:
             try:
                 # [NEW] Add XP for interaction
                 from core import gamify
-                # Use DB ID for gamification if it relies on DB, otherwise Telegram ID. 
-                # Assuming gamify uses Telegram ID for simplicity or handles mapping internally.
-                # Let's check gamify later, for now pass user_id (TG ID) as it was.
                 xp_status = await gamify.add_xp(user_id, "transaction" if intent == "record" else "insight")
+                
+                if xp_status.get("leveled_up"):
+                    level = xp_status.get("current_level")
+                    title = xp_status.get("title")
+                    response_msg += f"\n\n🎉 **LEVEL UP!**\nSelamat! Kamu naik ke Level {level}: **{title}** 🏆"
                 
                 if ws_server.loop and ws_server.loop.is_running():
                     asyncio.run_coroutine_threadsafe(
@@ -118,7 +161,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         ws_server.loop
                     )
             except Exception as ws_err:
-                logger.warning(f"WS Broadcast failed for {user_id}: {ws_err}")
+                logger.warning(f"Gamification/WS Broadcast failed for {user_id}: {ws_err}")
 
         await update.message.reply_text(response_msg, parse_mode='Markdown')
 
@@ -126,78 +169,3 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Critical error in handle_message for {user_id}: {e}", exc_info=True)
         error_msg = "Waduh, ada kendala teknis nih. 🛠️\nTim kami sudah diberitahu. Coba lagi sebentar lagi ya!"
         await update.message.reply_text(error_msg)
-
-async def send_budget_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_db = db.get_or_create_user(user_id, update.effective_user.username)
-    status = budget_mgr.get_detailed_budget_status(user_db.id)
-    if update.callback_query:
-        await update.callback_query.message.reply_text(status, reply_markup=get_main_menu_keyboard())
-    else:
-        await update.message.reply_text(status, reply_markup=get_main_menu_keyboard())
-
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    
-    if not ocr.enabled:
-        await update.message.reply_text("Maaf, fitur baca struk (OCR) sedang dinonaktifkan di server untuk menghemat memori. Kamu bisa catat manual ya!")
-        return
-
-    user_db = db.get_or_create_user(user_id, update.effective_user.username)
-    
-    photo_file = await update.message.photo[-1].get_file()
-    file_path = f"temp_{user_id}.jpg"
-    await photo_file.download_to_drive(file_path)
-    
-    processing_msg = await update.message.reply_text("Sedang memproses struk... ⏳")
-    
-    try:
-        ocr_result = ocr.process_receipt(file_path)
-        if isinstance(ocr_result, dict):
-            amount = ocr_result.get('amount', 0)
-            merchant = ocr_result.get('merchant', 'Struk Belanja')
-            date_str = ocr_result.get('date', datetime.now().strftime("%Y-%m-%d"))
-        else:
-            amount = ocr_result if ocr_result else 0
-            merchant = 'Struk Belanja'
-            date_str = datetime.now().strftime("%Y-%m-%d")
-        
-        if amount > 0:
-            category = nlp._detect_category(merchant)
-            if category == "Lain-lain":
-                category = "Belanja"
-            
-            context.user_data['pending_tx'] = {
-                'amount': amount,
-                'category': category,
-                'merchant': merchant,
-                'date': date_str,
-                'type': 'expense'
-            }
-            
-            keyboard = [
-                [
-                    InlineKeyboardButton("✓ Simpan", callback_data="tx_confirm"),
-                    InlineKeyboardButton("✎ Edit", callback_data="tx_edit"),
-                    InlineKeyboardButton("✕ Abaikan", callback_data="tx_ignore")
-                ]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            msg = (
-                f"📝 **Data Struk Berhasil Dibaca**\n\n"
-                f"💰 **Nominal:** Rp{amount:,.0f}\n"
-                f"📂 **Kategori:** {category}\n"
-                f"🏪 **Toko:** {merchant}\n"
-                f"📅 **Tanggal:** {date_str}\n\n"
-                f"Apakah data di atas sudah benar?"
-            )
-            await processing_msg.edit_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
-        else:
-            await processing_msg.edit_text("Maaf, aku nggak nemu total harganya. Bisa coba foto lagi atau ketik manual?")
-    except Exception as e:
-        logging.error(f"OCR Error: {e}")
-        await processing_msg.edit_text("Terjadi kesalahan saat memproses gambar. Coba pastikan foto struk terlihat jelas.")
-    finally:
-        if os.path.exists(file_path):
-            os.remove(file_path)

@@ -111,6 +111,7 @@ class PremiumAIEngine:
             - Use emojis effectively 🚀.
             - Example: "Oke, 50rb buat Kopi Kenangan tercatat! ☕️ Jangan kebanyakan gula ya kak!"
             - For investment advice: Be specific. Suggest percentages and asset classes (e.g. "50% Reksa Dana, 30% Saham, 20% Emas").
+            """
 
             user_prompt = f"""
             User: {user_name}

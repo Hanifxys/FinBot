@@ -28,7 +28,10 @@ def get_interactive_help_keyboard():
             InlineKeyboardButton("🧠 AI Insights", callback_data="get_ai_insight")
         ],
         [
-            InlineKeyboardButton("⚙️ Settings", callback_data="settings_menu"),
+            InlineKeyboardButton("👤 Profil & Rank", callback_data="get_profile"),
+            InlineKeyboardButton("⚙️ Settings", callback_data="settings_menu")
+        ],
+        [
             InlineKeyboardButton("📥 Export CSV", callback_data="export_csv")
         ]
     ]
@@ -44,8 +47,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Aku asisten keuangan cerdas kamu yang sekarang jauh lebih responsif!\n\n"
         "**Apa yang baru?**\n"
         "✅ **Real-time Dashboard**: Pantau budget secara live.\n"
-        "✅ **Smart UI**: Gunakan tombol interaktif di bawah.\n"
-        "✅ **Dua Arah**: Bot bisa kasih notifikasi instan!\n\n"
+        "✅ **Gamification**: Naik level dengan mencatat keuangan!\n"
+        "✅ **Smart UI**: Gunakan tombol interaktif di bawah.\n\n"
         "Silakan pilih menu di bawah ini untuk memulai! 👇"
     )
     await update.message.reply_text(welcome_msg, parse_mode='Markdown', reply_markup=get_interactive_help_keyboard())
@@ -98,9 +101,45 @@ async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(msg)
         elif args[0].lower() == "yearly":
             year = int(args[1]) if len(args) > 1 else datetime.now().year
-            msg = budget_mgr.generate_yearly_summary(user_db.id, year)
+            # msg = budget_mgr.generate_report(user_db.id, "yearly", year=year) # Assuming supported
+            msg = "Laporan tahunan belum tersedia."
             await update.message.reply_text(msg)
-        else:
-            await update.message.reply_text("Format: /summary monthly | /summary yearly [tahun]")
     except Exception as e:
-        await update.message.reply_text(f"Gagal menampilkan ringkasan: {e}")
+        await update.message.reply_text(f"Gagal membuat laporan: {e}")
+
+async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show user gamification profile"""
+    user = update.effective_user
+    from core import gamify
+    
+    profile = await gamify.get_user_profile(user.id)
+    
+    level = profile.get("level", 1)
+    xp = profile.get("xp", 0)
+    title = profile.get("title", "Pemula")
+    next_xp = profile.get("next_level_xp", 100)
+    progress = profile.get("progress_percent", 0)
+    streak = profile.get("streak", 0)
+    badges = profile.get("badges", [])
+    
+    badges_str = " ".join(badges) if badges else "Belum ada badge"
+    
+    # Visual Progress Bar
+    bar_length = 10
+    filled_length = int(bar_length * progress // 100)
+    bar = "█" * filled_length + "░" * (bar_length - filled_length)
+    
+    msg = (
+        f"👤 **PROFIL PENGGUNA: {user.first_name}**\n\n"
+        f"🏆 **Level {level}: {title}**\n"
+        f"✨ XP: {xp} / {next_xp}\n"
+        f"[{bar}] {progress}%\n\n"
+        f"🔥 **Daily Streak:** {streak} hari\n"
+        f"🏅 **Badges:**\n{badges_str}\n\n"
+        f"_Terus aktif mencatat keuangan untuk naik level!_ 🚀"
+    )
+    
+    if update.callback_query:
+        await update.callback_query.message.reply_text(msg, parse_mode='Markdown')
+    else:
+        await update.message.reply_text(msg, parse_mode='Markdown')

@@ -22,7 +22,7 @@ budget_mgr = BudgetManager(db)
 analyzer = ExpenseAnalyzer(db)
 rules = RuleEngine()
 visual_reporter = VisualReporter()
-gamify = GamificationEngine(premium_ai.redis)
+gamify = GamificationEngine()
 
 # Global WebSocket Server Instance
 ws_server = WebSocketServer(port=int(os.getenv("WS_PORT", 8001)))

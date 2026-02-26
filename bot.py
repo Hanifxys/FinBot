@@ -8,7 +8,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Cal
 
 from config import TELEGRAM_BOT_TOKEN
 from core import init_components, db, ocr, nlp, ai, budget_mgr, analyzer, rules, visual_reporter
-from handlers.commands import start, help_command, auth_command, summary_command
+from handlers.commands import start, help_command, auth_command, summary_command, profile_command
 from handlers.finance import set_gaji, set_budget, get_ai_insight, set_budget_alerts
 from handlers.transactions import undo, hapus_transaksi, history, export_data
 from handlers.saving import set_target, add_savings, list_targets
@@ -34,6 +34,7 @@ async def post_init(application):
     commands = [
         BotCommand("start", "Mulai bot & Registrasi"),
         BotCommand("help", "Tampilkan menu bantuan"),
+        BotCommand("profile", "Lihat level & XP gamification"),
         BotCommand("setgaji", "Atur pendapatan bulanan"),
         BotCommand("setbudget", "Atur limit budget kategori"),
         BotCommand("budgetalert", "Atur ambang peringatan budget"),
@@ -71,6 +72,7 @@ if __name__ == '__main__':
     # Handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("profile", profile_command))
     application.add_handler(CommandHandler("setgaji", set_gaji))
     application.add_handler(CommandHandler("setbudget", set_budget))
     application.add_handler(CommandHandler("budgetalert", set_budget_alerts))
@@ -98,5 +100,4 @@ if __name__ == '__main__':
     except Exception as e:
         logging.error(f"Bot exited with error: {e}")
     finally:
-        logging.info("Bot stopped.")
-        sys.stdout.flush()
+        pass
