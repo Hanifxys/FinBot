@@ -42,6 +42,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     logger = logging.getLogger(__name__)
     logger.info(f"Processing message from {user_id} ({user_name}): {text[:50]}...")
+    
+    # [CRITICAL FIX] Ensure user exists in database before any transaction
+    try:
+        db.get_or_create_user(user_id, update.effective_user.username)
+    except Exception as e:
+        logger.error(f"Failed to ensure user exists: {e}")
+        await update.message.reply_text("Maaf, ada masalah koneksi database saat mendaftarkan akunmu. Coba lagi ya!")
+        return
 
     try:
         # 1. Premium Autonomous Intent & Context Engine
