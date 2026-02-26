@@ -20,7 +20,7 @@ if DATABASE_URL.startswith("postgres://"):
 TESSERACT_PATH = os.getenv("TESSERACT_PATH", r"C:\Program Files\Tesseract-OCR\tesseract.exe")
 
 # Categories for classification
-CATEGORIES = ["Makanan", "Transportasi", "Belanja", "Tagihan", "Investasi", "Gaji", "Lain-lain"]
+CATEGORIES = ["Makanan", "Minuman", "Jajanan", "Transportasi", "Belanja", "Tagihan", "Investasi", "Gaji", "Lain-lain", "Kesehatan", "Lifestyle", "Sosial", "Pendidikan", "Maintenance"]
 
 # Allocation Rules (50/20/10/20 standard)
 ALLOCATION_RULES = {

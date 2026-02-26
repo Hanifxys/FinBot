@@ -38,9 +38,16 @@ class NLPProcessor:
         # Keywords for categorization - User-centric mapping
         self.category_keywords = {
             "Makanan": [
-                "makan", "minum", "resto", "warung", "kopi", "cafe", "food", "dinner", "lunch",
-                "ngopi", "gofood", "grabfood", "mixue", "starbucks", "haus", "mie", "bakso", "kenangan",
-                "shopeefood", "martabak", "sate", "warteg", "padang", "seblak", "ayam", "nasgor", "steak"
+                "makan", "resto", "warung", "food", "dinner", "lunch", "gofood", "grabfood", "shopeefood", 
+                "warteg", "padang", "ayam", "nasgor", "steak", "sate", "bakso", "mie", "soto", "bubur", "nasi"
+            ],
+            "Minuman": [
+                "minum", "kopi", "cafe", "ngopi", "mixue", "starbucks", "haus", "kenangan", "chatime", "janji jiwa",
+                "jus", "susu", "teh", "boba", "coffee", "beer", "wine", "air galon", "aqua"
+            ],
+            "Jajanan": [
+                "jajan", "cemilan", "snack", "ciki", "coklat", "es krim", "roti", "kue", "martabak", 
+                "seblak", "cimol", "cilok", "gorengan", "pisang goreng", "keripik", "biskuit"
             ],
             "Transportasi": [
                 "gojek", "grab", "bensin", "parkir", "tol", "tiket", "kereta", "bus", 
@@ -333,8 +340,10 @@ class NLPProcessor:
         
         # Mapping categories to allowed list
         category_map = {
-            "Makanan": "Makan",
-            "Transportasi": "Transport",
+            "Makanan": "Makanan",
+            "Minuman": "Minuman",
+            "Jajanan": "Jajanan",
+            "Transportasi": "Transportasi",
             "Belanja": "Belanja",
             "Tagihan": "Tagihan",
             "Kesehatan": "Kesehatan",
@@ -344,9 +353,9 @@ class NLPProcessor:
             "Maintenance": "Maintenance",
             "Investasi": "Investasi",
             "Gaji": "Gaji",
-            "Lain-lain": "Lainnya"
+            "Lain-lain": "Lain-lain"
         }
-        mapped_cat = category_map.get(category, "Lainnya")
+        mapped_cat = category_map.get(category, "Lain-lain")
         
         # Determine type
         type_ = "income" if mapped_cat == "Gaji" else "expense"
