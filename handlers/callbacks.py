@@ -7,6 +7,7 @@ from config import CATEGORIES
 from datetime import datetime
 import os
 import logging
+import json
 
 def get_main_menu_keyboard():
     return ReplyKeyboardMarkup([
@@ -24,6 +25,131 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     action = query.data
     pending = user_data.get('pending_tx')
+    pending_cancel = user_data.get("pending_cancel")
+
+    if action == "open_history":
+        from handlers.transactions import history
+        original_message = update.message
+        update.message = query.message
+        try:
+            await history(update, context)
+        finally:
+            update.message = original_message
+        return
+
+    if action == "cancel_abort":
+        user_data.pop("pending_cancel", None)
+        await query.edit_message_text("Oke, pembatalan dibatalkan. ✅")
+        return
+
+    if action == "cancel_choose":
+        if not pending_cancel or not pending_cancel.get("candidates"):
+            await query.message.reply_text("Aku belum nemu kandidat transaksi. Coba tulis: `batal yang 25rb` atau `hapus #ID`.", parse_mode="Markdown")
+            return
+        keyboard = []
+        for c in pending_cancel["candidates"][:5]:
+            txid = c.get("id")
+            amount = c.get("amount", 0)
+            cat = c.get("category", "")
+            desc = (c.get("description") or "-")
+            if len(desc) > 28:
+                desc = desc[:25] + "..."
+            keyboard.append([InlineKeyboardButton(f"#{txid} Rp{amount:,.0f} · {cat}", callback_data=f"cancel_pick:{txid}")])
+        keyboard.append([InlineKeyboardButton("❌ Tidak jadi", callback_data="cancel_abort")])
+        await query.edit_message_text("Pilih transaksi yang mau dibatalkan:", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    if action.startswith("cancel_pick:"):
+        if not pending_cancel:
+            await query.message.reply_text("Session pembatalan sudah habis. Coba ulangi perintah pembatalan ya.")
+            return
+        try:
+            tx_id = int(action.split(":", 1)[1])
+        except Exception:
+            tx_id = None
+        if not tx_id:
+            await query.message.reply_text("ID transaksi tidak valid.")
+            return
+        pending_cancel["selected_id"] = tx_id
+        user_data["pending_cancel"] = pending_cancel
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Batalkan (1-klik)", callback_data="cancel_confirm"),
+                InlineKeyboardButton("🔁 Pilih lain", callback_data="cancel_choose"),
+            ],
+            [
+                InlineKeyboardButton("📜 Riwayat", callback_data="open_history"),
+                InlineKeyboardButton("❌ Tidak jadi", callback_data="cancel_abort"),
+            ],
+        ]
+        await query.edit_message_text(
+            f"Siap. Kamu mau membatalkan transaksi `#{tx_id}`. Lanjut?",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return
+
+    if action == "cancel_confirm":
+        if not pending_cancel or not pending_cancel.get("selected_id"):
+            await query.message.reply_text("Aku belum tahu transaksi mana yang harus dibatalkan. Ketik: `batal transaksi terakhir` atau `hapus #ID`.")
+            return
+
+        tx_id = int(pending_cancel["selected_id"])
+        reason = pending_cancel.get("reason") or ""
+        eta_seconds = int(pending_cancel.get("eta_seconds") or 60)
+
+        success = False
+        try:
+            success = db.delete_transaction(user_db.id, tx_id)
+        except Exception as e:
+            logging.error(f"Cancel delete failed: {e}")
+            success = False
+
+        if success:
+            try:
+                from core import premium_ai, ws_server
+                audit = {
+                    "tx_id": tx_id,
+                    "reason": reason,
+                    "eta_seconds": eta_seconds,
+                    "ts": datetime.utcnow().isoformat() + "Z",
+                }
+                premium_ai.redis.client.lpush(f"cancel_audit:{user_id}", json.dumps(audit))
+                premium_ai.redis.client.ltrim(f"cancel_audit:{user_id}", 0, 200)
+                if ws_server.loop and ws_server.loop.is_running():
+                    import asyncio
+                    asyncio.run_coroutine_threadsafe(
+                        ws_server.broadcast_to_user(
+                            user_id=user_id,
+                            message={
+                                "event": "refund_status",
+                                "data": {
+                                    "tx_id": tx_id,
+                                    "status": "success",
+                                    "eta_seconds": eta_seconds,
+                                },
+                            },
+                        ),
+                        ws_server.loop,
+                    )
+            except Exception:
+                pass
+
+            user_data.pop("pending_cancel", None)
+            await query.edit_message_text(
+                f"✅ **Berhasil dibatalkan**: transaksi `#{tx_id}`\n⏱️ Estimasi refund: ≤ {eta_seconds} detik",
+                parse_mode="Markdown",
+            )
+            try:
+                await update_pinned_dashboard(context, user_id)
+            except Exception:
+                pass
+        else:
+            await query.edit_message_text(
+                f"❌ Gagal membatalkan transaksi `#{tx_id}`. Coba cek `/history` lalu pakai `/hapus {tx_id}`.",
+                parse_mode="Markdown",
+            )
+        return
     
     if action == "suggest_help":
         from handlers.commands import help_command

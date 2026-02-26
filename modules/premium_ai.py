@@ -123,7 +123,7 @@ class PremiumAIEngine:
             
             JSON Schema:
             {{
-                "intent": "record|query|insight|warning|chat|config",
+                "intent": "record|query|insight|warning|chat|config|cancel",
                 "confidence": 0.0-1.0,
                 "sentiment": "positive|neutral|negative",
                 "language": "id",
@@ -132,7 +132,12 @@ class PremiumAIEngine:
                     "category": "string",
                     "description": "string",
                     "type": "expense|income",
-                    "config_type": "set_budget|reset_budget|set_salary|unknown"
+                    "config_type": "set_budget|reset_budget|set_salary|unknown",
+                    "cancel_action": "undo_last|delete_by_id|delete_by_hint",
+                    "transaction_id": int,
+                    "amount_hint": float,
+                    "merchant_hint": "string",
+                    "reason": "string"
                 }},
                 "suggested_response": "Your witty and helpful response here",
                 "predictive_advice": "Optional short advice if pattern detected",
@@ -144,6 +149,7 @@ class PremiumAIEngine:
             - "config": User wants to change settings (e.g., "atur gaji", "reset budget", "ubah limit").
             - "query": User asks for data (e.g., "pengeluaran saya berapa?").
             - "insight": User asks for advice.
+            - "cancel": User wants to undo/delete a transaction (e.g., "undo transaksi terakhir", "hapus yang 25rb tadi", "batalin pembayaran", "hapus transaksi #123").
             - "chat": Casual conversation.
             """
 

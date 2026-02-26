@@ -330,4 +330,10 @@ class DBHandler:
                 item["description"] = self.crypto.decrypt(item["description"])
         except Exception:
             pass
+        try:
+            date_val = item.get("date")
+            if isinstance(date_val, str) and date_val:
+                item["date"] = datetime.fromisoformat(date_val.replace("Z", "+00:00"))
+        except Exception:
+            pass
         return item

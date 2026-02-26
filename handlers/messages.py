@@ -13,12 +13,158 @@ OCR_MAX_DOWNLOAD_BYTES = int(os.getenv("OCR_MAX_DOWNLOAD_BYTES", "1200000"))
 OCR_CONCURRENCY = int(os.getenv("OCR_CONCURRENCY", "1"))
 OCR_SEMAPHORE = asyncio.Semaphore(max(OCR_CONCURRENCY, 1))
 OCR_MAX_MEMORY_PERCENT = float(os.getenv("OCR_MAX_MEMORY_PERCENT", "80"))
+CANCEL_CANDIDATE_LIMIT = int(os.getenv("CANCEL_CANDIDATE_LIMIT", "30"))
 
 def get_main_menu_keyboard():
     return ReplyKeyboardMarkup([
         [KeyboardButton("📊 Cek Budget"), KeyboardButton("📈 Laporan")],
         [KeyboardButton("💡 Tips Hemat"), KeyboardButton("🚀 Menu Utama")]
     ], resize_keyboard=True)
+
+def _format_tx(tx) -> str:
+    try:
+        date_str = tx.date.strftime("%d/%m %H:%M")
+    except Exception:
+        date_str = str(getattr(tx, "date", ""))
+    desc = (getattr(tx, "description", None) or "-").strip()
+    if len(desc) > 80:
+        desc = desc[:77] + "..."
+    ttype = getattr(tx, "type", "")
+    icon = "🔻" if ttype == "expense" else "🔹"
+    return f"{icon} `#{tx.id}` | {date_str} | {tx.category} | **Rp{tx.amount:,.0f}**\n_{desc}_"
+
+def _parse_amount_hint(text: str):
+    import re
+    t = (text or "").lower()
+    t = t.replace("rp", "").replace(" ", "")
+    m = re.search(r"(\d+(?:[.,]\d+)?)\s*(rb|ribu|k|jt|juta)?", t)
+    if not m:
+        return None
+    raw = m.group(1).replace(".", "").replace(",", ".")
+    try:
+        val = float(raw)
+    except Exception:
+        return None
+    suf = m.group(2) or ""
+    if suf in ("rb", "ribu", "k"):
+        val *= 1000
+    elif suf in ("jt", "juta"):
+        val *= 1000000
+    if val <= 0:
+        return None
+    return float(val)
+
+def _score_cancel_candidate(tx, amount_hint=None, merchant_hint=None, text_hint=None):
+    score = 0.0
+    try:
+        if amount_hint is not None and abs(float(tx.amount) - float(amount_hint)) <= 1.0:
+            score += 10.0
+        elif amount_hint is not None and abs(float(tx.amount) - float(amount_hint)) <= 1000.0:
+            score += 5.0
+    except Exception:
+        pass
+
+    desc = (getattr(tx, "description", "") or "").lower()
+    cat = (getattr(tx, "category", "") or "").lower()
+    mh = (merchant_hint or "").lower().strip()
+    th = (text_hint or "").lower().strip()
+    if mh and (mh in desc or mh in cat):
+        score += 6.0
+    if th:
+        for token in [w for w in th.split() if len(w) >= 4][:5]:
+            if token in desc or token in cat:
+                score += 2.0
+    return score
+
+async def _send_cancel_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, user_db, structured: dict, raw_text: str):
+    user_id = update.effective_user.id
+    tx_id = structured.get("transaction_id")
+    try:
+        tx_id = int(tx_id) if tx_id is not None else None
+    except Exception:
+        tx_id = None
+
+    amount_hint = structured.get("amount_hint")
+    try:
+        amount_hint = float(amount_hint) if amount_hint is not None else None
+    except Exception:
+        amount_hint = None
+    if amount_hint is None:
+        amount_hint = _parse_amount_hint(raw_text)
+
+    merchant_hint = structured.get("merchant_hint") or ""
+    reason = structured.get("reason") or raw_text
+    cancel_action = structured.get("cancel_action") or "delete_by_hint"
+
+    txs = db.get_transactions_history(user_db.id, limit=CANCEL_CANDIDATE_LIMIT)
+    if not txs:
+        await update.message.reply_text("Belum ada transaksi yang bisa dibatalkan.")
+        return
+
+    selected = None
+    candidates = []
+    if tx_id is not None:
+        for tx in txs:
+            if getattr(tx, "id", None) == tx_id:
+                selected = tx
+                break
+    if selected is None and cancel_action == "undo_last":
+        selected = txs[0]
+    if selected is None:
+        for tx in txs:
+            score = _score_cancel_candidate(tx, amount_hint=amount_hint, merchant_hint=merchant_hint, text_hint=raw_text)
+            candidates.append((score, tx))
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        if candidates and candidates[0][0] > 0:
+            selected = candidates[0][1]
+    if selected is None:
+        selected = txs[0]
+
+    top = []
+    seen = set()
+    if candidates:
+        for score, tx in candidates[:5]:
+            if getattr(tx, "id", None) not in seen:
+                seen.add(getattr(tx, "id", None))
+                top.append(tx)
+    if not top:
+        top = txs[:5]
+
+    context.user_data["pending_cancel"] = {
+        "selected_id": getattr(selected, "id", None),
+        "reason": reason,
+        "amount_hint": amount_hint,
+        "merchant_hint": merchant_hint,
+        "candidates": [
+            {
+                "id": getattr(tx, "id", None),
+                "amount": float(getattr(tx, "amount", 0) or 0),
+                "category": getattr(tx, "category", ""),
+                "description": getattr(tx, "description", None),
+            }
+            for tx in top
+        ],
+        "eta_seconds": 60,
+    }
+
+    msg = (
+        "🧾 **Deteksi pembatalan transaksi**\n\n"
+        "Aku tangkap kamu mau membatalkan transaksi ini:\n\n"
+        f"{_format_tx(selected)}\n\n"
+        f"⏱️ Estimasi refund: ≤ {context.user_data['pending_cancel']['eta_seconds']} detik\n"
+        "Sebelum lanjut, mau aku tawarkan opsi lain dulu?"
+    )
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Batalkan (1-klik)", callback_data="cancel_confirm"),
+            InlineKeyboardButton("🔁 Pilih lain", callback_data="cancel_choose"),
+        ],
+        [
+            InlineKeyboardButton("📜 Riwayat", callback_data="open_history"),
+            InlineKeyboardButton("❌ Tidak jadi", callback_data="cancel_abort"),
+        ],
+    ]
+    await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
     user_id = update.effective_user.id
@@ -38,6 +184,10 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
         intent = premium_response.intent
         
         response_msg = premium_response.suggested_response
+        if intent == "cancel":
+            structured = premium_response.structured_data or {}
+            await _send_cancel_flow(update, context, user_db, structured, text)
+            return
         
         if intent == "record" and premium_response.structured_data:
             data = premium_response.structured_data
