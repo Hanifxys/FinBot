@@ -61,6 +61,11 @@
             -webkit-font-smoothing: antialiased;
             -moz-osx-font-smoothing: grayscale;
         }
+
+        ::selection {
+            background: rgba(59, 130, 246, 0.3);
+            color: #60a5fa;
+        }
         
         /* Premium Glass Effect */
         .glass-panel { 
@@ -98,6 +103,42 @@
 
         /* Utilities */
         .text-glow { text-shadow: 0 0 20px rgba(59, 130, 246, 0.5); }
+
+        .animate-loading-bar { animation: loadingBar 1.2s ease-in-out infinite; }
+        @keyframes loadingBar {
+            0% { transform: translateX(-120%); }
+            100% { transform: translateX(220%); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .animate-loading-bar { animation: none; }
+        }
+
+        html.theme-smooth *, html.theme-smooth {
+            transition: background-color 220ms ease, color 220ms ease, border-color 220ms ease, box-shadow 220ms ease, fill 220ms ease, stroke 220ms ease;
+        }
+
+        html:not(.dark) body { background: #f8fafc; color: #0f172a; }
+        html:not(.dark) .glass-panel { background: rgba(255, 255, 255, 0.72); border-color: rgba(2, 6, 23, 0.10); }
+        html:not(.dark) .glass-card { background: linear-gradient(145deg, rgba(255, 255, 255, 0.85) 0%, rgba(241, 245, 249, 0.85) 100%); border-color: rgba(2, 6, 23, 0.08); }
+
+        html:not(.dark) .bg-dark-950 { background-color: #f8fafc !important; }
+        html:not(.dark) .bg-dark-950\/80 { background-color: rgba(248, 250, 252, 0.85) !important; }
+        html:not(.dark) .bg-dark-900 { background-color: #ffffff !important; }
+        html:not(.dark) .bg-dark-900\/50 { background-color: rgba(255, 255, 255, 0.72) !important; }
+        html:not(.dark) .bg-dark-900\/80 { background-color: rgba(255, 255, 255, 0.82) !important; }
+        html:not(.dark) .bg-dark-800 { background-color: #f1f5f9 !important; }
+        html:not(.dark) .bg-dark-700 { background-color: #e2e8f0 !important; }
+
+        html:not(.dark) .text-white { color: #0f172a !important; }
+        html:not(.dark) .text-slate-200 { color: #0f172a !important; }
+        html:not(.dark) .text-slate-300 { color: #1e293b !important; }
+        html:not(.dark) .text-slate-400 { color: #334155 !important; }
+        html:not(.dark) .text-slate-500 { color: #475569 !important; }
+        html:not(.dark) .text-slate-600 { color: #64748b !important; }
+
+        html:not(.dark) .border-white\/5 { border-color: rgba(2, 6, 23, 0.08) !important; }
+        html:not(.dark) .border-white\/10 { border-color: rgba(2, 6, 23, 0.12) !important; }
+        html:not(.dark) .divide-white\/5 > :not([hidden]) ~ :not([hidden]) { border-color: rgba(2, 6, 23, 0.08) !important; }
     </style>
 </head>
 <body>
@@ -239,21 +280,73 @@
                         </div>
                     </div>
                     
-                    <div class="flex items-center gap-4">
+                    <div class="flex items-center gap-3 md:gap-4">
                         <div class="hidden md:flex items-center gap-4 px-4 py-2 rounded-xl bg-dark-900/50 border border-white/5">
                             <div v-for="(status, name) in health.components" :key="name" class="flex items-center gap-1.5 px-2 py-0.5 rounded border border-white/5 bg-dark-800">
                                 <span :class="['w-1.5 h-1.5 rounded-full', status === 'connected' || status === 'running' || status === 'ready' ? 'bg-success-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-danger-500 animate-pulse']"></span>
                                 <span class="text-[9px] font-bold text-slate-400 uppercase tracking-tight">{{ name }}</span>
                             </div>
                         </div>
-                        <button @click="toggleTheme" class="p-2 text-slate-400 hover:text-white transition-colors">
-                            <i class="fas fa-moon"></i>
+
+                        <button @click="toggleTheme" class="group relative inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-dark-900/50 border border-white/5 text-slate-300 hover:text-white hover:border-white/10 transition-all active:scale-[0.98]">
+                            <i :class="['fas text-[11px]', isDarkTheme ? 'fa-moon text-brand-400' : 'fa-sun text-amber-400']"></i>
+                            <div class="w-10 h-5 rounded-full bg-dark-800 border border-white/5 relative overflow-hidden">
+                                <div :class="['absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-300', isDarkTheme ? 'translate-x-5' : 'translate-x-0']"></div>
+                            </div>
+                            <span class="hidden sm:inline text-[10px] font-bold uppercase tracking-widest text-slate-500 group-hover:text-slate-300 transition-colors">{{ isDarkTheme ? 'Dark' : 'Light' }}</span>
                         </button>
-                        <button @click="fetchData" :class="['p-2 text-slate-400 hover:text-brand-400 transition-colors', {'animate-spin': isLoading}]">
-                            <i class="fas fa-sync-alt"></i>
+
+                        <button @click="fetchData" class="p-2.5 rounded-xl bg-dark-900/50 border border-white/5 text-slate-400 hover:text-brand-400 hover:border-white/10 transition-all active:scale-[0.98]" title="Refresh">
+                            <i class="fas fa-sync-alt" :class="{'animate-spin': isLoading}"></i>
                         </button>
+
+                        <div class="relative" ref="profileMenuRoot">
+                            <button @click.stop="toggleProfileMenu" class="flex items-center gap-2 md:gap-3 pl-1.5 pr-2.5 py-1.5 rounded-xl bg-dark-900/50 border border-white/5 hover:border-white/10 transition-all active:scale-[0.98]">
+                                <img :src="profileAvatarUrl" class="w-9 h-9 rounded-lg border border-white/10 bg-dark-800" alt="Profile avatar">
+                                <div class="hidden md:block text-left leading-tight min-w-0">
+                                    <p class="text-xs font-semibold text-white truncate max-w-[160px]">{{ userId || '-' }}</p>
+                                    <p class="text-[10px] text-slate-500 font-mono uppercase">{{ normalizedRole || 'user' }}</p>
+                                </div>
+                                <i class="fas fa-chevron-down text-[10px] text-slate-500 transition-transform" :class="profileMenuOpen ? 'rotate-180' : ''"></i>
+                            </button>
+
+                            <transition name="fade">
+                            <div v-if="profileMenuOpen" class="absolute right-0 mt-2 w-64 glass-panel rounded-2xl overflow-hidden border border-white/10 shadow-2xl z-50">
+                                <div class="p-4 border-b border-white/5 bg-white/2">
+                                    <div class="flex items-center gap-3">
+                                        <img :src="profileAvatarUrl" class="w-10 h-10 rounded-xl border border-white/10 bg-dark-800" alt="Profile avatar">
+                                        <div class="min-w-0">
+                                            <p class="text-xs font-semibold text-white truncate">{{ userId || '-' }}</p>
+                                            <p class="text-[10px] font-mono text-slate-500 uppercase mt-0.5">{{ normalizedRole || 'user' }}</p>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="p-2">
+                                    <button @click="onProfileAction('refresh')" class="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-semibold text-slate-300 hover:text-white hover:bg-white/5 transition-all">
+                                        <i class="fas fa-sync-alt text-slate-500 w-4 text-center"></i>
+                                        Refresh data
+                                    </button>
+                                    <button @click="onProfileAction('theme')" class="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-semibold text-slate-300 hover:text-white hover:bg-white/5 transition-all">
+                                        <i :class="['fas w-4 text-center', isDarkTheme ? 'fa-moon text-brand-400' : 'fa-sun text-amber-400']"></i>
+                                        Toggle theme
+                                    </button>
+                                    <div class="h-px bg-white/5 my-2"></div>
+                                    <button @click="onProfileAction('logout')" class="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-semibold text-danger-500 hover:bg-danger-500/10 transition-all">
+                                        <i class="fas fa-power-off w-4 text-center"></i>
+                                        Logout
+                                    </button>
+                                </div>
+                            </div>
+                            </transition>
+                        </div>
                     </div>
                 </header>
+
+                <div class="relative">
+                    <div v-if="isLoading" class="absolute left-0 right-0 top-0 h-[2px] bg-white/5 overflow-hidden z-20">
+                        <div class="h-full w-1/3 bg-gradient-to-r from-transparent via-brand-500 to-transparent animate-loading-bar"></div>
+                    </div>
+                </div>
 
                 <!-- Scrollable View -->
                 <div class="flex-1 overflow-y-auto p-6 md:p-10 scroll-smooth custom-scrollbar">
@@ -471,6 +564,7 @@
                                     </tbody>
                                 </table>
                             </div>
+                        </div>
                         </div>
                         </transition>
 
@@ -1191,7 +1285,7 @@
     </div>
 
     <script>
-        const { createApp, ref, computed, watch } = Vue;
+        const { createApp, ref, computed, watch, onMounted, onBeforeUnmount } = Vue;
 
         createApp({
             setup() {
@@ -1203,6 +1297,9 @@
                 const userRole = ref('user');
                 const currentView = ref('dashboard');
                 const mobileMenuOpen = ref(false);
+                const isDarkTheme = ref(true);
+                const profileMenuOpen = ref(false);
+                const profileMenuRoot = ref(null);
                 
                 const stats = ref({ total_income: 0, total_expense: 0 });
                 const transactions = ref([]);
@@ -1272,6 +1369,71 @@
                 const isAdmin = computed(() => ['superadmin', 'admin', 'moderator', 'finance', 'support'].includes(normalizedRole.value));
                 const isSuperadmin = computed(() => normalizedRole.value === 'superadmin');
                 const flaggedCount = computed(() => flaggedTransactions.value.length);
+
+                const applyStoredTheme = () => {
+                    const root = document.documentElement;
+                    const stored = localStorage.getItem('finbot_theme');
+                    if (stored === 'light') root.classList.remove('dark');
+                    if (stored === 'dark') root.classList.add('dark');
+                    isDarkTheme.value = root.classList.contains('dark');
+                };
+                applyStoredTheme();
+
+                const profileInitials = computed(() => {
+                    const role = normalizedRole.value;
+                    if (role === 'superadmin') return 'SA';
+                    if (role === 'admin') return 'AD';
+                    if (role === 'moderator') return 'MD';
+                    if (role === 'finance') return 'FN';
+                    if (role === 'support') return 'SP';
+                    const id = (userId.value || 'U').toString();
+                    const cleaned = id.replace(/[^a-z0-9]/ig, '');
+                    return (cleaned.slice(0, 2) || 'U').toUpperCase();
+                });
+
+                const profileAvatarUrl = computed(() => {
+                    const a = profileInitials.value;
+                    const c1 = isDarkTheme.value ? '#2563eb' : '#0ea5e9';
+                    const c2 = isDarkTheme.value ? '#7c3aed' : '#22c55e';
+                    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${c1}"/><stop offset="1" stop-color="${c2}"/></linearGradient></defs><rect width="96" height="96" rx="20" fill="url(#g)"/><circle cx="48" cy="48" r="44" fill="rgba(255,255,255,0.08)"/><text x="50%" y="52%" dominant-baseline="middle" text-anchor="middle" font-family="Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="28" font-weight="800" fill="white">${a}</text></svg>`;
+                    return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+                });
+
+                const closeProfileMenu = () => {
+                    profileMenuOpen.value = false;
+                };
+
+                const toggleProfileMenu = () => {
+                    profileMenuOpen.value = !profileMenuOpen.value;
+                };
+
+                const onProfileAction = async (action) => {
+                    closeProfileMenu();
+                    if (action === 'theme') toggleTheme();
+                    else if (action === 'refresh') await fetchData();
+                    else if (action === 'logout') logout();
+                };
+
+                const onDocumentClick = (e) => {
+                    if (!profileMenuOpen.value) return;
+                    const root = profileMenuRoot.value;
+                    if (!root) return closeProfileMenu();
+                    if (!root.contains(e.target)) closeProfileMenu();
+                };
+
+                const onDocumentKeydown = (e) => {
+                    if (e.key === 'Escape') closeProfileMenu();
+                };
+
+                onMounted(() => {
+                    document.addEventListener('click', onDocumentClick, { passive: true });
+                    document.addEventListener('keydown', onDocumentKeydown);
+                });
+
+                onBeforeUnmount(() => {
+                    document.removeEventListener('click', onDocumentClick);
+                    document.removeEventListener('keydown', onDocumentKeydown);
+                });
 
                 const managementMenuItems = computed(() => {
                     const base = [
@@ -1642,10 +1804,13 @@
 
                 const toggleTheme = () => {
                     const root = document.documentElement;
+                    root.classList.add('theme-smooth');
                     const isDark = root.classList.contains('dark');
                     if (isDark) root.classList.remove('dark');
                     else root.classList.add('dark');
                     localStorage.setItem('finbot_theme', isDark ? 'light' : 'dark');
+                    isDarkTheme.value = !isDark;
+                    window.setTimeout(() => root.classList.remove('theme-smooth'), 260);
                 };
 
                 // --- Chart ---
@@ -1736,7 +1901,9 @@
                     menuItems, managementMenuItems, isAdmin, isSuperadmin, currentTitle, currentDate, kpiCards, transactions, hasData,
                     users, userSearch, filteredUsers, adminStats, aiStats, adminLogs, broadcastHistory, isSending, broadcastMessage, pmModal, userDrawer, toasts, health,
                     flaggedTransactions, suspiciousUsers, disputes, modSettings, modActiveTab, modTabs, flaggedCount,
+                    isDarkTheme, normalizedRole, profileMenuOpen, profileMenuRoot, profileAvatarUrl,
                     login, logout, fetchData, setView, toggleTheme, updateUserRole, toggleUserStatus, sendBroadcast, fetchLogs, fetchAdminStats, fetchAIStats, openPrivateMessage, sendPrivateMessage, openUserDrawer, removeToast,
+                    toggleProfileMenu, onProfileAction,
                     fetchModerationData, saveModSettings, resolveFlag,
                     getRoleClass, formatCurrency, formatCompact, formatDate, formatDateShort, formatDateRelative, getCategoryIcon
                 };
