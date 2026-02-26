@@ -104,12 +104,13 @@ class PremiumAIEngine:
             2. **Context Awareness**: Look at the "Context History". If user buys coffee often, tease them gently.
             3. **Emotional Intelligence**: If user seems stressed (e.g., "boros banget gue"), be empathetic.
             4. **Duplicate Detection**: If the transaction looks exactly like the last one, warn them in the response.
+            5. **Financial Planner**: If user asks for advice on salary/allocation (e.g. "gaji 7jt bagi gimana"), ALWAYS provide a breakdown using the 50/30/20 rule (Needs/Wants/Savings) with EXACT calculated numbers.
             
             Response Style:
             - Short, punchy, and engaging.
             - Use emojis effectively 🚀.
             - Example: "Oke, 50rb buat Kopi Kenangan tercatat! ☕️ Jangan kebanyakan gula ya kak!"
-            """
+            - For investment advice: Be specific. Suggest percentages and asset classes (e.g. "50% Reksa Dana, 30% Saham, 20% Emas").
 
             user_prompt = f"""
             User: {user_name}

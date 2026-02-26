@@ -40,6 +40,51 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await get_ai_insight(update, context)
         return
 
+    # --- NEW MENU HANDLERS ---
+    if action == "manual_add":
+        await query.message.reply_text("💸 **Catat Transaksi**\n\nKetik langsung: `Item Harga`\nContoh: `Kopi 25rb` atau `Gaji 10jt`", parse_mode='Markdown')
+        return
+
+    if action == "scan_receipt":
+        await query.message.reply_text("📸 **Scan Struk**\n\nSilakan kirim foto struk belanjaan kamu sekarang!", parse_mode='Markdown')
+        return
+
+    if action == "list_target":
+        from handlers.saving import list_targets
+        await list_targets(update, context)
+        return
+
+    if action == "set_gaji_menu":
+        await query.message.reply_text("💰 **Atur Gaji**\n\nKetik `/setgaji [Nominal]`\nContoh: `/setgaji 10jt`", parse_mode='Markdown')
+        return
+
+    if action == "get_report":
+        msg = budget_mgr.generate_report(user_db.id, "monthly")
+        await query.message.reply_text(msg)
+        return
+
+    if action == "get_ai_insight":
+        from handlers.finance import get_ai_insight
+        await get_ai_insight(update, context)
+        return
+
+    if action == "settings_menu":
+        help_text = (
+            "⚙️ **Pengaturan**\n\n"
+            "• `/setbudget [Kat] [Jml]` - Atur limit kategori\n"
+            "• `/budgetalert [Kat] [Warn%] [Limit%]` - Notifikasi\n"
+            "• `/hapus [ID]` - Hapus transaksi\n"
+            "• `/undo` - Batal transaksi terakhir"
+        )
+        await query.message.reply_text(help_text, parse_mode='Markdown')
+        return
+
+    if action == "export_csv":
+        from handlers.transactions import export_data
+        await export_data(update, context)
+        return
+    # -------------------------
+
     if action == "code_confirm":
         code_to_run = user_data.get('pending_code')
         if code_to_run:
