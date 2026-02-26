@@ -1,31 +1,138 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+"""
+handlers/callbacks.py — FinBot Pro Telegram Callback Handler
+Refactored: handler registry pattern, no mutation, full error handling, typed.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+from datetime import datetime, timezone
+from typing import Any, Callable, Coroutine, Dict, Optional
+
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+    Update,
+)
 from telegram.ext import ContextTypes
-from core import db, budget_mgr, rules, visual_reporter
+
+from config import CATEGORIES
+from core import budget_mgr, db, rules, visual_reporter
+from handlers import tutorial_mode
 from utils.dashboard import update_pinned_dashboard
 from utils.executor import execute_code
-from config import CATEGORIES
-from datetime import datetime
-import os
-import logging
-import json
-import time
-from handlers import tutorial_mode
 
-def get_main_menu_keyboard():
-    return ReplyKeyboardMarkup([
-        [KeyboardButton("📊 Cek Budget"), KeyboardButton("📈 Laporan")],
-        [KeyboardButton("💡 Tips Hemat"), KeyboardButton("🚀 Menu Utama")]
-    ], resize_keyboard=True)
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Type alias
+# ---------------------------------------------------------------------------
+CallbackHandler = Callable[
+    [Update, ContextTypes.DEFAULT_TYPE, str],
+    Coroutine[Any, Any, None],
+]
+
+# ---------------------------------------------------------------------------
+# Keyboards (pure functions — no side effects)
+# ---------------------------------------------------------------------------
+
+def get_main_menu_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("📊 Cek Budget"), KeyboardButton("📈 Laporan")],
+            [KeyboardButton("💡 Tips Hemat"), KeyboardButton("🚀 Menu Utama")],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def _post_action_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📊 Cek Budget", callback_data="suggest_budget"),
+            InlineKeyboardButton("📈 Laporan", callback_data="report_monthly"),
+        ],
+        [InlineKeyboardButton("🚀 Menu Utama", callback_data="suggest_help")],
+    ])
+
+
+def _report_nav_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📊 Detail Budget", callback_data="suggest_budget"),
+            InlineKeyboardButton("💡 Tips Hemat", callback_data="suggest_insight"),
+        ],
+        [InlineKeyboardButton("🚀 Menu Utama", callback_data="suggest_help")],
+    ])
+
+
+def _cancel_candidates_kb(candidates: list) -> InlineKeyboardMarkup:
+    rows = []
+    for c in candidates[:5]:
+        txid = c.get("id")
+        amount = c.get("amount", 0)
+        cat = c.get("category", "")
+        desc = (c.get("description") or "-")[:25] + ("..." if len(c.get("description") or "") > 25 else "")
+        rows.append([InlineKeyboardButton(
+            f"#{txid} Rp{amount:,.0f} · {cat} · {desc}",
+            callback_data=f"cancel_pick:{txid}",
+        )])
+    rows.append([InlineKeyboardButton("❌ Tidak jadi", callback_data="cancel_abort")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _cancel_confirm_kb(tx_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Batalkan (1-klik)", callback_data="cancel_confirm"),
+            InlineKeyboardButton("🔁 Pilih lain", callback_data="cancel_choose"),
+        ],
+        [
+            InlineKeyboardButton("📜 Riwayat", callback_data="open_history"),
+            InlineKeyboardButton("❌ Tidak jadi", callback_data="cancel_abort"),
+        ],
+    ])
+
+
+def _edit_field_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("Nominal", callback_data="edit_amount"),
+            InlineKeyboardButton("Kategori", callback_data="edit_category"),
+        ],
+        [
+            InlineKeyboardButton("Tanggal", callback_data="edit_date"),
+            InlineKeyboardButton("Abaikan", callback_data="tx_ignore"),
+        ],
+    ])
+
+
+def _category_select_kb() -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(cat, callback_data=f"set_cat_{cat}") for cat in CATEGORIES[i : i + 2]]
+        for i in range(0, len(CATEGORIES), 2)
+    ]
+    rows.append([InlineKeyboardButton("Batal", callback_data="tx_edit")])
+    return InlineKeyboardMarkup(rows)
+
+
+# ---------------------------------------------------------------------------
+# Tutorial helpers
+# ---------------------------------------------------------------------------
 
 def _tut_bar(step: int, total: int) -> str:
     if total <= 0:
         return ""
-    step = max(0, min(step, total))
-    filled = int(round((step / total) * 10))
-    filled = max(0, min(filled, 10))
+    filled = max(0, min(10, round((max(0, min(step, total)) / total) * 10)))
     return "█" * filled + "░" * (10 - filled)
 
-def _tut_kb(active: bool = True):
+
+def _tut_kb(active: bool = True) -> InlineKeyboardMarkup:
     if not active:
         return InlineKeyboardMarkup([
             [
@@ -42,102 +149,89 @@ def _tut_kb(active: bool = True):
         [InlineKeyboardButton("🚪 Keluar", callback_data="tutorial_exit")],
     ])
 
-def _tut_step_msg(step: int, total: int, mode: str):
+
+def _tut_step_msg(step: int, total: int, mode: str) -> str:
     bar = _tut_bar(step - 1, total)
-    base = f"🎓 **Tutorial Mode**\n\nProgress: `{bar}` {step-1}/{total}\n\n"
-    if step == 1:
-        extra = "Step 1 — Catat transaksi pertama\nCoba ketik: `kopi 25rb` atau `makan 40000`"
-        if mode == "beginner":
-            extra += "\n\nTips: tulis singkat + nominal, misalnya `parkir 5rb`."
-        return base + extra
-    if step == 2:
-        extra = "Step 2 — Set gaji bulanan\nKetik: `gaji 7jt` atau `7000000`"
-        if mode == "beginner":
-            extra += "\n\nKalau kamu freelancer, isi rata-rata per bulan."
-        return base + extra
-    if step == 3:
-        extra = "Step 3 — Set budget kategori\nKetik: `Makanan 1jt` atau `Transportasi 300rb`"
-        if mode == "beginner":
-            extra += "\n\nTips: mulai dari kategori paling sering kamu pakai."
-        return base + extra
-    if step == 4:
-        extra = "Step 4 — Cek budget\nAku tampilkan ringkasan budget kamu. Balas: `lanjut`."
-        return base + extra
-    extra = "Step 5 — Latihan pembatalan\nKetik: `batal transaksi terakhir` lalu tekan tombol konfirmasi."
-    return base + extra
+    base = f"🎓 **Tutorial Mode**\n\nProgress: `{bar}` {step - 1}/{total}\n\n"
+    steps = {
+        1: (
+            "Step 1 — Catat transaksi pertama\nCoba ketik: `kopi 25rb` atau `makan 40000`",
+            "\n\nTips: tulis singkat + nominal, misalnya `parkir 5rb`.",
+        ),
+        2: (
+            "Step 2 — Set gaji bulanan\nKetik: `gaji 7jt` atau `7000000`",
+            "\n\nKalau kamu freelancer, isi rata-rata per bulan.",
+        ),
+        3: (
+            "Step 3 — Set budget kategori\nKetik: `Makanan 1jt` atau `Transportasi 300rb`",
+            "\n\nTips: mulai dari kategori paling sering kamu pakai.",
+        ),
+        4: (
+            "Step 4 — Cek budget\nAku tampilkan ringkasan budget kamu. Balas: `lanjut`.",
+            "",
+        ),
+        5: (
+            "Step 5 — Latihan pembatalan\nKetik: `batal transaksi terakhir` lalu tekan tombol konfirmasi.",
+            "",
+        ),
+    }
+    text, beginner_tip = steps.get(step, ("", ""))
+    if mode == "beginner" and beginner_tip:
+        text += beginner_tip
+    return base + text
 
-def _tutorial_text(section: str) -> str:
-    if section == "quickstart":
-        return (
-            "⚡ **Quickstart (Step-by-step)**\n\n"
-            "1) **Catat pengeluaran**\n"
-            "   - Ketik: `kopi 25rb` / `makan 40rb` / `parkir 5rb`\n"
-            "   - Atau: klik **📸 Scan Struk** lalu kirim foto.\n\n"
-            "2) **Catat pemasukan**\n"
-            "   - Ketik: `gajian 7jt` atau `/setgaji 7000000`\n\n"
-            "3) **Cek budget**\n"
-            "   - Klik **📊 Cek Budget** atau ketik `cek budget`\n\n"
-            "4) **Lihat laporan**\n"
-            "   - Klik **📈 Laporan** atau `/summary monthly`\n\n"
-            "5) **Minta insight**\n"
-            "   - Klik **🧠 AI Insights**\n"
-        )
-    if section == "scan":
-        return (
-            "📸 **Scan Struk (Biar Cepet & Akurat)**\n\n"
-            "1) Klik **📸 Scan Struk**\n"
-            "2) Kirim foto struk yang:\n"
-            "   - terang, tidak blur\n"
-            "   - struk memenuhi frame\n"
-            "   - tidak miring (kalau miring sedikit, masih bisa)\n\n"
-            "3) Bot akan baca **merchant + total**, lalu auto-catat.\n"
-            "Tips: kalau struk panjang, foto bagian yang ada tulisan **TOTAL**.\n"
-        )
-    if section == "cancel":
-        return (
-            "↩️ **Pembatalan Transaksi (1-klik)**\n\n"
-            "Kalau kamu salah catat, cukup ketik salah satu:\n"
-            "- `batal transaksi terakhir`\n"
-            "- `batal yang 25rb`\n"
-            "- `hapus #123`\n\n"
-            "Bot akan menampilkan kandidat transaksi dan tombol:\n"
-            "✅ Batalkan (1-klik) / 🔁 Pilih lain / ❌ Tidak jadi\n\n"
-            "Tips: kalau sering salah pilih, selalu sertakan nominal: `batal yang 25000`.\n"
-        )
-    if section == "reports":
-        return (
-            "📊 **Budget & Laporan**\n\n"
-            "**Cek budget cepat:**\n"
-            "- Klik **📊 Cek Budget**\n\n"
-            "**Laporan:**\n"
-            "- Klik **📈 Laporan** untuk periode\n"
-            "- Atau `/summary monthly`\n\n"
-            "**Riwayat transaksi:**\n"
-            "- `/history` untuk lihat ID transaksi (buat hapus manual)\n"
-            "- `/export` untuk CSV\n"
-        )
-    if section == "settings":
-        return (
-            "⚙️ **Pengaturan Penting**\n\n"
-            "- `/setgaji 7000000` untuk set pemasukan bulanan\n"
-            "- `/setbudget [Kategori] [Nominal]` untuk limit kategori\n"
-            "- `/budgetalert [Kategori] [Warn%] [Limit%]` untuk notifikasi\n\n"
-            "Contoh:\n"
-            "- `/setbudget Makanan 1500000`\n"
-            "- `/budgetalert Makanan 0.8 1.0`\n"
-        )
-    if section == "best":
-        return (
-            "✅ **Best Practices (Biar Keuangan Kebaca Jelas)**\n\n"
-            "1) Catat segera setelah transaksi (biar nggak lupa)\n"
-            "2) Pakai deskripsi singkat: `kopi`, `makan siang`, `ongkir`\n"
-            "3) Set budget kategori (biar ada kontrol)\n"
-            "4) Kalau ragu kategori, tetap catat dulu—nanti dirapihin\n"
-            "5) Kalau salah catat, pakai `batal yang ...` secepatnya\n"
-        )
-    return "Pilih bagian tutorial yang kamu mau."
 
-def _tutorial_kb():
+_TUTORIAL_SECTIONS: Dict[str, str] = {
+    "quickstart": (
+        "⚡ **Quickstart (Step-by-step)**\n\n"
+        "1) **Catat pengeluaran** — Ketik: `kopi 25rb` / `makan 40rb`\n"
+        "   Atau: klik **📸 Scan Struk** lalu kirim foto.\n\n"
+        "2) **Catat pemasukan** — Ketik: `gajian 7jt` atau `/setgaji 7000000`\n\n"
+        "3) **Cek budget** — Klik **📊 Cek Budget** atau ketik `cek budget`\n\n"
+        "4) **Lihat laporan** — Klik **📈 Laporan** atau `/summary monthly`\n\n"
+        "5) **Minta insight** — Klik **🧠 AI Insights**"
+    ),
+    "scan": (
+        "📸 **Scan Struk (Biar Cepet & Akurat)**\n\n"
+        "1) Klik **📸 Scan Struk**\n"
+        "2) Kirim foto struk yang terang, tidak blur, tidak miring.\n"
+        "3) Bot akan baca **merchant + total**, lalu auto-catat.\n\n"
+        "Tips: kalau struk panjang, foto bagian yang ada tulisan **TOTAL**."
+    ),
+    "cancel": (
+        "↩️ **Pembatalan Transaksi (1-klik)**\n\n"
+        "Ketik: `batal transaksi terakhir` / `batal yang 25rb` / `hapus #123`\n\n"
+        "Bot akan tampilkan kandidat + tombol ✅ Batalkan / 🔁 Pilih lain / ❌ Tidak jadi\n\n"
+        "Tips: sertakan nominal agar lebih akurat: `batal yang 25000`."
+    ),
+    "reports": (
+        "📊 **Budget & Laporan**\n\n"
+        "• Klik **📊 Cek Budget** untuk ringkasan cepat\n"
+        "• Klik **📈 Laporan** untuk pilih periode\n"
+        "• `/history` untuk lihat ID transaksi\n"
+        "• `/export` untuk CSV"
+    ),
+    "settings": (
+        "⚙️ **Pengaturan Penting**\n\n"
+        "• `/setgaji 7000000` — set pemasukan bulanan\n"
+        "• `/setbudget [Kategori] [Nominal]` — limit kategori\n"
+        "• `/budgetalert [Kat] [Warn%] [Limit%]` — notifikasi\n\n"
+        "Contoh:\n"
+        "• `/setbudget Makanan 1500000`\n"
+        "• `/budgetalert Makanan 0.8 1.0`"
+    ),
+    "best": (
+        "✅ **Best Practices**\n\n"
+        "1) Catat segera setelah transaksi\n"
+        "2) Pakai deskripsi singkat: `kopi`, `makan siang`, `ongkir`\n"
+        "3) Set budget kategori untuk kontrol pengeluaran\n"
+        "4) Kalau ragu kategori, tetap catat dulu\n"
+        "5) Kalau salah catat, pakai `batal yang ...` secepatnya"
+    ),
+}
+
+
+def _tutorial_content_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("⚡ Quickstart", callback_data="tutorial_quickstart"),
@@ -151,482 +245,600 @@ def _tutorial_kb():
             InlineKeyboardButton("⚙️ Settings", callback_data="tutorial_settings"),
             InlineKeyboardButton("✅ Best Practices", callback_data="tutorial_best"),
         ],
-        [
-            InlineKeyboardButton("🚀 Menu Utama", callback_data="suggest_help"),
-        ],
+        [InlineKeyboardButton("🚀 Menu Utama", callback_data="suggest_help")],
     ])
 
-async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+# ---------------------------------------------------------------------------
+# Date parsing helper
+# ---------------------------------------------------------------------------
+
+def _parse_date(date_str: Optional[str]) -> datetime:
+    """Parse a date string, returning datetime.now() on any failure."""
+    if not date_str:
+        return datetime.now()
+    try:
+        cleaned = date_str.replace("/", "-")
+        fmt = "%Y-%m-%d" if len(cleaned.split("-")[0]) == 4 else "%d-%m-%Y"
+        return datetime.strptime(cleaned, fmt)
+    except ValueError:
+        logger.debug("Could not parse date string %r — using now()", date_str)
+        return datetime.now()
+
+
+# ---------------------------------------------------------------------------
+# Redis audit helper (fire-and-forget, never raises)
+# ---------------------------------------------------------------------------
+
+def _redis_audit(key: str, payload: dict, max_len: int = 200) -> None:
+    try:
+        from core import premium_ai
+        client = premium_ai.redis.client
+        if client:
+            client.lpush(key, json.dumps(payload))
+            client.ltrim(key, 0, max_len)
+    except Exception as exc:
+        logger.debug("Redis audit failed key=%s: %s", key, exc)
+
+
+# ---------------------------------------------------------------------------
+# Handler registry
+# ---------------------------------------------------------------------------
+
+class CallbackRouter:
+    """
+    Maps callback_data strings (exact or prefix) to async handler functions.
+    Handlers receive (update, context, action) and are responsible for
+    answering the query and replying — they do NOT call query.answer().
+    """
+
+    def __init__(self) -> None:
+        self._exact: Dict[str, CallbackHandler] = {}
+        self._prefix: list[tuple[str, CallbackHandler]] = []
+
+    def exact(self, *actions: str):
+        def decorator(fn: CallbackHandler) -> CallbackHandler:
+            for a in actions:
+                self._exact[a] = fn
+            return fn
+        return decorator
+
+    def prefix(self, pfx: str):
+        def decorator(fn: CallbackHandler) -> CallbackHandler:
+            self._prefix.append((pfx, fn))
+            return fn
+        return decorator
+
+    async def dispatch(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        action: str,
+    ) -> bool:
+        """Return True if a handler was found and invoked."""
+        handler = self._exact.get(action)
+        if handler:
+            await handler(update, context, action)
+            return True
+        for pfx, fn in self._prefix:
+            if action.startswith(pfx):
+                await fn(update, context, action)
+                return True
+        return False
+
+
+router = CallbackRouter()
+
+
+# ---------------------------------------------------------------------------
+# Handler implementations
+# ---------------------------------------------------------------------------
+
+# ── Export ──────────────────────────────────────────────────────────────────
+
+@router.exact("export_csv")
+async def _h_export_csv(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    query = update.callback_query
+    ctx.user_data["pending_action"] = {"type": "export_all"}
+    await query.edit_message_text(
+        "📥 **Export Data (CSV)**\n\nAku akan kirim semua transaksi kamu dalam 1 file CSV.\nYakin mau export sekarang?",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Yakin export", callback_data="export_confirm"),
+            InlineKeyboardButton("❌ Tidak", callback_data="export_cancel"),
+        ]]),
+    )
+
+
+@router.exact("export_confirm")
+async def _h_export_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    query = update.callback_query
+    ctx.user_data.pop("pending_action", None)
+    from handlers.transactions import export_data
+    await query.edit_message_text("📥 Oke, lagi siapin CSV kamu…")
+    await export_data(update, ctx)
+
+
+@router.exact("export_cancel")
+async def _h_export_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    ctx.user_data.pop("pending_action", None)
+    await update.callback_query.edit_message_text("Oke, export dibatalkan. ✅")
+
+
+# ── Tutorial flow ────────────────────────────────────────────────────────────
+
+@router.exact("tutorial_start_beginner", "tutorial_start_fast")
+async def _h_tutorial_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE, action: str):
     query = update.callback_query
     user_id = update.effective_user.id
-    user_db = db.get_or_create_user(user_id, update.effective_user.username)
-    user_data = context.user_data
-    
-    await query.answer()
-    
-    action = query.data
-    pending = user_data.get('pending_tx')
-    pending_cancel = user_data.get("pending_cancel")
+    mode = "fast" if action == "tutorial_start_fast" else "beginner"
+    total = 5
+    ctx.user_data["tutorial_mode"] = {
+        "active": True,
+        "step": 1,
+        "mode": mode,
+        "total": total,
+        "last_ts": datetime.now(tz=timezone.utc).timestamp(),
+        "errors": 0,
+    }
+    _redis_audit(
+        f"tutorial_events:{user_id}",
+        {"event": "started", "ts": datetime.now(tz=timezone.utc).isoformat(), "data": {"mode": mode}},
+        max_len=500,
+    )
+    await query.edit_message_text(
+        _tut_step_msg(1, total, mode),
+        parse_mode="Markdown",
+        reply_markup=_tut_kb(True),
+    )
 
-    if await tutorial_mode.handle_callback(update, context, action):
+
+@router.exact("tutorial_help")
+async def _h_tutorial_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    await update.callback_query.message.reply_text(
+        "🆘 **Bantuan Tutorial**\n\n"
+        "Format aman yang pasti kebaca:\n"
+        "- Transaksi: `kopi 25rb`\n"
+        "- Gaji: `7000000`\n"
+        "- Budget: `Makanan 1000000`\n"
+        "- Lanjut: `lanjut`\n\n"
+        "Kalau masih bingung, tekan `Skip` untuk loncat step.",
+        parse_mode="Markdown",
+        reply_markup=_tut_kb(True),
+    )
+
+
+@router.exact("tutorial_exit")
+async def _h_tutorial_exit(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    ctx.user_data.pop("tutorial_mode", None)
+    await update.callback_query.edit_message_text(
+        "Tutorial Mode selesai. Ketik `tutorial` kalau mau mulai lagi. ✅"
+    )
+
+
+@router.exact("tutorial_skip")
+async def _h_tutorial_skip(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    query = update.callback_query
+    tm: dict = ctx.user_data.get("tutorial_mode") or {}
+    if not tm.get("active"):
+        await query.message.reply_text("Tutorial Mode belum aktif. Ketik `tutorial` untuk mulai.")
         return
-
-    if action == "export_confirm":
-        user_data.pop("pending_action", None)
-        from handlers.transactions import export_data
-        await query.edit_message_text("📥 Oke, lagi siapin CSV kamu…")
-        await export_data(update, context)
-        return
-
-    if action == "export_cancel":
-        user_data.pop("pending_action", None)
-        await query.edit_message_text("Oke, export dibatalkan. ✅")
-        return
-
-    if action in ("tutorial_start_beginner", "tutorial_start_fast", "tutorial_quickstart"):
-        mode = "beginner" if action != "tutorial_start_fast" else "fast"
-        total = 5
-        user_data["tutorial_mode"] = {
-            "active": True,
-            "step": 1,
-            "mode": mode,
-            "total": total,
-            "last_ts": time.time(),
-            "errors": 0,
-        }
-        try:
-            from core import premium_ai
-            premium_ai.redis.client.lpush(f"tutorial_events:{user_id}", json.dumps({"event": "started", "ts": datetime.utcnow().isoformat() + "Z", "data": {"mode": mode}}))
-            premium_ai.redis.client.ltrim(f"tutorial_events:{user_id}", 0, 500)
-        except Exception:
-            pass
-        await query.edit_message_text(_tut_step_msg(1, total, mode), parse_mode="Markdown", reply_markup=_tut_kb(True))
-        return
-
-    if action == "tutorial_help":
-        await query.message.reply_text(
-            "🆘 **Bantuan Tutorial**\n\n"
-            "Format aman yang pasti kebaca:\n"
-            "- Transaksi: `kopi 25rb`\n"
-            "- Gaji: `7000000`\n"
-            "- Budget: `Makanan 1000000`\n"
-            "- Lanjut: `lanjut`\n\n"
-            "Kalau masih bingung, tekan `Skip` untuk loncat step.",
+    step = min(int(tm.get("step") or 1) + 1, int(tm.get("total") or 5))
+    total = int(tm.get("total") or 5)
+    mode = tm.get("mode") or "beginner"
+    tm.update(step=step, last_ts=datetime.now(tz=timezone.utc).timestamp())
+    ctx.user_data["tutorial_mode"] = tm
+    if step >= total:
+        await query.edit_message_text(
+            f"🎓 **Tutorial Mode**\n\nProgress: `{_tut_bar(total, total)}` {total}/{total}\n\n"
+            "Step terakhir: ketik `batal transaksi terakhir` untuk latihan ya.",
             parse_mode="Markdown",
             reply_markup=_tut_kb(True),
         )
         return
+    await query.edit_message_text(
+        _tut_step_msg(step, total, mode),
+        parse_mode="Markdown",
+        reply_markup=_tut_kb(True),
+    )
 
-    if action == "tutorial_exit":
-        user_data.pop("tutorial_mode", None)
-        await query.edit_message_text("Tutorial Mode selesai. Ketik `tutorial` kalau mau mulai lagi. ✅")
-        return
 
-    if action == "tutorial_skip":
-        tm = user_data.get("tutorial_mode") or {}
-        if not tm.get("active"):
-            await query.message.reply_text("Tutorial Mode belum aktif. Ketik `tutorial` untuk mulai.")
-            return
-        step = int(tm.get("step") or 1)
-        total = int(tm.get("total") or 5)
-        mode = tm.get("mode") or "beginner"
-        step = min(step + 1, total)
-        tm["step"] = step
-        tm["last_ts"] = time.time()
-        user_data["tutorial_mode"] = tm
-        if step >= total:
-            await query.edit_message_text(
-                f"🎓 **Tutorial Mode**\n\nProgress: `{_tut_bar(total, total)}` {total}/{total}\n\n"
-                "Step terakhir: ketik `batal transaksi terakhir` untuk latihan ya.",
-                parse_mode="Markdown",
-                reply_markup=_tut_kb(True),
-            )
-            return
-        await query.edit_message_text(_tut_step_msg(step, total, mode), parse_mode="Markdown", reply_markup=_tut_kb(True))
-        return
+@router.prefix("tutorial_")
+async def _h_tutorial_section(update: Update, ctx: ContextTypes.DEFAULT_TYPE, action: str):
+    section = action.removeprefix("tutorial_")
+    text = _TUTORIAL_SECTIONS.get(section, "Pilih bagian tutorial yang kamu mau.")
+    await update.callback_query.edit_message_text(
+        text,
+        parse_mode="Markdown",
+        reply_markup=_tutorial_content_kb(),
+    )
 
-    if action.startswith("tutorial_"):
-        section = action.replace("tutorial_", "", 1)
-        await query.edit_message_text(_tutorial_text(section), parse_mode="Markdown", reply_markup=_tutorial_kb())
-        return
 
-    if action == "open_history":
-        from handlers.transactions import history
-        original_message = update.message
-        update.message = query.message
-        try:
-            await history(update, context)
-        finally:
-            update.message = original_message
-        return
+# ── Cancellation flow ────────────────────────────────────────────────────────
 
-    if action == "cancel_abort":
-        user_data.pop("pending_cancel", None)
-        await query.edit_message_text("Oke, pembatalan dibatalkan. ✅")
-        return
+@router.exact("cancel_abort")
+async def _h_cancel_abort(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    ctx.user_data.pop("pending_cancel", None)
+    await update.callback_query.edit_message_text("Oke, pembatalan dibatalkan. ✅")
 
-    if action == "cancel_choose":
-        if not pending_cancel or not pending_cancel.get("candidates"):
-            await query.message.reply_text("Aku belum nemu kandidat transaksi. Coba tulis: `batal yang 25rb` atau `hapus #ID`.", parse_mode="Markdown")
-            return
-        keyboard = []
-        for c in pending_cancel["candidates"][:5]:
-            txid = c.get("id")
-            amount = c.get("amount", 0)
-            cat = c.get("category", "")
-            desc = (c.get("description") or "-")
-            if len(desc) > 28:
-                desc = desc[:25] + "..."
-            keyboard.append([InlineKeyboardButton(f"#{txid} Rp{amount:,.0f} · {cat}", callback_data=f"cancel_pick:{txid}")])
-        keyboard.append([InlineKeyboardButton("❌ Tidak jadi", callback_data="cancel_abort")])
-        await query.edit_message_text("Pilih transaksi yang mau dibatalkan:", reply_markup=InlineKeyboardMarkup(keyboard))
-        return
 
-    if action.startswith("cancel_pick:"):
-        if not pending_cancel:
-            await query.message.reply_text("Session pembatalan sudah habis. Coba ulangi perintah pembatalan ya.")
-            return
-        try:
-            tx_id = int(action.split(":", 1)[1])
-        except Exception:
-            tx_id = None
-        if not tx_id:
-            await query.message.reply_text("ID transaksi tidak valid.")
-            return
-        pending_cancel["selected_id"] = tx_id
-        user_data["pending_cancel"] = pending_cancel
-        keyboard = [
-            [
-                InlineKeyboardButton("✅ Batalkan (1-klik)", callback_data="cancel_confirm"),
-                InlineKeyboardButton("🔁 Pilih lain", callback_data="cancel_choose"),
-            ],
-            [
-                InlineKeyboardButton("📜 Riwayat", callback_data="open_history"),
-                InlineKeyboardButton("❌ Tidak jadi", callback_data="cancel_abort"),
-            ],
-        ]
-        await query.edit_message_text(
-            f"Siap. Kamu mau membatalkan transaksi `#{tx_id}`. Lanjut?",
+@router.exact("cancel_choose")
+async def _h_cancel_choose(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    query = update.callback_query
+    pending_cancel = ctx.user_data.get("pending_cancel")
+    if not pending_cancel or not pending_cancel.get("candidates"):
+        await query.message.reply_text(
+            "Aku belum nemu kandidat transaksi. Coba tulis: `batal yang 25rb` atau `hapus #ID`.",
             parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return
+    await query.edit_message_text(
+        "Pilih transaksi yang mau dibatalkan:",
+        reply_markup=_cancel_candidates_kb(pending_cancel["candidates"]),
+    )
+
+
+@router.prefix("cancel_pick:")
+async def _h_cancel_pick(update: Update, ctx: ContextTypes.DEFAULT_TYPE, action: str):
+    query = update.callback_query
+    pending_cancel = ctx.user_data.get("pending_cancel")
+    if not pending_cancel:
+        await query.message.reply_text("Session pembatalan sudah habis. Coba ulangi perintah pembatalan ya.")
+        return
+    try:
+        tx_id = int(action.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await query.message.reply_text("ID transaksi tidak valid.")
+        return
+
+    pending_cancel["selected_id"] = tx_id
+    ctx.user_data["pending_cancel"] = pending_cancel
+    await query.edit_message_text(
+        f"Siap. Kamu mau membatalkan transaksi `#{tx_id}`. Lanjut?",
+        parse_mode="Markdown",
+        reply_markup=_cancel_confirm_kb(tx_id),
+    )
+
+
+@router.exact("cancel_confirm")
+async def _h_cancel_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    query = update.callback_query
+    user_id = update.effective_user.id
+    user_db = db.get_or_create_user(user_id, update.effective_user.username)
+    pending_cancel = ctx.user_data.get("pending_cancel")
+
+    if not pending_cancel or not pending_cancel.get("selected_id"):
+        await query.message.reply_text(
+            "Aku belum tahu transaksi mana yang harus dibatalkan. "
+            "Ketik: `batal transaksi terakhir` atau `hapus #ID`."
         )
         return
 
-    if action == "cancel_confirm":
-        if not pending_cancel or not pending_cancel.get("selected_id"):
-            await query.message.reply_text("Aku belum tahu transaksi mana yang harus dibatalkan. Ketik: `batal transaksi terakhir` atau `hapus #ID`.")
-            return
+    tx_id = int(pending_cancel["selected_id"])
+    eta_seconds = int(pending_cancel.get("eta_seconds") or 60)
 
-        tx_id = int(pending_cancel["selected_id"])
-        reason = pending_cancel.get("reason") or ""
-        eta_seconds = int(pending_cancel.get("eta_seconds") or 60)
-
+    try:
+        success = db.delete_transaction(user_db.id, tx_id)
+    except Exception as exc:
+        logger.error("delete_transaction failed tx_id=%d: %s", tx_id, exc)
         success = False
-        try:
-            success = db.delete_transaction(user_db.id, tx_id)
-        except Exception as e:
-            logging.error(f"Cancel delete failed: {e}")
-            success = False
 
-        if success:
-            try:
-                from core import premium_ai, ws_server
-                audit = {
-                    "tx_id": tx_id,
-                    "reason": reason,
-                    "eta_seconds": eta_seconds,
-                    "ts": datetime.utcnow().isoformat() + "Z",
-                }
-                premium_ai.redis.client.lpush(f"cancel_audit:{user_id}", json.dumps(audit))
-                premium_ai.redis.client.ltrim(f"cancel_audit:{user_id}", 0, 200)
-                if ws_server.loop and ws_server.loop.is_running():
-                    import asyncio
-                    asyncio.run_coroutine_threadsafe(
-                        ws_server.broadcast_to_user(
-                            user_id=user_id,
-                            message={
-                                "event": "refund_status",
-                                "data": {
-                                    "tx_id": tx_id,
-                                    "status": "success",
-                                    "eta_seconds": eta_seconds,
-                                },
-                            },
-                        ),
-                        ws_server.loop,
-                    )
-            except Exception:
-                pass
-
-            user_data.pop("pending_cancel", None)
-            await query.edit_message_text(
-                f"✅ **Berhasil dibatalkan**: transaksi `#{tx_id}`\n⏱️ Estimasi refund: ≤ {eta_seconds} detik",
-                parse_mode="Markdown",
-            )
-            try:
-                await update_pinned_dashboard(context, user_id)
-            except Exception:
-                pass
-        else:
-            await query.edit_message_text(
-                f"❌ Gagal membatalkan transaksi `#{tx_id}`. Coba cek `/history` lalu pakai `/hapus {tx_id}`.",
-                parse_mode="Markdown",
-            )
-        return
-    
-    if action == "suggest_help":
-        from handlers.commands import help_command
-        await help_command(update, context)
-        return
-
-    if action == "suggest_budget":
-        status = budget_mgr.check_budget_status(user_db.id, "Semua")
-        await query.message.reply_text(status, reply_markup=get_main_menu_keyboard())
-        return
-
-    if action == "suggest_insight":
-        from handlers.finance import get_ai_insight
-        await get_ai_insight(update, context)
-        return
-
-    # --- NEW MENU HANDLERS ---
-    if action == "manual_add":
-        await query.message.reply_text("💸 **Catat Transaksi**\n\nKetik langsung: `Item Harga`\nContoh: `Kopi 25rb` atau `Gaji 10jt`", parse_mode='Markdown')
-        return
-
-    if action == "scan_receipt":
-        await query.message.reply_text("📸 **Scan Struk**\n\nSilakan kirim foto struk belanjaan kamu sekarang!", parse_mode='Markdown')
-        return
-
-    if action == "list_target":
-        from handlers.saving import list_targets
-        await list_targets(update, context)
-        return
-
-    if action == "set_gaji_menu":
-        await query.message.reply_text("💰 **Atur Gaji**\n\nKetik `/setgaji [Nominal]`\nContoh: `/setgaji 10jt`", parse_mode='Markdown')
-        return
-
-    if action == "get_report":
-        msg = budget_mgr.generate_report(user_db.id, "monthly")
-        await query.message.reply_text(msg)
-        return
-
-    if action == "get_ai_insight":
-        from handlers.finance import get_ai_insight
-        await get_ai_insight(update, context)
-        return
-
-    if action == "get_profile":
-        from handlers.commands import profile_command
-        await profile_command(update, context)
-        return
-
-    if action == "settings_menu":
-        help_text = (
-            "⚙️ **Pengaturan**\n\n"
-            "• `/setbudget [Kat] [Jml]` - Atur limit kategori\n"
-            "• `/budgetalert [Kat] [Warn%] [Limit%]` - Notifikasi\n"
-            "• `/hapus [ID]` - Hapus transaksi\n"
-            "• `/undo` - Batal transaksi terakhir"
+    if success:
+        _redis_audit(
+            f"cancel_audit:{user_id}",
+            {
+                "tx_id": tx_id,
+                "reason": pending_cancel.get("reason") or "",
+                "eta_seconds": eta_seconds,
+                "ts": datetime.now(tz=timezone.utc).isoformat(),
+            },
         )
-        await query.message.reply_text(help_text, parse_mode='Markdown')
-        return
-
-    if action == "export_csv":
-        user_data["pending_action"] = {"type": "export_all"}
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("✅ Yakin export", callback_data="export_confirm"),
-                InlineKeyboardButton("❌ Tidak", callback_data="export_cancel"),
-            ]
-        ])
+        _broadcast_ws(user_id, {"event": "refund_status", "data": {"tx_id": tx_id, "status": "success", "eta_seconds": eta_seconds}})
+        ctx.user_data.pop("pending_cancel", None)
         await query.edit_message_text(
-            "📥 **Export Data (CSV)**\n\nAku akan kirim semua transaksi kamu dalam 1 file CSV.\nYakin mau export sekarang?",
+            f"✅ **Berhasil dibatalkan**: transaksi `#{tx_id}`\n⏱️ Estimasi refund: ≤ {eta_seconds} detik",
             parse_mode="Markdown",
-            reply_markup=keyboard,
         )
-        return
-    # -------------------------
+        try:
+            await update_pinned_dashboard(ctx, user_id)
+        except Exception as exc:
+            logger.warning("update_pinned_dashboard failed: %s", exc)
+    else:
+        await query.edit_message_text(
+            f"❌ Gagal membatalkan transaksi `#{tx_id}`. "
+            f"Coba cek `/history` lalu pakai `/hapus {tx_id}`.",
+            parse_mode="Markdown",
+        )
 
-    if action == "code_confirm":
-        code_to_run = user_data.get('pending_code')
-        if code_to_run:
-            result = execute_code(code_to_run)
-            msg = (
-                "Thank you! Your code has been executed successfully. ✅\n\n"
-                f"💻 **Output:**\n```\n{result}\n```"
-            )
-            await query.edit_message_text(msg, parse_mode='Markdown')
-            await query.message.reply_text("Apa lagi yang bisa saya bantu? 😊", reply_markup=get_main_menu_keyboard())
-            user_data.pop('pending_code', None)
-        else:
-            await query.edit_message_text("No code found to execute. ❌")
+
+# ── Transaction confirm / edit ───────────────────────────────────────────────
+
+@router.exact("tx_confirm")
+async def _h_tx_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    query = update.callback_query
+    user_id = update.effective_user.id
+    user_db = db.get_or_create_user(user_id, update.effective_user.username)
+    pending = ctx.user_data.get("pending_tx")
+    if not pending:
+        await query.answer("Sesi transaksi sudah habis. Silakan catat ulang.")
         return
 
-    if action == "code_cancel":
-        await query.edit_message_text("Edit cancelled. Feel free to ask again. 👍")
-        await query.message.reply_text("Butuh bantuan lainnya?", reply_markup=get_main_menu_keyboard())
-        user_data.pop('pending_code', None)
+    tx_date = _parse_date(pending.get("date"))
+    tags = rules.evaluate({
+        "amount": pending["amount"],
+        "category": pending["category"],
+        "hour": tx_date.hour,
+    })
+    description = pending.get("merchant") or "Transaksi"
+    if tags:
+        description += f" ({', '.join(tags)})"
+
+    try:
+        db.add_transaction(
+            user_id=user_db.id,
+            amount=pending["amount"],
+            category=pending["category"],
+            trans_type="expense",
+            description=description,
+            trans_date=tx_date,
+        )
+    except Exception as exc:
+        logger.error("add_transaction failed: %s", exc)
+        await query.edit_message_text("❌ Gagal menyimpan transaksi. Coba lagi ya.")
         return
 
-    if action.startswith("report_"):
-        period = action.replace("report_", "")
-        report_msg = budget_mgr.generate_report(user_db.id, period=period)
-        
-        now = datetime.now()
+    budget_msg = budget_mgr.check_budget_status(user_db.id, pending["category"])
+    final_msg = f"✅ Tersimpan: Rp{pending['amount']:,.0f} · {pending['category']}"
+    final_msg += f"\n\n{budget_msg}" if budget_msg else "\n\nMau catat transaksi lain atau cek laporan?"
+
+    await query.edit_message_text(final_msg, reply_markup=_post_action_kb())
+    await query.message.reply_text("Ada lagi yang bisa saya bantu?", reply_markup=get_main_menu_keyboard())
+
+    ctx.user_data.pop("pending_tx", None)
+    ctx.user_data.pop("state", None)
+
+    try:
+        await update_pinned_dashboard(ctx, user_id)
+    except Exception as exc:
+        logger.warning("update_pinned_dashboard failed: %s", exc)
+
+
+@router.exact("tx_edit")
+async def _h_tx_edit(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    await update.callback_query.edit_message_text(
+        "Pilih bagian yang ingin diubah:", reply_markup=_edit_field_kb()
+    )
+
+
+@router.exact("tx_ignore")
+async def _h_tx_ignore(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    ctx.user_data.pop("pending_tx", None)
+    ctx.user_data.pop("state", None)
+    query = update.callback_query
+    await query.edit_message_text("Transaksi diabaikan. Ada lagi yang mau dicatat?")
+    await query.message.reply_text("Silakan pilih menu di bawah:", reply_markup=get_main_menu_keyboard())
+
+
+@router.exact("edit_amount")
+async def _h_edit_amount(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    ctx.user_data["state"] = "WAITING_EDIT_AMOUNT"
+    await update.callback_query.edit_message_text("Ketik nominal baru (contoh: 50rb atau 50000):")
+
+
+@router.exact("edit_category")
+async def _h_edit_category(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    ctx.user_data["state"] = "WAITING_EDIT_CATEGORY"
+    await update.callback_query.edit_message_text(
+        "Pilih kategori baru:", reply_markup=_category_select_kb()
+    )
+
+
+@router.prefix("set_cat_")
+async def _h_set_category(update: Update, ctx: ContextTypes.DEFAULT_TYPE, action: str):
+    query = update.callback_query
+    new_cat = action.removeprefix("set_cat_")
+    pending = ctx.user_data.get("pending_tx")
+    if not pending:
+        await query.answer("Sesi sudah habis.")
+        return
+    pending["category"] = new_cat
+    ctx.user_data["pending_tx"] = pending
+    await query.edit_message_text(
+        f"Kategori diubah ke: {new_cat}\n\nRp{pending['amount']:,.0f} · {new_cat}",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("✓ Simpan", callback_data="tx_confirm"),
+            InlineKeyboardButton("✎ Edit Lagi", callback_data="tx_edit"),
+        ]]),
+    )
+
+
+# ── Reports ──────────────────────────────────────────────────────────────────
+
+@router.prefix("report_")
+async def _h_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE, action: str):
+    query = update.callback_query
+    user_id = update.effective_user.id
+    user_db = db.get_or_create_user(user_id, update.effective_user.username)
+    period = action.removeprefix("report_")
+    report_msg = budget_mgr.generate_report(user_db.id, period=period)
+
+    await query.edit_message_text(report_msg, reply_markup=_report_nav_kb())
+
+    now = datetime.now()
+    try:
         transactions = db.get_monthly_report(user_db.id, now.month, now.year)
-        
-        keyboard = [
-            [
-                InlineKeyboardButton("📊 Detail Budget", callback_data="suggest_budget"),
-                InlineKeyboardButton("💡 Tips Hemat", callback_data="suggest_insight")
-            ],
-            [
-                InlineKeyboardButton("🚀 Menu Utama", callback_data="suggest_help")
-            ]
-        ]
-        
-        await query.edit_message_text(report_msg, reply_markup=InlineKeyboardMarkup(keyboard))
-        
         photo_path = visual_reporter.generate_expense_pie(transactions, user_id)
         if photo_path:
             try:
-                with open(photo_path, 'rb') as photo:
+                with open(photo_path, "rb") as photo:
                     await query.message.reply_photo(photo, caption="Visualisasi Pengeluaran Anda")
-            except Exception as e:
-                logging.error(f"Error sending report photo: {e}")
             finally:
                 if os.path.exists(photo_path):
                     os.remove(photo_path)
+    except Exception as exc:
+        logger.warning("Report chart failed: %s", exc)
+
+
+# ── Navigation / shortcuts ────────────────────────────────────────────────────
+
+@router.exact("suggest_help")
+async def _h_suggest_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    from handlers.commands import help_command
+    await help_command(update, ctx)
+
+
+@router.exact("suggest_budget")
+async def _h_suggest_budget(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    user_id = update.effective_user.id
+    user_db = db.get_or_create_user(user_id, update.effective_user.username)
+    status = budget_mgr.check_budget_status(user_db.id, "Semua")
+    await update.callback_query.message.reply_text(status, reply_markup=get_main_menu_keyboard())
+
+
+@router.exact("suggest_insight", "get_ai_insight")
+async def _h_suggest_insight(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    from handlers.finance import get_ai_insight
+    await get_ai_insight(update, ctx)
+
+
+@router.exact("open_history")
+async def _h_open_history(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    from handlers.transactions import history
+    # Pass the callback's message as a proxy — do NOT mutate update.message
+    await history(update, ctx)
+
+
+@router.exact("get_report")
+async def _h_get_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    user_id = update.effective_user.id
+    user_db = db.get_or_create_user(user_id, update.effective_user.username)
+    msg = budget_mgr.generate_report(user_db.id, "monthly")
+    await update.callback_query.message.reply_text(msg)
+
+
+@router.exact("get_profile")
+async def _h_get_profile(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    from handlers.commands import profile_command
+    await profile_command(update, ctx)
+
+
+@router.exact("manual_add")
+async def _h_manual_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    await update.callback_query.message.reply_text(
+        "💸 **Catat Transaksi**\n\nKetik langsung: `Item Harga`\nContoh: `Kopi 25rb` atau `Gaji 10jt`",
+        parse_mode="Markdown",
+    )
+
+
+@router.exact("scan_receipt")
+async def _h_scan_receipt(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    await update.callback_query.message.reply_text(
+        "📸 **Scan Struk**\n\nSilakan kirim foto struk belanjaan kamu sekarang!",
+        parse_mode="Markdown",
+    )
+
+
+@router.exact("list_target")
+async def _h_list_target(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    from handlers.saving import list_targets
+    await list_targets(update, ctx)
+
+
+@router.exact("set_gaji_menu")
+async def _h_set_gaji_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    await update.callback_query.message.reply_text(
+        "💰 **Atur Gaji**\n\nKetik `/setgaji [Nominal]`\nContoh: `/setgaji 10jt`",
+        parse_mode="Markdown",
+    )
+
+
+@router.exact("settings_menu")
+async def _h_settings_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    await update.callback_query.message.reply_text(
+        "⚙️ **Pengaturan**\n\n"
+        "• `/setbudget [Kat] [Jml]` — Atur limit kategori\n"
+        "• `/budgetalert [Kat] [Warn%] [Limit%]` — Notifikasi\n"
+        "• `/hapus [ID]` — Hapus transaksi\n"
+        "• `/undo` — Batal transaksi terakhir",
+        parse_mode="Markdown",
+    )
+
+
+# ── Code execution ────────────────────────────────────────────────────────────
+
+@router.exact("code_confirm")
+async def _h_code_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    query = update.callback_query
+    code = ctx.user_data.get("pending_code")
+    if not code:
+        await query.edit_message_text("No code found to execute. ❌")
+        return
+    result = execute_code(code)
+    await query.edit_message_text(
+        f"Thank you! Your code has been executed successfully. ✅\n\n💻 **Output:**\n```\n{result}\n```",
+        parse_mode="Markdown",
+    )
+    await query.message.reply_text("Apa lagi yang bisa saya bantu? 😊", reply_markup=get_main_menu_keyboard())
+    ctx.user_data.pop("pending_code", None)
+
+
+@router.exact("code_cancel")
+async def _h_code_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    query = update.callback_query
+    await query.edit_message_text("Edit cancelled. Feel free to ask again. 👍")
+    await query.message.reply_text("Butuh bantuan lainnya?", reply_markup=get_main_menu_keyboard())
+    ctx.user_data.pop("pending_code", None)
+
+
+# ---------------------------------------------------------------------------
+# WebSocket broadcast helper (fire-and-forget)
+# ---------------------------------------------------------------------------
+
+def _broadcast_ws(user_id: int, message: dict) -> None:
+    try:
+        from core import ws_server
+        if ws_server.loop and ws_server.loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                ws_server.broadcast_to_user(user_id=user_id, message=message),
+                ws_server.loop,
+            )
+    except Exception as exc:
+        logger.debug("WS broadcast failed user=%d: %s", user_id, exc)
+
+
+# ---------------------------------------------------------------------------
+# Main entry-point (registered with python-telegram-bot)
+# ---------------------------------------------------------------------------
+
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
         return
 
-    if action == "tx_confirm" and pending:
-        tx_date = datetime.now()
-        if pending.get('date'):
-            try:
-                date_clean = pending['date'].replace('/', '-')
-                if len(date_clean.split('-')[0]) == 4:
-                    tx_date = datetime.strptime(date_clean, "%Y-%m-%d")
-                else:
-                    tx_date = datetime.strptime(date_clean, "%d-%m-%Y")
-            except:
-                tx_date = datetime.now()
+    await query.answer()
 
-        tags = rules.evaluate({
-            "amount": pending['amount'],
-            "category": pending['category'],
-            "hour": tx_date.hour
-        })
-        
-        description = pending.get('merchant', 'Transaksi')
-        if tags:
-            description += f" ({', '.join(tags)})"
+    action = query.data or ""
 
-        db.add_transaction(
-            user_id=user_db.id,
-            amount=pending['amount'],
-            category=pending['category'],
-            trans_type='expense',
-            description=description,
-            trans_date=tx_date
-        )
-        
-        budget_msg = budget_mgr.check_budget_status(user_db.id, pending['category'])
-        
-        final_msg = f"✅ Tersimpan: Rp{pending['amount']:,.0f} · {pending['category']}"
-        if budget_msg:
-            final_msg += f"\n\n{budget_msg}"
-        else:
-            final_msg += "\n\nMau catat transaksi lain atau cek laporan?"
-            
-        keyboard = [
-            [
-                InlineKeyboardButton("📊 Cek Budget", callback_data="suggest_budget"),
-                InlineKeyboardButton("📈 Laporan", callback_data="report_monthly")
-            ],
-            [
-                InlineKeyboardButton("🚀 Menu Utama", callback_data="suggest_help")
-            ]
-        ]
-            
-        await query.edit_message_text(final_msg, reply_markup=InlineKeyboardMarkup(keyboard))
-        await query.message.reply_text("Ada lagi yang bisa saya bantu?", reply_markup=get_main_menu_keyboard())
-        user_data.pop('pending_tx', None)
-        user_data.pop('state', None)
-        
-        await update_pinned_dashboard(context, user_id)
-        
-    elif action == "tx_edit":
-        keyboard = [
-            [
-                InlineKeyboardButton("Nominal", callback_data="edit_amount"),
-                InlineKeyboardButton("Kategori", callback_data="edit_category")
-            ],
-            [
-                InlineKeyboardButton("Tanggal", callback_data="edit_date"),
-                InlineKeyboardButton("Abaikan", callback_data="tx_ignore")
-            ]
-        ]
-        await query.edit_message_text("Pilih bagian yang ingin diubah:", reply_markup=InlineKeyboardMarkup(keyboard))
+    # Delegate tutorial module's own callbacks first
+    if await tutorial_mode.handle_callback(update, context, action):
+        return
 
-    elif action == "edit_amount":
-        user_data['state'] = 'WAITING_EDIT_AMOUNT'
-        await query.edit_message_text("Ketik nominal baru (contoh: 50rb atau 50000):")
-        
-    elif action == "edit_category":
-        user_data['state'] = 'WAITING_EDIT_CATEGORY'
-        keyboard = []
-        for i in range(0, len(CATEGORIES), 2):
-            row = [InlineKeyboardButton(cat, callback_data=f"set_cat_{cat}") for cat in CATEGORIES[i:i+2]]
-            keyboard.append(row)
-        keyboard.append([InlineKeyboardButton("Batal", callback_data="tx_edit")])
-        await query.edit_message_text("Pilih kategori baru:", reply_markup=InlineKeyboardMarkup(keyboard))
+    dispatched = await router.dispatch(update, context, action)
+    if not dispatched:
+        logger.warning("Unhandled callback action=%r user=%s", action, update.effective_user.id)
+        await query.answer("Aksi tidak dikenali. Coba lagi ya.", show_alert=True)
 
-    elif action.startswith("set_cat_"):
-        new_cat = action.replace("set_cat_", "")
-        if pending:
-            pending['category'] = new_cat
-            user_data['pending_tx'] = pending
-            msg = f"Kategori diubah ke: {new_cat}\n\nRp{pending['amount']:,.0f} · {new_cat}"
-            keyboard = [
-                [
-                    InlineKeyboardButton("✓ Simpan", callback_data="tx_confirm"),
-                    InlineKeyboardButton("✎ Edit Lagi", callback_data="tx_edit")
-                ]
-            ]
-            await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard))
 
-    elif action == "tx_ignore":
-        user_data.pop('pending_tx', None)
-        user_data.pop('state', None)
-        await query.edit_message_text("Transaksi diabaikan. Ada lagi yang mau dicatat?")
-        await query.message.reply_text("Silakan pilih menu di bawah:", reply_markup=get_main_menu_keyboard())
+# ---------------------------------------------------------------------------
+# Report selector (called from commands)
+# ---------------------------------------------------------------------------
 
-    elif action == "suggest_budget":
-        # Handled above
-        pass
-
-    elif action == "report_monthly":
-        # Already handled by report_ logic, but kept for direct calls
-        report_msg = budget_mgr.generate_report(user_db.id, period='monthly')
-        await query.message.reply_text(report_msg)
-
-    elif action == "suggest_insight":
-        from handlers.finance import get_ai_insight
-        await get_ai_insight(update, context)
-
-async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [
-            InlineKeyboardButton("Bulan Ini", callback_data="report_monthly"),
-            InlineKeyboardButton("7 Hari Terakhir", callback_data="report_7days"),
-            InlineKeyboardButton("30 Hari Terakhir", callback_data="report_30days")
-        ]
-    ]
-    
+async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("Bulan Ini", callback_data="report_monthly"),
+        InlineKeyboardButton("7 Hari Terakhir", callback_data="report_7days"),
+        InlineKeyboardButton("30 Hari Terakhir", callback_data="report_30days"),
+    ]])
     msg = "Pilih periode laporan:"
-    if update.callback_query:
-        await update.callback_query.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard))
-    else:
-        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard))
+    target = update.callback_query.message if update.callback_query else update.message
+    await target.reply_text(msg, reply_markup=kb)

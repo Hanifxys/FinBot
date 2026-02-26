@@ -38,3 +38,4 @@ class Tables:
     TRANSACTIONS = "transactions"
     BUDGETS = "budgets"
     SAVING_GOALS = "saving_goals"
+    ADMIN_LOGS = "admin_logs"

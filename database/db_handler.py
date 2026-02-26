@@ -8,6 +8,14 @@ from modules.crypto import EncryptionManager
 CACHE_TTL_USER = 300
 CACHE_TTL_BUDGET = 60
 
+# Roles
+ROLE_SUPERADMIN = "superadmin"
+ROLE_ADMIN = "admin"
+ROLE_USER = "user"
+
+# Superadmin Configuration
+SUPERADMIN_ID = 1512347775 # Muhamad Hanif
+
 class DBHandler:
     def __init__(self, session=None):
         self.supabase = get_supabase()
@@ -402,3 +410,48 @@ class DBHandler:
         except Exception:
             pass
         return item
+
+    # --- ADMIN METHODS ---
+    def update_user_role(self, telegram_id, role):
+        data = {"role": role}
+        self.supabase.table(Tables.USERS).update(data).eq("telegram_id", telegram_id).execute()
+        # Invalidate cache
+        if telegram_id in self._user_cache:
+            del self._user_cache[telegram_id]
+        return True
+
+    def update_user_status(self, telegram_id, is_active):
+        data = {"is_active": is_active}
+        self.supabase.table(Tables.USERS).update(data).eq("telegram_id", telegram_id).execute()
+        # Invalidate cache
+        if telegram_id in self._user_cache:
+            del self._user_cache[telegram_id]
+        return True
+
+    def log_admin_action(self, admin_id, target_id, action, reason=None):
+        data = {
+            "admin_id": admin_id,
+            "target_id": target_id,
+            "action": action,
+            "reason": reason,
+            "timestamp": datetime.now().isoformat()
+        }
+        self.supabase.table(Tables.ADMIN_LOGS).insert(data).execute()
+        return True
+
+    def get_admin_logs(self, limit=100):
+        response = self.supabase.table(Tables.ADMIN_LOGS).select("*")\
+            .order("timestamp", desc=True).limit(limit).execute()
+        return response.data
+
+    def is_superadmin(self, telegram_id):
+        if telegram_id == SUPERADMIN_ID:
+            return True
+        user = self.get_user(telegram_id)
+        return user and getattr(user, 'role', ROLE_USER) == ROLE_SUPERADMIN
+
+    def is_admin(self, telegram_id):
+        if self.is_superadmin(telegram_id):
+            return True
+        user = self.get_user(telegram_id)
+        return user and getattr(user, 'role', ROLE_USER) == ROLE_ADMIN

