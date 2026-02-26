@@ -6,6 +6,7 @@ import sys
 import asyncio
 import time as _time
 import uuid
+import atexit
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes, TypeHandler
 
@@ -28,6 +29,22 @@ logging.basicConfig(
     level=logging.INFO
 )
 
+_POLLING_LOCK_KEY = None
+_POLLING_LOCK_VALUE = None
+_POLLING_LOCK_REDIS = None
+
+def _release_polling_lock():
+    global _POLLING_LOCK_KEY, _POLLING_LOCK_VALUE, _POLLING_LOCK_REDIS
+    try:
+        if _POLLING_LOCK_REDIS and _POLLING_LOCK_KEY and _POLLING_LOCK_VALUE:
+            current = _POLLING_LOCK_REDIS.get(_POLLING_LOCK_KEY)
+            if current == _POLLING_LOCK_VALUE:
+                _POLLING_LOCK_REDIS.delete(_POLLING_LOCK_KEY)
+    except Exception:
+        pass
+
+atexit.register(_release_polling_lock)
+
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logging.error(f"Exception while handling an update: {context.error}")
     from telegram.error import Conflict
@@ -41,6 +58,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
                     rm.client.set("finbot:polling_backoff_until", str(int(_time.time()) + backoff_s), ex=backoff_s)
             except Exception:
                 pass
+            _release_polling_lock()
             try:
                 await context.application.stop()
             except Exception:
@@ -92,8 +110,8 @@ if __name__ == '__main__':
             pass
 
         lock_key = os.getenv("POLLING_LOCK_KEY", "finbot:polling_lock")
-        lock_ttl = int(os.getenv("POLLING_LOCK_TTL_SECONDS", "90"))
-        retry_s = int(os.getenv("POLLING_LOCK_RETRY_SECONDS", "20"))
+        lock_ttl = int(os.getenv("POLLING_LOCK_TTL_SECONDS", "30"))
+        retry_s = int(os.getenv("POLLING_LOCK_RETRY_SECONDS", "5"))
         instance_id = os.getenv("KOYEB_INSTANCE_ID", "") or str(uuid.uuid4())
         lock_value = f"{instance_id}:{os.getpid()}:{int(_time.time())}"
 
@@ -104,8 +122,19 @@ if __name__ == '__main__':
                 acquired = False
             if acquired:
                 break
-            logging.error("Polling lock is held by another instance; bot polling is waiting.")
+            try:
+                ttl = rm.client.ttl(lock_key)
+            except Exception:
+                ttl = None
+            if isinstance(ttl, int) and ttl > 0:
+                logging.error(f"Polling lock is held; waiting ~{ttl}s.")
+            else:
+                logging.error("Polling lock is held; bot polling is waiting.")
             _time.sleep(max(5, retry_s))
+
+        _POLLING_LOCK_KEY = lock_key
+        _POLLING_LOCK_VALUE = lock_value
+        _POLLING_LOCK_REDIS = rm.client
 
         def _refresh_lock():
             while True:
