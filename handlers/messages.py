@@ -53,14 +53,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Aku nggak nemu foto-nya. Coba kirim ulang ya.")
         return
 
+    low_mem = False
     try:
         import psutil
         mem = psutil.virtual_memory()
         if float(mem.percent) >= OCR_MAX_MEMORY_PERCENT:
-            await update.message.reply_text(
-                "Server lagi penuh (memori tinggi). Coba kirim ulang 1-2 menit lagi, atau kirim foto yang lebih kecil ya."
-            )
-            return
+            low_mem = True
     except Exception:
         pass
 
@@ -84,7 +82,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         # 1. OCR Extraction
         async with OCR_SEMAPHORE:
-            result = await asyncio.to_thread(ocr.process_receipt, photo_path)
+            result = await asyncio.to_thread(ocr.process_receipt, photo_path, low_mem)
             
         if not result:
             await update.message.reply_text("Gagal membaca struk. Pastikan foto jelas ya!")

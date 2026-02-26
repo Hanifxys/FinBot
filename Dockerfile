@@ -26,6 +26,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     libglib2.0-0 \
     libpq5 \
+    tesseract-ocr \
+    tesseract-ocr-ind \
+    tesseract-ocr-eng \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -39,9 +42,8 @@ ENV OPENBLAS_NUM_THREADS=1
 ENV NUMEXPR_NUM_THREADS=1
 ENV VECLIB_MAXIMUM_THREADS=1
 
-# Pre-download EasyOCR models (id and en) with retry logic
-# This makes the image larger but startup MUCH faster
-RUN python -c "import easyocr, time; code = 'success = False\nfor i in range(5):\n    try:\n        easyocr.Reader([\\'id\\', \\'en\\'], gpu=False)\n        print(\\'Download success\\')\n        success = True\n        break\n    except Exception as e:\n        print(f\\'Attempt {i+1} failed: {e}\\')\n        time.sleep(5)\nif not success:\n    print(\\'Failed to download models after 5 attempts\\')\n    raise SystemExit(1)\n'; exec(code)"
+ARG ENABLE_EASYOCR_MODELS=0
+RUN if [ "$ENABLE_EASYOCR_MODELS" = "1" ]; then python -c "import easyocr, time; code = 'success = False\nfor i in range(5):\n    try:\n        easyocr.Reader([\\'id\\', \\'en\\'], gpu=False)\n        print(\\'Download success\\')\n        success = True\n        break\n    except Exception as e:\n        print(f\\'Attempt {i+1} failed: {e}\\')\n        time.sleep(5)\nif not success:\n    print(\\'Failed to download models after 5 attempts\\')\n    raise SystemExit(1)\n'; exec(code)"; fi
 
 # Copy application code
 COPY . .

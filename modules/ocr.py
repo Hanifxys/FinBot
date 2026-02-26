@@ -2,105 +2,172 @@ import re
 import os
 import gc
 import tempfile
+import shutil
+import subprocess
+import logging
+
+logger = logging.getLogger(__name__)
 
 class OCRProcessor:
     def __init__(self):
         self.enabled = True
         self._reader = None
+        self.engine = (os.getenv("OCR_ENGINE", "auto") or "auto").lower()
+        if self.engine == "auto":
+            self.engine = self._auto_engine()
+
+    def _auto_engine(self) -> str:
+        try:
+            import psutil
+            total = int(psutil.virtual_memory().total)
+            if total <= 900 * 1024 * 1024:
+                return "tesseract"
+        except Exception:
+            pass
+        return "easyocr"
 
     @property
     def reader(self):
-        """Lazy load the reader to save memory on startup"""
+        if self.engine != "easyocr":
+            return None
         if self._reader is None and self.enabled:
             try:
                 import easyocr
-                # Disable downloading inside the instance to prevent OOM
-                # We pre-downloaded models in Dockerfile
                 self._reader = easyocr.Reader(['id', 'en'], gpu=False, download_enabled=False)
-                print("OCR Reader initialized (CPU mode)")
             except Exception as e:
-                print(f"OCR Reader Warning: {e}")
+                logger.warning(f"OCR Reader Warning: {e}")
                 self._reader = None
         return self._reader
 
-    def process_receipt(self, image_path):
-        reader = self.reader
-        if not reader:
+    def process_receipt(self, image_path, low_mem: bool = False):
+        if not self.enabled:
             return None
         
         try:
-            try:
-                import torch
-                torch.set_num_threads(1)
-            except Exception:
-                pass
+            max_dim_key = "OCR_MAX_DIM_LOW_MEM" if low_mem else "OCR_MAX_DIM"
+            quality_key = "OCR_JPEG_QUALITY_LOW_MEM" if low_mem else "OCR_JPEG_QUALITY"
+            max_dim_default = "1024" if low_mem else "1280"
+            quality_default = "65" if low_mem else "75"
 
-            prepared_path, should_cleanup = self._prepare_image(image_path)
+            max_dim = int(os.getenv(max_dim_key, max_dim_default))
+            jpeg_quality = int(os.getenv(quality_key, quality_default))
+
+            prepared_path, should_cleanup = self._prepare_image(image_path, max_dim=max_dim, jpeg_quality=jpeg_quality)
+            
             try:
-                results = reader.readtext(prepared_path, detail=0, batch_size=1, workers=0)
+                full_text, first_line = self._extract_text(prepared_path, low_mem=low_mem)
             finally:
                 if should_cleanup and os.path.exists(prepared_path):
                     os.remove(prepared_path)
 
-            full_text = " ".join([t for t in results if isinstance(t, str)])
-            
-            # 1. Extract Merchant Name (Usually the first few lines)
-            merchant = "Transaksi"
-            if len(results) > 0:
-                merchant = results[0].strip() if isinstance(results[0], str) else "Transaksi"
-                # Simple heuristic: if merchant looks like common noise, skip
-                if merchant.lower() in ["alamat", "telp", "tgl", "cashier", "nomor", "no:"]:
-                    merchant = "Transaksi"
+            if not full_text:
+                return None
 
-            # 2. Extract Amount
-            amount_patterns = [
-                r'(?:total|bayar|jumlah|amount|grand total|nett|total bayar|harga)[^\d]*([\d\.,]+)',
-                r'[\d\.,]+'
-            ]
-            
-            total_matches = re.findall(amount_patterns[0], full_text.lower())
-            amount = 0.0
-            if total_matches:
-                amount = self._clean_amount(total_matches[-1])
-                
-            if amount <= 100:
-                all_numbers = re.findall(r'(\d+[\d\.,]*)', full_text)
-                cleaned_numbers = []
-                for num in all_numbers:
-                    val = self._clean_amount(num)
-                    if val > 100:
-                        cleaned_numbers.append(val)
-                
-                if cleaned_numbers:
-                    amount = max(cleaned_numbers)
-                    
-            # 3. Extract Date
-            date_match = re.search(r'(\d{2}[/-]\d{2}[/-]\d{4})|(\d{4}[/-]\d{2}[/-]\d{2})', full_text)
-            date_str = None
-            if date_match:
-                date_str = date_match.group(0)
+            merchant = self._extract_merchant(first_line, full_text)
+            amount = self._extract_amount(full_text)
+            date_str = self._extract_date(full_text)
 
             result = {
                 "amount": amount,
                 "merchant": merchant,
                 "date": date_str
             }
-            
-            # Memory safety: Clear reader after intensive OCR if on low-memory env
-            # This is optional but can help if Koyeb instance is very tight
-            # self._reader = None 
-            
             return result
         except Exception as e:
-            print(f"OCR Processing Error: {e}")
+            logger.error(f"OCR Processing Error: {e}")
             return None
         finally:
-            # Clean up after processing
             gc.collect()
 
-    def _prepare_image(self, image_path: str):
-        max_dim = int(os.getenv("OCR_MAX_DIM", "1280"))
-        jpeg_quality = int(os.getenv("OCR_JPEG_QUALITY", "75"))
+    def _extract_text(self, image_path: str, low_mem: bool = False):
+        if self.engine == "easyocr":
+            reader = self.reader
+            if reader is not None:
+                try:
+                    import torch
+                    torch.set_num_threads(1)
+                except Exception:
+                    pass
+
+                texts = reader.readtext(image_path, detail=0, batch_size=1, workers=0)
+                full_text = " ".join([t for t in texts if isinstance(t, str)]).strip()
+                first_line = ""
+                for t in texts:
+                    if isinstance(t, str) and t.strip():
+                        first_line = t.strip()
+                        break
+                return full_text, first_line
+
+            self.engine = "tesseract"
+
+        return self._tesseract_ocr(image_path, low_mem=low_mem)
+
+    def _tesseract_ocr(self, image_path: str, low_mem: bool = False):
+        if shutil.which("tesseract") is None:
+            return "", ""
+
+        lang = os.getenv("OCR_TESS_LANG", "ind+eng")
+        psm_key = "OCR_TESS_PSM_LOW_MEM" if low_mem else "OCR_TESS_PSM"
+        timeout_key = "OCR_TIMEOUT_SECONDS_LOW_MEM" if low_mem else "OCR_TIMEOUT_SECONDS"
+        psm = str(os.getenv(psm_key, "6"))
+        timeout_s = int(os.getenv(timeout_key, "45" if low_mem else "60"))
+
+        args = ["tesseract", image_path, "stdout", "-l", lang, "--oem", "1", "--psm", psm]
+        try:
+            proc = subprocess.run(args, capture_output=True, text=True, timeout=timeout_s)
+            text = (proc.stdout or "").replace("\x0c", " ").strip()
+            first_line = ""
+            for line in text.splitlines():
+                if line.strip():
+                    first_line = line.strip()
+                    break
+            return text, first_line
+        except Exception:
+            return "", ""
+
+    def _extract_merchant(self, first_line: str, full_text: str) -> str:
+        merchant = (first_line or "").strip()
+        if not merchant:
+            for line in full_text.splitlines():
+                if line.strip():
+                    merchant = line.strip()
+                    break
+        merchant = merchant or "Transaksi"
+        noise = {"alamat", "telp", "tgl", "cashier", "nomor", "no:", "table"}
+        if merchant.lower() in noise:
+            return "Transaksi"
+        return merchant[:64]
+
+    def _extract_amount(self, full_text: str) -> float:
+        amount_patterns = [
+            r'(?:total|bayar|jumlah|amount|grand total|nett|total bayar|harga)[^\d]*([\d\.,]+)',
+            r'[\d\.,]+'
+        ]
+
+        total_matches = re.findall(amount_patterns[0], full_text.lower())
+        amount = 0.0
+        if total_matches:
+            amount = self._clean_amount(total_matches[-1])
+
+        if amount <= 100:
+            all_numbers = re.findall(r'(\d+[\d\.,]*)', full_text)
+            cleaned_numbers = []
+            for num in all_numbers:
+                val = self._clean_amount(num)
+                if val > 100:
+                    cleaned_numbers.append(val)
+            if cleaned_numbers:
+                amount = max(cleaned_numbers)
+
+        return amount
+
+    def _extract_date(self, full_text: str):
+        date_match = re.search(r'(\d{2}[/-]\d{2}[/-]\d{4})|(\d{4}[/-]\d{2}[/-]\d{2})', full_text)
+        if date_match:
+            return date_match.group(0)
+        return None
+
+    def _prepare_image(self, image_path: str, max_dim: int = 1280, jpeg_quality: int = 75):
 
         try:
             from PIL import Image
