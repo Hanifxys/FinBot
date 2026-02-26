@@ -54,17 +54,9 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     
     <style>
-        body {
-            font-family: 'Inter', sans-serif;
-            background: #020617;
-            color: #e2e8f0;
-            -webkit-font-smoothing: antialiased;
-            -moz-osx-font-smoothing: grayscale;
-        }
-
-        ::selection {
-            background: rgba(59, 130, 246, 0.3);
-            color: #60a5fa;
+        body { 
+            font-family: 'Inter', sans-serif; 
+            @apply bg-dark-950 text-slate-200 antialiased selection:bg-brand-500/30 selection:text-brand-400;
         }
         
         /* Premium Glass Effect */
@@ -103,15 +95,6 @@
 
         /* Utilities */
         .text-glow { text-shadow: 0 0 20px rgba(59, 130, 246, 0.5); }
-
-        .animate-spin-slow { animation: spin 10s linear infinite; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-
-        .animate-fade-in { animation: fadeIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) both; }
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(6px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
     </style>
 </head>
 <body>
@@ -209,27 +192,13 @@
                     <!-- Admin Navigation -->
                     <template v-if="isAdmin">
                         <p class="px-4 text-[10px] font-bold text-slate-600 uppercase tracking-widest mt-8 mb-4">Management</p>
-                        <a @click="setView('admin_users')" :class="['flex items-center gap-3 px-4 py-3 rounded-lg cursor-pointer transition-all duration-200 group text-sm font-medium', currentView === 'admin_users' ? 'bg-brand-500/10 text-brand-400 border border-brand-500/20' : 'text-slate-400 hover:text-white hover:bg-white/5']">
-                            <i class="fas fa-users-cog w-5 text-center"></i>
-                            <span>User Management</span>
+                        <a v-for="item in managementMenuItems" :key="item.id" @click="setView(item.id)"
+                            :class="['flex items-center gap-3 px-4 py-3 rounded-lg cursor-pointer transition-all duration-200 group text-sm font-medium', currentView === item.id ? 'bg-brand-500/10 text-brand-400 border border-brand-500/20' : 'text-slate-400 hover:text-white hover:bg-white/5']">
+                            <i :class="[item.icon, 'w-5 text-center']"></i>
+                            <span>{{ item.label }}</span>
+                            <div v-if="item.id === 'admin_moderation' && flaggedCount > 0" class="ml-auto px-1.5 py-0.5 rounded-full bg-danger-500 text-[9px] font-bold text-white">{{ flaggedCount }}</div>
                         </a>
-                        <a @click="setView('admin_ai')" :class="['flex items-center gap-3 px-4 py-3 rounded-lg cursor-pointer transition-all duration-200 group text-sm font-medium', currentView === 'admin_ai' ? 'bg-brand-500/10 text-brand-400 border border-brand-500/20' : 'text-slate-400 hover:text-white hover:bg-white/5']">
-                            <i class="fas fa-brain w-5 text-center"></i>
-                            <span>AI Intelligence</span>
-                        </a>
-                        <a v-if="isSuperadmin" @click="setView('admin_broadcast')" :class="['flex items-center gap-3 px-4 py-3 rounded-lg cursor-pointer transition-all duration-200 group text-sm font-medium', currentView === 'admin_broadcast' ? 'bg-brand-500/10 text-brand-400 border border-brand-500/20' : 'text-slate-400 hover:text-white hover:bg-white/5']">
-                            <i class="fas fa-bullhorn w-5 text-center"></i>
-                            <span>Broadcast System</span>
-                        </a>
-                        <a v-if="isSuperadmin" @click="setView('admin_moderation')" :class="['flex items-center gap-3 px-4 py-3 rounded-lg cursor-pointer transition-all duration-200 group text-sm font-medium', currentView === 'admin_moderation' ? 'bg-brand-500/10 text-brand-400 border border-brand-500/20' : 'text-slate-400 hover:text-white hover:bg-white/5']">
-                            <i class="fas fa-shield-halved w-5 text-center"></i>
-                            <span>Content Moderation</span>
-                            <div v-if="flaggedCount > 0" class="ml-auto px-1.5 py-0.5 rounded-full bg-danger-500 text-[9px] font-bold text-white">{{ flaggedCount }}</div>
-                        </a>
-                        <a v-if="isSuperadmin" @click="setView('admin_logs')" :class="['flex items-center gap-3 px-4 py-3 rounded-lg cursor-pointer transition-all duration-200 group text-sm font-medium', currentView === 'admin_logs' ? 'bg-brand-500/10 text-brand-400 border border-brand-500/20' : 'text-slate-400 hover:text-white hover:bg-white/5']">
-                            <i class="fas fa-history w-5 text-center"></i>
-                            <span>Audit Trail</span>
-                        </a>
+                        <div v-if="managementMenuItems.length === 0" class="px-4 py-3 text-[10px] text-slate-600 font-mono">No management menus available.</div>
                     </template>
                 </nav>
                 
@@ -415,8 +384,10 @@
                                         </table>
                                     </div>
                                 </div>
-                                
-                                <div v-else-if="currentView === 'admin_users'" class="space-y-8">
+
+                        <!-- ADMIN: USER MANAGEMENT -->
+                        <transition name="slide" mode="out-in">
+                        <div v-if="currentView === 'admin_users'" class="space-y-8" key="admin_users">
                             <!-- Admin Quick Stats -->
                             <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
                                 <div class="glass-panel p-4 rounded-xl border-l-4 border-brand-500">
@@ -456,6 +427,9 @@
                                         </tr>
                                     </thead>
                                     <tbody class="divide-y divide-white/5">
+                                        <tr v-if="filteredUsers.length === 0">
+                                            <td colspan="5" class="px-6 py-12 text-center text-slate-600 font-mono text-xs">No users found</td>
+                                        </tr>
                                         <tr v-for="user in filteredUsers" :key="user.id" class="hover:bg-white/5 transition-colors group">
                                             <td class="px-6 py-4 font-mono text-xs text-slate-500 text-center">{{ user.telegram_id }}</td>
                                             <td class="px-6 py-4 cursor-pointer group/user" @click="openUserDrawer(user)">
@@ -495,9 +469,11 @@
                                 </table>
                             </div>
                         </div>
-                        </div>
+                        </transition>
 
-                        <div v-else-if="currentView === 'admin_ai'" class="space-y-8">
+                        <!-- ADMIN: AI MONITOR -->
+                        <transition name="slide" mode="out-in">
+                        <div v-if="currentView === 'admin_ai'" class="space-y-8" key="admin_ai">
                             <!-- Live Status Bar -->
                             <div class="glass-panel p-4 rounded-xl border border-white/5 bg-gradient-to-r from-dark-900 to-dark-800 flex items-center justify-between">
                                 <div class="flex items-center gap-4">
@@ -676,8 +652,11 @@
                                 </div>
                             </div>
                         </div>
+                        </transition>
 
-                        <div v-else-if="currentView === 'admin_broadcast'" class="space-y-8">
+                        <!-- ADMIN: BROADCAST -->
+                        <transition name="slide" mode="out-in">
+                        <div v-if="currentView === 'admin_broadcast'" class="space-y-8" key="admin_broadcast">
                             <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
                                 <!-- Broadcast Composer -->
                                 <div class="lg:col-span-2 space-y-6">
@@ -792,8 +771,11 @@
                                 </div>
                             </div>
                         </div>
+                        </transition>
 
-                        <div v-else-if="currentView === 'admin_moderation'" class="space-y-6">
+                        <!-- ADMIN: MODERATION -->
+                        <transition name="slide" mode="out-in">
+                        <div v-if="currentView === 'admin_moderation'" class="space-y-6" key="admin_moderation">
                             <!-- Header & Metrics -->
                             <div class="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-4">
                                 <div>
@@ -1044,9 +1026,11 @@
                                 </div>
                             </div>
                         </div>
-                        </div>
+                        </transition>
 
-                        <div v-else-if="currentView === 'admin_logs'" class="glass-panel rounded-2xl overflow-hidden">
+                        <!-- ADMIN: AUDIT LOGS -->
+                        <transition name="slide" mode="out-in">
+                        <div v-if="currentView === 'admin_logs'" class="glass-panel rounded-2xl overflow-hidden" key="admin_logs">
                             <div class="p-6 border-b border-white/5 flex items-center justify-between bg-white/2">
                                 <h3 class="text-sm font-bold text-white uppercase tracking-wider">System Audit Trail</h3>
                                 <button @click="fetchLogs" class="p-2 text-slate-500 hover:text-brand-400 transition-colors">
@@ -1094,18 +1078,7 @@
                                 </table>
                             </div>
                         </div>
-                        
-                        <div v-else class="glass-panel p-10 rounded-2xl border border-white/5">
-                            <div class="flex items-center gap-4">
-                                <div class="w-12 h-12 rounded-xl bg-dark-800 border border-white/5 flex items-center justify-center text-slate-500">
-                                    <i class="fas fa-compass"></i>
-                                </div>
-                                <div>
-                                    <p class="text-sm font-bold text-white">View not found</p>
-                                    <p class="text-xs text-slate-500 mt-1">Select a menu item from the sidebar to continue.</p>
-                                </div>
-                            </div>
-                        </div>
+                        </transition>
 
                     </div>
                 </div>
@@ -1284,16 +1257,42 @@
                 const broadcastMessage = ref('');
                 const pmModal = ref({ show: false, user: {}, message: '' });
                 const userDrawer = ref({ show: false, user: {} });
-                const demoMode = ref(false);
 
                 const menuItems = [
                     { id: 'dashboard', label: 'Overview', icon: 'fas fa-layer-group' },
                     { id: 'transactions', label: 'Ledger', icon: 'fas fa-table' }
                 ];
 
-                const isAdmin = computed(() => ['superadmin', 'admin', 'moderator', 'finance', 'support'].includes(userRole.value));
-                const isSuperadmin = computed(() => userRole.value === 'superadmin');
+                const normalizeRole = (role) => (role ?? '').toString().trim().toLowerCase();
+                const normalizedRole = computed(() => normalizeRole(userRole.value));
+
+                const isAdmin = computed(() => ['superadmin', 'admin', 'moderator', 'finance', 'support'].includes(normalizedRole.value));
+                const isSuperadmin = computed(() => normalizedRole.value === 'superadmin');
                 const flaggedCount = computed(() => flaggedTransactions.value.length);
+
+                const managementMenuItems = computed(() => {
+                    const base = [
+                        { id: 'admin_users', label: 'User Management', icon: 'fas fa-users-cog', superadminOnly: false },
+                        { id: 'admin_ai', label: 'AI Intelligence', icon: 'fas fa-brain', superadminOnly: false },
+                        { id: 'admin_broadcast', label: 'Broadcast System', icon: 'fas fa-bullhorn', superadminOnly: true },
+                        { id: 'admin_moderation', label: 'Content Moderation', icon: 'fas fa-shield-halved', superadminOnly: true },
+                        { id: 'admin_logs', label: 'Audit Trail', icon: 'fas fa-history', superadminOnly: true }
+                    ];
+                    if (!isAdmin.value) return [];
+                    if (isSuperadmin.value) return base;
+                    return base.filter(i => !i.superadminOnly);
+                });
+
+                const canAccessView = (view) => {
+                    if (view === 'dashboard') return true;
+                    if (view === 'transactions') return true;
+                    if (view === 'admin_users') return isAdmin.value;
+                    if (view === 'admin_ai') return isAdmin.value;
+                    if (view === 'admin_broadcast') return isSuperadmin.value;
+                    if (view === 'admin_moderation') return isSuperadmin.value;
+                    if (view === 'admin_logs') return isSuperadmin.value;
+                    return false;
+                };
 
                 const kpiCards = computed(() => {
                     if (isAdmin.value && currentView.value === 'dashboard') {
@@ -1330,9 +1329,10 @@
                 const filteredUsers = computed(() => {
                     if (!userSearch.value) return users.value;
                     const s = userSearch.value.toLowerCase();
-                    return users.value.filter(u => (u.username || '').toLowerCase().includes(s) || (u.telegram_id || '').toString().includes(s));
+                    return users.value.filter(u => ((u.username || '').toLowerCase().includes(s)) || ((u.telegram_id || '').toString().includes(s)));
                 });
 
+                // --- UI Helpers ---
                 const showToast = (message, type = 'success') => {
                     const id = Date.now();
                     toasts.value.push({ id, message, type });
@@ -1343,81 +1343,7 @@
                     toasts.value = toasts.value.filter(t => t.id !== id);
                 };
 
-                const seedDemoData = () => {
-                    const now = Date.now();
-                    const demoTransactions = [
-                        { id: 901, date: new Date(now - 3600000).toISOString(), category: 'Makanan', description: 'Lunch meeting', amount: 125000, type: 'expense' },
-                        { id: 902, date: new Date(now - 7200000).toISOString(), category: 'Gaji', description: 'Salary payout', amount: 9500000, type: 'income' },
-                        { id: 903, date: new Date(now - 10800000).toISOString(), category: 'Transportasi', description: 'Airport transfer', amount: 185000, type: 'expense' },
-                        { id: 904, date: new Date(now - 14400000).toISOString(), category: 'Belanja', description: 'Office supplies', amount: 420000, type: 'expense' },
-                        { id: 905, date: new Date(now - 18000000).toISOString(), category: 'Investasi', description: 'ETF allocation', amount: 3000000, type: 'income' }
-                    ];
-
-                    transactions.value = demoTransactions;
-                    stats.value = { total_income: 12500000, total_expense: 7300000 };
-                    adminStats.value = {
-                        total_users: 1284,
-                        active_users: 824,
-                        system_health: 'Nominal',
-                        db_status: 'Connected',
-                        total_volume: 'Rp 84.2B',
-                        platform_growth: '+12.4%',
-                        growth_data: {
-                            labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
-                            users: [820, 860, 910, 940, 980, 1020, 1080],
-                            transactions: [620, 640, 710, 760, 820, 900, 980]
-                        }
-                    };
-                    aiStats.value = {
-                        total_requests: '1,824',
-                        error_rate: '0.07%',
-                        avg_latency: '1.0s',
-                        token_usage: '52.1k',
-                        circuit_breaker: { failures: 1, is_open: false },
-                        models: [
-                            { name: 'Primary (GPT-4)', status: 'ACTIVE', load: 78, color: 'bg-brand-500' },
-                            { name: 'Fallback (Claude-3)', status: 'STANDBY', load: 15, color: 'bg-purple-500' },
-                            { name: 'Fast (Groq/Llama)', status: 'ACTIVE', load: 7, color: 'bg-emerald-500' }
-                        ]
-                    };
-                    users.value = [
-                        { id: 1, telegram_id: '1512347775', username: 'superadmin', role: 'superadmin', is_active: true, created_at: new Date(now - 86400000 * 120).toISOString(), daily_tx_count: 18, ai_calls: 74, risk: 'Low' },
-                        { id: 2, telegram_id: '1178923341', username: 'fin_ops', role: 'finance', is_active: true, created_at: new Date(now - 86400000 * 60).toISOString(), daily_tx_count: 12, ai_calls: 28, risk: 'Low' },
-                        { id: 3, telegram_id: '1192339881', username: 'support_hq', role: 'support', is_active: true, created_at: new Date(now - 86400000 * 45).toISOString(), daily_tx_count: 9, ai_calls: 16, risk: 'Low' },
-                        { id: 4, telegram_id: '1108893312', username: 'risk_ops', role: 'moderator', is_active: true, created_at: new Date(now - 86400000 * 32).toISOString(), daily_tx_count: 22, ai_calls: 34, risk: 'High' },
-                        { id: 5, telegram_id: '1089912229', username: 'regular_user', role: 'user', is_active: false, created_at: new Date(now - 86400000 * 18).toISOString(), daily_tx_count: 3, ai_calls: 4, risk: 'High' }
-                    ];
-                    adminLogs.value = [
-                        { id: 1, timestamp: new Date(now - 300000).toISOString(), admin_id: 'SYSTEM', action: 'BOOT', action_type: 'system', reason: 'Server started successfully', ip_address: '127.0.0.1' },
-                        { id: 2, timestamp: new Date(now - 900000).toISOString(), admin_id: '1512347775', action: 'LOGIN', action_type: 'auth', reason: 'Superadmin session initiated', ip_address: '127.0.0.1' },
-                        { id: 3, timestamp: new Date(now - 1800000).toISOString(), admin_id: '1512347775', action: 'ROLE_UPDATE', action_type: 'security', target_id: '1089912229', old_value: 'user', new_value: 'moderator', ip_address: '10.22.1.17' }
-                    ];
-                    flaggedTransactions.value = [
-                        { id: 11, transaction_id: 9021, reason: 'Unusual amount', created_at: new Date(now - 7200000).toISOString(), risk_score: 82, status: 'pending', transactions: { amount: 9200000, category: 'Investasi' } },
-                        { id: 12, transaction_id: 9022, reason: 'Velocity spike', created_at: new Date(now - 5400000).toISOString(), risk_score: 67, status: 'review', transactions: { amount: 480000, category: 'Belanja' } }
-                    ];
-                    suspiciousUsers.value = [
-                        { id: 31, username: 'risk_ops', telegram_id: '1108893312', daily_tx_count: 22, ai_calls: 34, risk: 'High' },
-                        { id: 32, username: 'regular_user', telegram_id: '1089912229', daily_tx_count: 3, ai_calls: 4, risk: 'High' }
-                    ];
-                    disputes.value = [
-                        { id: 501, type: 'Chargeback', issue: 'User claims transaction was unauthorized', status: 'open', created_at: new Date(now - 36000000).toISOString() },
-                        { id: 502, type: 'Transfer', issue: 'Delayed settlement confirmation', status: 'investigating', created_at: new Date(now - 28800000).toISOString() }
-                    ];
-                    health.value = { status: 'ok', components: { database: 'healthy', redis: 'healthy', websocket: 'healthy', ai_engine: 'healthy' } };
-                };
-
-                const enableDemoSession = () => {
-                    demoMode.value = true;
-                    isAuthenticated.value = true;
-                    userId.value = 'DEMO-ADMIN';
-                    userRole.value = 'superadmin';
-                    error.value = '';
-                    isLoading.value = false;
-                    seedDemoData();
-                    setTimeout(renderChart, 300);
-                };
-
+                // --- API Methods ---
                 const api = axios.create({ baseURL: '/', timeout: 10000 });
                 api.interceptors.request.use(config => {
                     if (token.value) config.headers.Authorization = `Bearer ${token.value}`;
@@ -1427,14 +1353,6 @@
                 const login = async () => {
                     const cleanToken = token.value.trim();
                     if (!cleanToken) return;
-                    const lowerToken = cleanToken.toLowerCase();
-                    if (lowerToken === 'admin' || lowerToken === 'demo') {
-                        localStorage.setItem('finbot_token', cleanToken);
-                        token.value = cleanToken;
-                        enableDemoSession();
-                        showToast("Demo mode enabled. Welcome back!", "success");
-                        return;
-                    }
                     isLoading.value = true;
                     error.value = '';
                     try {
@@ -1445,12 +1363,17 @@
                         if (res.data.status === 'ok') {
                             isAuthenticated.value = true;
                             userId.value = res.data.user_id;
-                            userRole.value = res.data.role;
+                            userRole.value = normalizeRole(res.data.role);
                             localStorage.setItem('finbot_token', cleanToken);
                             token.value = cleanToken; // Update ref to trimmed version
                             showToast("Authenticated successfully. Welcome back!", "success");
-                            fetchData();
+                            await fetchData();
                             startPolling();
+                            if (isSuperadmin.value) {
+                                await Promise.allSettled([fetchUsers(), fetchAdminStats(), fetchAIStats(), fetchModerationData(), fetchLogs()]);
+                                if (managementMenuItems.value.some(i => i.id === 'admin_logs') && adminLogs.value.length === 0) showToast("Audit Trail kosong atau belum bisa dimuat", "error");
+                                if (managementMenuItems.value.some(i => i.id === 'admin_users') && users.value.length === 0) showToast("User Directory kosong atau belum bisa dimuat", "error");
+                            }
                         }
                     } catch (e) {
                         error.value = 'Invalid authentication credentials';
@@ -1494,13 +1417,13 @@
                     // Admin data fetches
                     if (isAdmin.value) {
                         tasks.push(
-                            async () => { try { const res = await api.get('/admin/users'); users.value = res.data; } catch(e) {} },
-                            async () => { try { const res = await api.get('/admin/stats/system'); adminStats.value = res.data; } catch(e) {} },
-                            async () => { try { const res = await api.get('/admin/stats/ai'); aiStats.value = res.data; } catch(e) {} },
-                            async () => { try { await fetchModerationData(); } catch(e) {} }
+                            async () => { try { await fetchUsers(); } catch (e) {} },
+                            async () => { try { await fetchAdminStats(); } catch (e) {} },
+                            async () => { try { await fetchAIStats(); } catch (e) {} },
+                            async () => { try { await fetchModerationData(); } catch (e) {} }
                         );
                         if (isSuperadmin.value) {
-                            tasks.push(async () => { try { const res = await api.get('/admin/logs'); adminLogs.value = res.data; } catch(e) {} });
+                            tasks.push(async () => { try { await fetchLogs(); } catch (e) {} });
                         }
                     }
 
@@ -1520,7 +1443,10 @@
                         suspiciousUsers.value = suspRes.data;
                         disputes.value = dispRes.data;
                         modSettings.value = setRes.data;
-                    } catch (e) { console.error("Failed to fetch moderation data", e); }
+                    } catch (e) {
+                        console.error("Failed to fetch moderation data", e);
+                        showToast("Gagal memuat data moderation", "error");
+                    }
                 };
 
                 const saveModSettings = async () => {
@@ -1543,11 +1469,6 @@
                         const res = await api.get('/health');
                         health.value = res.data;
                     } catch (e) { 
-                        const payload = e?.response?.data;
-                        if (payload && payload.components) {
-                            health.value = payload;
-                            return;
-                        }
                         health.value.status = 'error';
                         Object.keys(health.value.components).forEach(k => health.value.components[k] = 'disconnected');
                     }
@@ -1562,28 +1483,40 @@
                     try {
                         const res = await api.get('/admin/users');
                         users.value = res.data;
-                    } catch (e) { console.error("Failed to fetch users", e); }
+                    } catch (e) {
+                        console.error("Failed to fetch users", e);
+                        showToast("Gagal memuat user admin", "error");
+                    }
                 };
 
                 const fetchLogs = async () => {
                     try {
                         const res = await api.get('/admin/logs');
                         adminLogs.value = res.data;
-                    } catch (e) { console.error("Failed to fetch logs", e); }
+                    } catch (e) {
+                        console.error("Failed to fetch logs", e);
+                        showToast("Gagal memuat audit trail", "error");
+                    }
                 };
 
                 const fetchAdminStats = async () => {
                     try {
                         const res = await api.get('/admin/stats/system');
                         adminStats.value = res.data;
-                    } catch (e) { console.error("Failed to fetch admin stats", e); }
+                    } catch (e) {
+                        console.error("Failed to fetch admin stats", e);
+                        showToast("Gagal memuat admin stats", "error");
+                    }
                 };
 
                 const fetchAIStats = async () => {
                     try {
                         const res = await api.get('/admin/stats/ai');
                         aiStats.value = res.data;
-                    } catch (e) { console.error("Failed to fetch AI stats", e); }
+                    } catch (e) {
+                        console.error("Failed to fetch AI stats", e);
+                        showToast("Gagal memuat AI stats", "error");
+                    }
                 };
 
                 const updateUserRole = async (targetId, role) => {
@@ -1672,6 +1605,12 @@
                 };
 
                 const setView = (view) => {
+                    if (!canAccessView(view)) {
+                        showToast("Akses ditolak untuk menu tersebut", "error");
+                        currentView.value = 'dashboard';
+                        mobileMenuOpen.value = false;
+                        return;
+                    }
                     currentView.value = view;
                     mobileMenuOpen.value = false;
                 };
@@ -1680,18 +1619,22 @@
                 watch(currentView, (newView) => {
                     if (newView === 'dashboard') {
                         setTimeout(renderChart, 300);
-                        fetchAdminStats();
+                        if (isAdmin.value) fetchAdminStats();
                     } else if (newView === 'admin_users') {
-                        fetchUsers();
+                        if (isAdmin.value) fetchUsers();
                     } else if (newView === 'admin_ai') {
-                        fetchAIStats();
+                        if (isAdmin.value) fetchAIStats();
                     } else if (newView === 'admin_moderation') {
-                        fetchModerationData();
+                        if (isSuperadmin.value) fetchModerationData();
                     } else if (newView === 'admin_logs') {
-                        fetchLogs();
+                        if (isSuperadmin.value) fetchLogs();
                     } else if (newView === 'transactions') {
                         fetchData();
                     }
+                });
+
+                watch(normalizedRole, () => {
+                    if (!canAccessView(currentView.value)) currentView.value = 'dashboard';
                 });
 
                 const toggleTheme = () => {
@@ -1782,10 +1725,6 @@
                         });
                     }
                 };
-
-                const storedTheme = localStorage.getItem('finbot_theme');
-                if (storedTheme === 'light') document.documentElement.classList.remove('dark');
-                if (storedTheme === 'dark') document.documentElement.classList.add('dark');
 
                 if (token.value) login();
 
