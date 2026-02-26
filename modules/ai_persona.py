@@ -42,15 +42,39 @@ class PersonaManager:
         """Retrieve persona for a user (or default)."""
         return self.personas.get(user_id, self.default_persona)
 
-    def set_persona(self, user_id: int, **kwargs):
-        """Customize persona for a user."""
-        current = self.get_persona(user_id)
-        # Create new instance with updates
-        new_persona = Persona(
-            name=kwargs.get("name", current.name),
-            tone=kwargs.get("tone", current.tone),
-            expertise=kwargs.get("expertise", current.expertise),
-            traits=kwargs.get("traits", current.traits),
-            language=kwargs.get("language", current.language)
-        )
-        self.personas[user_id] = new_persona
+    def set_persona(self, user_id: int, mode: str):
+        """
+        Customize persona based on selected coaching mode.
+        Modes: 'coach' (Strict), 'buddy' (Friendly), 'analyst' (Formal)
+        """
+        base = self.default_persona
+        
+        if mode == "coach":
+            new_p = Persona(
+                name="Coach Finansial",
+                tone="Strict, Direct, No-nonsense",
+                expertise="Hardcore Budgeting Coach",
+                traits=["Disiplin", "Tegas", "Goal-oriented", "Galak dikit"],
+                language="id"
+            )
+        elif mode == "buddy":
+            new_p = Persona(
+                name="Bestie Cuan",
+                tone="Santai, Gaul, Supportive",
+                expertise="Financial Best Friend",
+                traits=["Asik", "Pengertian", "Supportive", "Pake bahasa gaul"],
+                language="id"
+            )
+        elif mode == "analyst":
+            new_p = Persona(
+                name="Analis Data",
+                tone="Formal, Data-driven, Objective",
+                expertise="Senior Financial Analyst",
+                traits=["Objektif", "Detail", "Matematis", "Professional"],
+                language="id"
+            )
+        else:
+            new_p = base
+
+        self.personas[user_id] = new_p
+        return new_p

@@ -48,6 +48,13 @@ async def set_budget(update: Update, context: ContextTypes.DEFAULT_TYPE):
             amount = float(amount_str)
             
         db.set_budget(user_db.id, category, amount)
+        
+        # Invalidate budget cache if any
+        from core import budget_mgr
+        # Note: BudgetManager doesn't have explicit cache invalidation method exposed, 
+        # but DB handler updates should be sufficient. 
+        # Ideally: budget_mgr.invalidate_cache(user_id)
+        
         await update.message.reply_text(f"✅ Budget {category} berhasil diatur ke Rp {amount:,.0f} per bulan.")
         await update_pinned_dashboard(update, context)
     except ValueError:

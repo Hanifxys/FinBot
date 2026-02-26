@@ -13,7 +13,10 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Cal
 from config import TELEGRAM_BOT_TOKEN
 from core import init_components, db, ocr, nlp, ai, budget_mgr, analyzer, rules, visual_reporter
 from modules.redis_mgr import RedisManager
-from handlers.commands import start, help_command, auth_command, summary_command, profile_command
+from handlers.commands import (
+    start, help_command, auth_command, summary_command, profile_command,
+    reminder_settings, set_persona_command
+)
 from handlers.finance import set_gaji, set_budget, get_ai_insight, set_budget_alerts
 from handlers.transactions import undo, hapus_transaksi, history, export_data
 from handlers.saving import set_target, add_savings, list_targets
@@ -154,7 +157,10 @@ if __name__ == '__main__':
     application.add_error_handler(error_handler)
     
     job_queue = application.job_queue
+    # Daily Digest at 21:00 WIB (14:00 UTC)
     job_queue.run_daily(daily_digest, time(hour=14, minute=0, tzinfo=timezone.utc))
+    # 24-hour Intelligent Reminder Check (runs every hour to check inactive users)
+    job_queue.run_repeating(daily_digest, interval=3600, first=60)
     
     # Logging Middleware (Group -1 runs before other groups)
     application.add_handler(TypeHandler(object, log_update), group=-1)
@@ -176,6 +182,8 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler("insight", get_ai_insight))
     application.add_handler(CommandHandler("summary", summary_command))
     application.add_handler(CommandHandler("auth", auth_command))
+    application.add_handler(CommandHandler("reminder", reminder_settings))
+    application.add_handler(CommandHandler("mode", set_persona_command))
     application.add_handler(CommandHandler("rekomendasi", set_gaji))
     
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))

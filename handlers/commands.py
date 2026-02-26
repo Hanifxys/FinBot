@@ -53,6 +53,43 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(welcome_msg, parse_mode='Markdown', reply_markup=get_interactive_help_keyboard())
 
+async def reminder_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Toggle 24-hour reminders.
+    Usage: /reminder on OR /reminder off
+    """
+    user = update.effective_user
+    args = context.args
+    
+    if not args:
+        await update.message.reply_text("Gunakan `/reminder on` atau `/reminder off`", parse_mode='Markdown')
+        return
+
+    action = args[0].lower()
+    if action not in ["on", "off"]:
+        await update.message.reply_text("Gunakan `/reminder on` atau `/reminder off`", parse_mode='Markdown')
+        return
+        
+    try:
+        # Toggle preference in DB/Redis
+        # Ideally stored in user_settings table, but for now we can use Redis key
+        from core import db
+        # We need a way to store this. Let's use Redis for simplicity or DB if available.
+        # Assuming we can use RedisManager
+        from modules.redis_mgr import RedisManager
+        redis = RedisManager()
+        
+        key = f"user:{user.id}:reminder_enabled"
+        if action == "on":
+            redis.client.set(key, "1")
+            await update.message.reply_text("✅ Reminder harian diaktifkan! Saya akan ingatkan kalau kamu lupa mencatat. 🚀")
+        else:
+            redis.client.set(key, "0")
+            await update.message.reply_text("🔕 Reminder harian dimatikan. Jangan lupa catat sendiri ya! 😉")
+            
+    except Exception as e:
+        await update.message.reply_text(f"Gagal mengubah pengaturan: {e}")
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
         "🚀 **FINBOT PRO - INTERACTIVE COMMAND CENTER**\n\n"
@@ -121,6 +158,7 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     progress = profile.get("progress_percent", 0)
     streak = profile.get("streak", 0)
     badges = profile.get("badges", [])
+    health_score = profile.get("health_score", 0)
     
     badges_str = " ".join(badges) if badges else "Belum ada badge"
     
@@ -129,11 +167,15 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     filled_length = int(bar_length * progress // 100)
     bar = "█" * filled_length + "░" * (bar_length - filled_length)
     
+    # Health Score Indicator
+    health_icon = "🟢" if health_score >= 80 else "🟡" if health_score >= 50 else "🔴"
+    
     msg = (
         f"👤 **PROFIL PENGGUNA: {user.first_name}**\n\n"
         f"🏆 **Level {level}: {title}**\n"
         f"✨ XP: {xp} / {next_xp}\n"
         f"[{bar}] {progress}%\n\n"
+        f"🏥 **Financial Health:** {health_icon} {health_score}/100\n"
         f"🔥 **Daily Streak:** {streak} hari\n"
         f"🏅 **Badges:**\n{badges_str}\n\n"
         f"_Terus aktif mencatat keuangan untuk naik level!_ 🚀"
@@ -143,3 +185,31 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.message.reply_text(msg, parse_mode='Markdown')
     else:
         await update.message.reply_text(msg, parse_mode='Markdown')
+
+async def set_persona_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Switch AI Persona Mode.
+    Usage: /mode coach | buddy | analyst
+    """
+    args = context.args
+    if not args:
+        await update.message.reply_text(
+            "Pilih mode personalitas AI:\n"
+            "- `/mode coach`: Galak & Disiplin 😤\n"
+            "- `/mode buddy`: Santai & Bestie 🥰\n"
+            "- `/mode analyst`: Formal & Data 🧐",
+            parse_mode='Markdown'
+        )
+        return
+
+    mode = args[0].lower()
+    if mode not in ["coach", "buddy", "analyst"]:
+        await update.message.reply_text("Mode tidak valid. Pilih: coach, buddy, atau analyst.")
+        return
+        
+    user_id = update.effective_user.id
+    from core import premium_ai
+    
+    new_p = premium_ai.persona_mgr.set_persona(user_id, mode)
+    
+    await update.message.reply_text(f"✅ Mode ganti ke: **{new_p.name}**\n_{new_p.tone}_", parse_mode='Markdown')

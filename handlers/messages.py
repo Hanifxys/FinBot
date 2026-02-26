@@ -123,6 +123,11 @@ def _tutorial_step_message(step: int) -> str:
             "- `Makanan 1.5jt`\n"
             "- `Transportasi 300rb`\n"
         )
+            f"Pilih 1 kategori dan limitnya.\n\nKategori: {cats}\n\n"
+            "Contoh:\n"
+            "- `Makanan 1.5jt`\n"
+            "- `Transportasi 300rb`\n"
+        )
     if step == 4:
         bar = _tutorial_bar(3, TUTORIAL_TOTAL_STEPS)
         return (
@@ -603,6 +608,11 @@ async def _explain_spending(update: Update):
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
 
+def _is_budget_query(text: str) -> bool:
+    t = (text or "").lower()
+    keys = ["sisa budget", "cek budget", "anggaran", "kuota", "limit", "sisa uang"]
+    return any(k in t for k in keys)
+
 async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
     user_id = update.effective_user.id
     user_name = update.effective_user.first_name
@@ -617,6 +627,31 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
         return
 
     try:
+        # Pre-check for simple NLP intent before heavy AI call
+        simple_intent = nlp.classify_intent(text)
+        if simple_intent.get("intent") == "EXPORT_DATA":
+            await export_data(update, context)
+            return
+            
+        if simple_intent.get("intent") == "SET_MODE":
+            mode = simple_intent.get("value")
+            from handlers.commands import set_persona_command
+            context.args = [mode]
+            await set_persona_command(update, context)
+            return
+            
+        if simple_intent.get("intent") == "SET_REMINDER":
+            mode = simple_intent.get("value")
+            from handlers.commands import reminder_settings
+            context.args = [mode]
+            await reminder_settings(update, context)
+            return
+
+        if _is_budget_query(text):
+            msg = budget_mgr.check_budget_status(user_db.id)
+            await update.message.reply_text(msg, parse_mode='Markdown')
+            return
+
         state = context.user_data.get("state")
         pending_tx = context.user_data.get("pending_tx")
         if state and pending_tx:

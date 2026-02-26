@@ -168,28 +168,46 @@ class NLPProcessor:
                 return {"intent": "CANCEL", "confidence": 1.0}
             return {"intent": "EDIT_TRANSACTION", "confidence": 0.9}
 
-        # 1. Check for Transaction (Amount + Category)
+        # 1. Natural Language Settings
+        if any(kw in normalized_text for kw in ["mode", "ganti mode", "ubah mode"]):
+            if any(kw in normalized_text for kw in ["coach", "galak", "tegas"]):
+                return {"intent": "SET_MODE", "value": "coach", "confidence": 0.9}
+            if any(kw in normalized_text for kw in ["buddy", "santai", "teman"]):
+                return {"intent": "SET_MODE", "value": "buddy", "confidence": 0.9}
+            if any(kw in normalized_text for kw in ["analyst", "formal", "data"]):
+                return {"intent": "SET_MODE", "value": "analyst", "confidence": 0.9}
+                
+        if any(kw in normalized_text for kw in ["reminder", "ingatkan", "notif"]):
+            if "on" in normalized_text or "nyala" in normalized_text or "hidup" in normalized_text:
+                return {"intent": "SET_REMINDER", "value": "on", "confidence": 0.9}
+            if "off" in normalized_text or "mati" in normalized_text:
+                return {"intent": "SET_REMINDER", "value": "off", "confidence": 0.9}
+
+        if any(kw in normalized_text for kw in ["export", "ekspor", "download csv", "backup data"]):
+            return {"intent": "EXPORT_DATA", "confidence": 0.95}
+
+        # 2. Check for Transaction (Amount + Category)
         amount = self._extract_amount(normalized_text)
         if amount > 0:
             return {"intent": "ADD_TRANSACTION", "confidence": 0.95}
 
-        # 2. Check for Budget Query
+        # 3. Check for Budget Query
         if any(kw in normalized_text for kw in ["sisa", "budget", "anggaran", "limit", "kuota"]):
             return {"intent": "CHECK_BUDGET", "confidence": 0.9}
 
-        # 3. Check for Report/Summary
+        # 4. Check for Report/Summary
         if any(kw in normalized_text for kw in ["laporan", "report", "rekap", "summary", "statistik"]):
             return {"intent": "QUERY_SUMMARY", "confidence": 0.9}
 
-        # 4. Check for Help/Command List
+        # 5. Check for Help/Command List
         if any(kw in normalized_text for kw in ["help", "tolong", "bantuan", "perintah", "command", "bisa apa"]):
             return {"intent": "HELP", "confidence": 1.0}
 
-        # 5. Check for Greetings and Social Chat
+        # 6. Check for Greetings and Social Chat
         if any(re.search(rf'\b{re.escape(kw)}\b', normalized_text) for kw in ["halo", "hi", "hai", "p", "siang", "pagi", "malam", "u", "uii", "ui", "oey", "halo", "apa kabar", "gimana", "sehat", "baik"]):
             return {"intent": "GREETING", "confidence": 1.0}
 
-        # 6. LLM Fallback (Groq) for complex queries
+        # 7. LLM Fallback (Groq) for complex queries
         if self.groq_enabled:
             llm_intent = self._llm_classify_intent(text)
             # Only accept LLM intent if confidence is high, otherwise fallback to UNKNOWN

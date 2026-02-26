@@ -11,35 +11,56 @@ class BudgetManager:
     def __init__(self, db_handler):
         self.db = db_handler
 
-    def check_budget_status(self, user_id, category):
+    def check_budget_status(self, user_id, category=None):
         """
-        Returns a minimalist message about the budget status for a category.
-        Includes dual-threshold warnings (80% and 100%).
+        Returns a minimalist message about the budget status.
+        If category is provided, checks specific category.
+        If None, checks global budget (Income - Expenses).
         """
         now = datetime.now()
-        budgets = self.db.get_user_budgets(user_id)
         
-        target_budget = next((b for b in budgets if b.category == category), None)
-        
-        if not target_budget:
-            return "" # Silence if no budget set
+        if category:
+            # Category-specific check
+            budgets = self.db.get_user_budgets(user_id)
+            target_budget = next((b for b in budgets if b.category == category), None)
             
-        remaining = target_budget.limit_amount - target_budget.current_usage
-        percent = (target_budget.current_usage / target_budget.limit_amount) * 100
-        
-        msg = f"Sisa budget {category}: Rp {remaining:,.0f}"
-        
-        # Custom thresholds if available
-        warn_th = getattr(target_budget, 'warn_threshold', 0.8) * 100
-        limit_th = getattr(target_budget, 'limit_threshold', 1.0) * 100
-        
-        # Dual-threshold warnings
-        if percent >= limit_th:
-            msg = f"🔴 LIMIT! Budget {category} sudah 100% terpakai.\nSisa: Rp 0"
-        elif percent >= warn_th:
-            msg = f"⚠️ WARNING! Budget {category} sudah {percent:.0f}% terpakai.\nSisa: Rp {remaining:,.0f}"
+            if not target_budget:
+                return "" 
+                
+            remaining = target_budget.limit_amount - target_budget.current_usage
+            percent = (target_budget.current_usage / target_budget.limit_amount) * 100 if target_budget.limit_amount > 0 else 0
             
-        return msg
+            msg = f"Sisa budget {category}: Rp {remaining:,.0f}"
+            
+            warn_th = getattr(target_budget, 'warn_threshold', 0.8) * 100
+            limit_th = getattr(target_budget, 'limit_threshold', 1.0) * 100
+            
+            if percent >= limit_th:
+                msg = f"🔴 LIMIT! Budget {category} sudah 100% terpakai.\nSisa: Rp 0"
+            elif percent >= warn_th:
+                msg = f"⚠️ WARNING! Budget {category} sudah {percent:.0f}% terpakai.\nSisa: Rp {remaining:,.0f}"
+                
+            return msg
+        else:
+            # Global Budget Check (Income based)
+            # Fetch income for current month
+            # Note: We need a way to get monthly income from DB. Assuming get_monthly_income exists or sum income txs.
+            # For robustness, we calculate total income transactions this month.
+            txs = self.db.get_monthly_report(user_id, now.month, now.year)
+            if not txs:
+                return "Belum ada data keuangan bulan ini."
+                
+            total_income = sum(t.amount for t in txs if t.type == 'income')
+            total_expense = sum(t.amount for t in txs if t.type == 'expense')
+            
+            remaining = total_income - total_expense
+            
+            return (
+                f"💰 **Status Keuangan Bulan Ini**\n"
+                f"Pemasukan: Rp {total_income:,.0f}\n"
+                f"Pengeluaran: Rp {total_expense:,.0f}\n"
+                f"Sisa Uang: Rp {remaining:,.0f}"
+            )
 
     def generate_yearly_summary(self, user_id, year: int):
         transactions = self.db.get_yearly_report(user_id, year)

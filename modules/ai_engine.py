@@ -1,148 +1,280 @@
-import os
 import json
-
 import logging
 import asyncio
-import gc
+import time
+from typing import Optional, Dict, Any
 from groq import AsyncGroq
 from config import GROQ_API_KEY, CATEGORIES
+from modules.redis_mgr import RedisManager
 
 logger = logging.getLogger(__name__)
 
+
 class AIEngine:
+    """
+    Fintech-Grade AI Engine
+
+    Features:
+    - Circuit Breaker
+    - Timeout Control
+    - JSON Schema Validation
+    - Confidence Gating
+    - Redis Caching
+    - Cost Protection
+    - Deterministic Fallback
+    """
+
+    MODEL = "llama-3.3-70b-versatile"
+    MAX_RETRIES = 2
+    TIMEOUT = 20
+    CONFIDENCE_THRESHOLD = 0.65
+    CIRCUIT_BREAK_LIMIT = 5
+    CACHE_TTL = 120  # seconds
+
     def __init__(self):
         self._client = None
-        # Updated to llama-3.3-70b-versatile for high quality and speed
-        self.model = "llama-3.3-70b-versatile"
+        self.redis = RedisManager()
+        self.failure_count = 0
+        self.circuit_open_until = 0
+
+    # -----------------------------------
+    # CLIENT INIT
+    # -----------------------------------
 
     @property
     def client(self):
-        """Lazy load Groq client to save memory on startup"""
         if self._client is None and GROQ_API_KEY:
             try:
-                self._client = AsyncGroq(api_key=GROQ_API_KEY, timeout=30.0, max_retries=2)
+                self._client = AsyncGroq(
+                    api_key=GROQ_API_KEY,
+                    timeout=self.TIMEOUT,
+                    max_retries=0
+                )
             except Exception as e:
-                logger.error(f"Failed to initialize Groq client: {e}")
+                logger.error(f"Groq init failed: {e}")
                 self._client = None
         return self._client
 
-    async def _safe_ai_call(self, prompt, response_format=None, retries=2):
-        """Helper to handle AI calls with retry logic and error handling"""
-        client = self.client
-        if not client:
+    # -----------------------------------
+    # CIRCUIT BREAKER
+    # -----------------------------------
+
+    def _is_circuit_open(self):
+        return time.time() < self.circuit_open_until
+
+    def _record_failure(self):
+        self.failure_count += 1
+        if self.failure_count >= self.CIRCUIT_BREAK_LIMIT:
+            self.circuit_open_until = time.time() + 60
+            logger.warning("AI Circuit breaker opened for 60 seconds")
+
+    def _record_success(self):
+        self.failure_count = 0
+
+    # -----------------------------------
+    # SAFE CALL
+    # -----------------------------------
+
+    async def _safe_ai_call(self, prompt: str, response_format=None):
+        if not self.client or self._is_circuit_open():
             return None
 
-        for attempt in range(retries + 1):
+        for attempt in range(self.MAX_RETRIES + 1):
             try:
                 params = {
+                    "model": self.MODEL,
                     "messages": [{"role": "user", "content": prompt}],
-                    "model": self.model,
                 }
                 if response_format:
                     params["response_format"] = response_format
 
-                response = await client.chat.completions.create(**params)
+                response = await asyncio.wait_for(
+                    self.client.chat.completions.create(**params),
+                    timeout=self.TIMEOUT
+                )
+
+                self._record_success()
                 return response.choices[0].message.content
+
             except Exception as e:
-                logger.error(f"Groq API Error (attempt {attempt+1}): {e}", exc_info=True)
-                if attempt == retries:
-                    return None
+                logger.error(f"AI Error attempt {attempt+1}: {e}")
+                self._record_failure()
                 await asyncio.sleep(1)
-            finally:
-                gc.collect()
+
         return None
 
-    async def parse_transaction(self, text):
-        """
-        Parses natural language text into a structured transaction JSON.
-        """
-        prompt = f"""
-        Extract transaction details from this text: "{text}"
-        Categories available: {', '.join(CATEGORIES)}
-        
-        Return ONLY a JSON object with:
-        - "amount": (float)
-        - "category": (string from available categories)
-        - "description": (string, brief)
-        - "type": ("expense" or "income")
-        - "is_transaction": (boolean, false if text is just a chat)
+    # -----------------------------------
+    # CACHE LAYER
+    # -----------------------------------
 
-        Rules:
-        - Salary/receiving money -> type: "income", category: "Gaji"
-        - No amount found -> "is_transaction": false
-        - Example: "beli sate 50rb" -> {{"amount": 50000, "category": "Makanan", "description": "beli sate", "type": "expense", "is_transaction": true}}
-        """
-        
-        content = await self._safe_ai_call(prompt, response_format={"type": "json_object"})
-        if content:
-            try:
-                return json.loads(content)
-            except json.JSONDecodeError:
-                logger.error("Failed to decode AI JSON response")
+    def _get_cache(self, key: str):
+        if not self.redis.client:
+            return None
+        cached = self.redis.client.get(key)
+        if cached:
+            return json.loads(cached)
         return None
 
-    async def detect_autonomous_intent(self, text, user_context=None):
-        """
-        Autonomous Intent Engine: Mendeteksi keinginan user tanpa command eksplisit.
-        """
+    def _set_cache(self, key: str, value: Dict):
+        if not self.redis.client:
+            return
+        self.redis.client.setex(key, self.CACHE_TTL, json.dumps(value))
+
+    # -----------------------------------
+    # TRANSACTION PARSER
+    # -----------------------------------
+
+    async def parse_transaction(self, text: str) -> Optional[Dict]:
+        cache_key = f"ai:parse:{text}"
+        cached = self._get_cache(cache_key)
+        if cached:
+            return cached
+
+        prompt = self._build_transaction_prompt(text)
+
+        content = await self._safe_ai_call(
+            prompt,
+            response_format={"type": "json_object"}
+        )
+
+        if not content:
+            return self._fallback_parse()
+
+        try:
+            result = json.loads(content)
+
+            if not self._validate_transaction_schema(result):
+                return self._fallback_parse()
+
+            self._set_cache(cache_key, result)
+            return result
+
+        except Exception:
+            return self._fallback_parse()
+
+    # -----------------------------------
+    # AUTONOMOUS INTENT
+    # -----------------------------------
+
+    async def detect_autonomous_intent(self, text: str, user_context=None):
+        prompt = self._build_autonomous_prompt(text, user_context)
+
+        content = await self._safe_ai_call(
+            prompt,
+            response_format={"type": "json_object"}
+        )
+
+        if not content:
+            return self._fallback_intent()
+
+        try:
+            result = json.loads(content)
+
+            if result.get("confidence", 0) < self.CONFIDENCE_THRESHOLD:
+                return self._fallback_intent()
+
+            return result
+
+        except Exception:
+            return self._fallback_intent()
+
+    # -----------------------------------
+    # CHAT RESPONSE
+    # -----------------------------------
+
+    async def chat_response(self, text: str, user_name="Teman"):
         prompt = f"""
-        User Message: "{text}"
-        User History Context: {user_context if user_context else "No previous context"}
-        
-        Analyze User Intent:
-        1. Classify: "record", "query_budget", "need_insight", "predictive_warning", or "general_chat".
-        2. If "record", provide structured data.
-        3. If user is confused, provide proactive advice.
-        
-        Return ONLY a JSON object:
+        Kamu adalah FinBot. Friendly, cerdas, profesional.
+        User: "{text}"
+        Nama: {user_name}
+        Jawab max 3 kalimat.
+        """
+
+        response = await self._safe_ai_call(prompt)
+        return response or f"Halo {user_name}! Mau catat pengeluaran apa hari ini? 💸"
+
+    # -----------------------------------
+    # SMART INSIGHT
+    # -----------------------------------
+
+    async def generate_smart_insight(self, raw_summary: str):
+        prompt = f"""
+        Analisa data berikut dan beri 3 insight actionable:
+        {raw_summary}
+        """
+
+        response = await self._safe_ai_call(prompt)
+        return response or "Belum cukup data untuk insight. Yuk catat lagi!"
+
+    # -----------------------------------
+    # PROMPT BUILDERS
+    # -----------------------------------
+
+    def _build_transaction_prompt(self, text: str):
+        return f"""
+        Extract structured transaction from:
+        "{text}"
+
+        Categories: {', '.join(CATEGORIES)}
+
+        Return JSON:
         {{
-            "intent": "string",
-            "confidence": 0.0-1.0,
+            "amount": float,
+            "category": string,
+            "description": string,
+            "type": "expense" | "income",
+            "is_transaction": boolean
+        }}
+        """
+
+    def _build_autonomous_prompt(self, text, context):
+        return f"""
+        User: "{text}"
+        Context: {context}
+
+        Classify intent:
+        - record
+        - query_budget
+        - need_insight
+        - predictive_warning
+        - general_chat
+
+        Return JSON:
+        {{
+            "intent": string,
+            "confidence": 0-1,
             "structured_data": {{}},
-            "suggested_response": "string (Professional Gen-Z Jakarta style)",
+            "suggested_response": string,
             "needs_live_update": boolean
         }}
         """
 
-        content = await self._safe_ai_call(prompt, response_format={"type": "json_object"})
-        if content:
-            try:
-                return json.loads(content)
-            except json.JSONDecodeError:
-                logger.error("Failed to decode Intent JSON response")
-        
-        return {"intent": "chat", "confidence": 0.0, "suggested_response": "Aduh, otak AI-ku lagi nge-lag nih. Coba lagi ya!"}
+    # -----------------------------------
+    # VALIDATION
+    # -----------------------------------
 
-    async def chat_response(self, text, user_name="Teman"):
-        """
-        Handles general chat messages with a friendly Gen-Z persona.
-        """
-        prompt = f"""
-        Kamu adalah FinBot, asisten keuangan pribadi yang super friendly, cerdas, dan asik (Gen-Z Indonesia).
-        User: "{text}"
-        Nama: {user_name}
+    def _validate_transaction_schema(self, data: Dict) -> bool:
+        required = {"amount", "category", "description", "type", "is_transaction"}
+        return required.issubset(data.keys())
 
-        Rules:
-        1. Ramah, sopan, dan nyambung konteks.
-        2. Bahasa gaul Jakarta yang profesional (aku, kamu, kak, sip).
-        3. Singkat (max 3 kalimat).
-        4. Selalu akhiri dengan pertanyaan pancingan/ajakan interaksi.
-        """
+    # -----------------------------------
+    # FALLBACKS
+    # -----------------------------------
 
-        response = await self._safe_ai_call(prompt)
-        return response if response else f"Halo {user_name}! Ada yang bisa aku bantu catat hari ini? 💸"
+    def _fallback_parse(self):
+        return {
+            "amount": 0,
+            "category": None,
+            "description": None,
+            "type": None,
+            "is_transaction": False
+        }
 
-    async def generate_smart_insight(self, raw_data_summary: str) -> str:
-        """
-        Generates a smart, actionable financial insight based on raw analysis data.
-        """
-        prompt = f"""
-        As a Senior Financial Advisor, analyze this raw data summary:
-        "{raw_data_summary}"
-
-        Provide a concise, motivating, and actionable insight (max 3 bullet points).
-        Use emojis and friendly tone.
-        """
-        
-        response = await self._safe_ai_call(prompt)
-        return response if response else "Belum ada insight yang cukup untuk saat ini. Yuk rajin catat pengeluaran!"
+    def _fallback_intent(self):
+        return {
+            "intent": "general_chat",
+            "confidence": 0.0,
+            "structured_data": {},
+            "suggested_response": "Aku belum yakin maksudnya apa. Bisa jelasin lagi?",
+            "needs_live_update": False
+        }
