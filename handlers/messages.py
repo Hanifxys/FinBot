@@ -5,12 +5,14 @@ import logging
 import asyncio
 from datetime import datetime
 import os
+import gc
 
 logger = logging.getLogger(__name__)
 
 OCR_MAX_DOWNLOAD_BYTES = int(os.getenv("OCR_MAX_DOWNLOAD_BYTES", "1200000"))
 OCR_CONCURRENCY = int(os.getenv("OCR_CONCURRENCY", "1"))
 OCR_SEMAPHORE = asyncio.Semaphore(max(OCR_CONCURRENCY, 1))
+OCR_MAX_MEMORY_PERCENT = float(os.getenv("OCR_MAX_MEMORY_PERCENT", "80"))
 
 def get_main_menu_keyboard():
     return ReplyKeyboardMarkup([
@@ -50,6 +52,17 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not photo_sizes:
         await update.message.reply_text("Aku nggak nemu foto-nya. Coba kirim ulang ya.")
         return
+
+    try:
+        import psutil
+        mem = psutil.virtual_memory()
+        if float(mem.percent) >= OCR_MAX_MEMORY_PERCENT:
+            await update.message.reply_text(
+                "Server lagi penuh (memori tinggi). Coba kirim ulang 1-2 menit lagi, atau kirim foto yang lebih kecil ya."
+            )
+            return
+    except Exception:
+        pass
 
     chosen = None
     for p in reversed(photo_sizes):
@@ -96,6 +109,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         if os.path.exists(photo_path):
             os.remove(photo_path)
+        gc.collect()
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id

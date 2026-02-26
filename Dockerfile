@@ -33,6 +33,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /root/.local /root/.local
 ENV PATH=/root/.local/bin:$PATH
 
+ENV OMP_NUM_THREADS=1
+ENV MKL_NUM_THREADS=1
+ENV OPENBLAS_NUM_THREADS=1
+ENV NUMEXPR_NUM_THREADS=1
+ENV VECLIB_MAXIMUM_THREADS=1
+
 # Pre-download EasyOCR models (id and en) with retry logic
 # This makes the image larger but startup MUCH faster
 RUN python -c "import easyocr, time; code = 'success = False\nfor i in range(5):\n    try:\n        easyocr.Reader([\\'id\\', \\'en\\'], gpu=False)\n        print(\\'Download success\\')\n        success = True\n        break\n    except Exception as e:\n        print(f\\'Attempt {i+1} failed: {e}\\')\n        time.sleep(5)\nif not success:\n    print(\\'Failed to download models after 5 attempts\\')\n    raise SystemExit(1)\n'; exec(code)"
