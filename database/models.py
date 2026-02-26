@@ -12,9 +12,15 @@ supabase: Client = None
 def get_supabase():
     global supabase
     if supabase is None:
-        if not SUPABASE_URL or not SUPABASE_KEY:
-            raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set in .env")
-        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        # Re-import and re-load just in case of race conditions during startup
+        from config import SUPABASE_URL, SUPABASE_KEY
+        
+        url = SUPABASE_URL or os.environ.get("SUPABASE_URL")
+        key = SUPABASE_KEY or os.environ.get("SUPABASE_KEY")
+        
+        if not url or not key:
+            raise ValueError(f"SUPABASE_URL or SUPABASE_KEY is missing. URL found: {bool(url)}, Key found: {bool(key)}")
+        supabase = create_client(url, key)
     return supabase
 
 def init_db():
