@@ -2,6 +2,7 @@ import re
 import logging
 import gc
 from config import GROQ_API_KEY
+from modules.amounts import parse_primary_amount_id
 
 class NLPProcessor:
     def __init__(self):
@@ -300,25 +301,13 @@ class NLPProcessor:
         return "Lain-lain"
 
     def _extract_amount(self, text):
-        """Smarter amount extraction supporting 'rb', 'jt', and common formats"""
-        text = text.lower().replace(",", "")
-        
-        # Handle 'rb' (thousands) and 'jt' (millions)
-        rb_match = re.search(r'(\d+(?:\.\d+)?)\s*rb', text)
-        if rb_match:
-            return float(rb_match.group(1)) * 1000
-            
-        jt_match = re.search(r'(\d+(?:\.\d+)?)\s*jt', text)
-        if jt_match:
-            return float(jt_match.group(1)) * 1000000
-            
-        # Regular number extraction
-        numbers = re.findall(r'\d+', text)
-        if numbers:
-            # Pick the largest number as amount (common in simple texts like "makan 50000")
-            return float(max([int(n) for n in numbers]))
-            
-        return 0.0
+        val = parse_primary_amount_id(text)
+        if val is None:
+            return 0.0
+        try:
+            return float(val)
+        except Exception:
+            return 0.0
 
     def extract_merchant(self, text):
         """

@@ -5,6 +5,7 @@ from utils.dashboard import update_pinned_dashboard
 import os
 from datetime import datetime
 import logging
+from database.models import Tables
 
 async def undo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -63,16 +64,38 @@ async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_db = db.get_user(user_id)
     if not user_db: return
 
+    msg = update.effective_message or (update.callback_query.message if update.callback_query else None)
+    if not msg:
+        return
+
     filename = f"export_transaksi_{user_id}_{datetime.now().strftime('%Y%m%d')}.csv"
-    filepath = os.path.join(os.getcwd(), filename)
     
     try:
-        result = db.export_transactions_to_csv(user_db.id, filepath)
-        if result:
-            with open(filepath, 'rb') as f:
-                await update.message.reply_document(document=f, filename=filename, caption="📊 Ini data transaksi kamu dalam format CSV.")
-            os.remove(filepath)
+        import io
+        import pandas as pd
+
+        response = db.supabase.table(Tables.TRANSACTIONS).select("*").eq("user_id", user_db.id).order("date", desc=True).execute()
+        if response.data:
+            def parse_date(date_str):
+                try:
+                    return datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                except:
+                    return date_str
+
+            df = pd.DataFrame([{
+                'Tanggal': (lambda d: d.strftime('%Y-%m-%d %H:%M') if isinstance(d, datetime) else str(d))(parse_date(tx['date'])),
+                'Tipe': 'Pengeluaran' if tx['type'] == 'expense' else 'Pemasukan',
+                'Kategori': tx['category'],
+                'Nominal': f"Rp{tx['amount']:,.0f}",
+                'Catatan': (db.crypto.decrypt(tx['description']) if tx.get('description') else '-') 
+            } for tx in response.data])
+
+            buf = io.StringIO()
+            df.to_csv(buf, index=False)
+            bio = io.BytesIO(buf.getvalue().encode("utf-8"))
+            bio.name = filename
+            await msg.reply_document(document=bio, filename=filename, caption="📊 Ini data transaksi kamu dalam format CSV.")
         else:
-            await update.message.reply_text("Belum ada data transaksi untuk diekspor. Yuk mulai catat! 📝")
+            await msg.reply_text("Belum ada data transaksi untuk diekspor. Yuk mulai catat! 📝")
     except Exception as e:
-        await update.message.reply_text(f"Gagal mengekspor data: {e}")
+        await msg.reply_text(f"Gagal mengekspor data: {e}")

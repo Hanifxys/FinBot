@@ -10,6 +10,7 @@ import time
 import json
 from config import CATEGORIES
 from handlers import tutorial_mode
+from modules.amounts import parse_primary_amount_id
 
 logger = logging.getLogger(__name__)
 
@@ -384,25 +385,7 @@ def _format_tx(tx) -> str:
     return f"{icon} `#{tx.id}` | {date_str} | {tx.category} | **Rp{tx.amount:,.0f}**\n_{desc}_"
 
 def _parse_amount_hint(text: str):
-    import re
-    t = (text or "").lower()
-    t = t.replace("rp", "").replace(" ", "")
-    m = re.search(r"(\d+(?:[.,]\d+)?)\s*(rb|ribu|k|jt|juta)?", t)
-    if not m:
-        return None
-    raw = m.group(1).replace(".", "").replace(",", ".")
-    try:
-        val = float(raw)
-    except Exception:
-        return None
-    suf = m.group(2) or ""
-    if suf in ("rb", "ribu", "k"):
-        val *= 1000
-    elif suf in ("jt", "juta"):
-        val *= 1000000
-    if val <= 0:
-        return None
-    return float(val)
+    return parse_primary_amount_id(text)
 
 def _score_cancel_candidate(tx, amount_hint=None, merchant_hint=None, text_hint=None):
     score = 0.0
@@ -646,6 +629,10 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
         if intent == "record" and premium_response.structured_data:
             data = premium_response.structured_data
             amount = data.get("amount", 0)
+            try:
+                amount = float(amount) if amount is not None else 0.0
+            except Exception:
+                amount = 0.0
             
             if amount <= 0:
                 logger.warning(f"Skipping transaction with amount {amount} for user {user_id}")

@@ -10,28 +10,29 @@ from telegram.ext import ContextTypes
 
 from config import CATEGORIES
 from core import db, budget_mgr, premium_ai
+from modules.amounts import parse_primary_amount_id
 
 TUTORIAL_STEPS = [
-    {"id": "tx1", "requires_input": True, "card": "🎓 1/20 ▱▱▱▱▱\nKetik transaksi: `kopi 25rb`"},
-    {"id": "inc1", "requires_input": True, "card": "🎓 2/20 ▰▱▱▱▱\nKetik pemasukan: `gaji 7jt`"},
-    {"id": "bud1", "requires_input": True, "card": "🎓 3/20 ▰▰▱▱▱\nSet budget: `Makanan 1jt`"},
-    {"id": "bud2", "requires_input": True, "card": "🎓 4/20 ▰▰▰▱▱\nSet budget lagi: `Transportasi 300rb`"},
-    {"id": "budget", "requires_input": False, "card": "🎓 5/20 ▰▰▰▰▱\nKlik Lanjut untuk cek budget"},
-    {"id": "report", "requires_input": False, "card": "🎓 6/20 ▰▰▰▰▱\nKlik Lanjut untuk laporan"},
-    {"id": "insight", "requires_input": False, "card": "🎓 7/20 ▰▰▰▰▱\nKlik Lanjut untuk AI tips"},
-    {"id": "history", "requires_input": False, "card": "🎓 8/20 ▰▰▰▰▱\nKlik Lanjut untuk riwayat"},
-    {"id": "export", "requires_input": False, "card": "🎓 9/20 ▰▰▰▰▱\nKlik Lanjut untuk export CSV"},
-    {"id": "scan_tip", "requires_input": False, "card": "🎓 10/20 ▰▰▰▰▱\nTips: foto bagian TOTAL"},
-    {"id": "cancel", "requires_input": True, "card": "🎓 11/20 ▰▰▰▰▱\nKetik: `batal transaksi terakhir`"},
-    {"id": "cat_tip", "requires_input": False, "card": "🎓 12/20 ▰▰▰▰▱\nTip: singkat + nominal"},
-    {"id": "dup_tip", "requires_input": False, "card": "🎓 13/20 ▰▰▰▰▱\nKalau dobel, bot ngingetin"},
-    {"id": "budget_tip", "requires_input": False, "card": "🎓 14/20 ▰▰▰▰▱\nSet budget biar kebaca"},
-    {"id": "undo_tip", "requires_input": False, "card": "🎓 15/20 ▰▰▰▰▱\nBisa `hapus #ID` juga"},
-    {"id": "profile", "requires_input": False, "card": "🎓 16/20 ▰▰▰▰▱\nKlik Lanjut untuk profil"},
-    {"id": "settings", "requires_input": False, "card": "🎓 17/20 ▰▰▰▰▱\nKlik Lanjut untuk settings"},
-    {"id": "shortcut", "requires_input": False, "card": "🎓 18/20 ▰▰▰▰▱\nShortcut: ketik tanpa menu"},
-    {"id": "wrap", "requires_input": False, "card": "🎓 19/20 ▰▰▰▰▱\nKlik Lanjut untuk selesai"},
-    {"id": "done", "requires_input": False, "card": "🎓 20/20 ▰▰▰▰▰\nSelesai ✅"},
+    {"id": "tx1", "requires_input": True, "prompt": "Ketik transaksi: `kopi 25rb`"},
+    {"id": "inc1", "requires_input": True, "prompt": "Ketik pemasukan: `gaji 7jt`"},
+    {"id": "bud1", "requires_input": True, "prompt": "Set budget: `Makanan 1jt`"},
+    {"id": "bud2", "requires_input": True, "prompt": "Set budget lagi: `Transportasi 300rb`"},
+    {"id": "budget", "requires_input": False, "prompt": "Cek budget ringkas"},
+    {"id": "report", "requires_input": False, "prompt": "Lihat laporan ringkas"},
+    {"id": "insight", "requires_input": False, "prompt": "AI tips (biar hemat)"},
+    {"id": "history", "requires_input": False, "prompt": "Lihat riwayat (ID)"},
+    {"id": "export", "requires_input": False, "prompt": "Export CSV (opsional)"},
+    {"id": "scan_tip", "requires_input": False, "prompt": "Tip OCR: fokus bagian TOTAL"},
+    {"id": "cancel", "requires_input": True, "prompt": "Latihan: `batal transaksi terakhir`"},
+    {"id": "cat_tip", "requires_input": False, "prompt": "Tip: singkat + nominal"},
+    {"id": "dup_tip", "requires_input": False, "prompt": "Kalau dobel, bot ngingetin"},
+    {"id": "budget_tip", "requires_input": False, "prompt": "Budget bikin kontrol rapih"},
+    {"id": "undo_tip", "requires_input": False, "prompt": "Bisa juga: `hapus #ID`"},
+    {"id": "profile", "requires_input": False, "prompt": "Cek profil & rank"},
+    {"id": "settings", "requires_input": False, "prompt": "Cek settings"},
+    {"id": "shortcut", "requires_input": False, "prompt": "Shortcut: ketik tanpa menu"},
+    {"id": "wrap", "requires_input": False, "prompt": "Wrap-up tutorial"},
+    {"id": "done", "requires_input": False, "prompt": "Selesai ✅"},
 ]
 
 AI_TIMEOUT_SECONDS = float(os.getenv("AI_TIMEOUT_SECONDS", "25"))
@@ -61,23 +62,60 @@ def _log(user_id: int, event: str, payload: dict):
     except Exception:
         pass
 
-async def _send_card(message, context: ContextTypes.DEFAULT_TYPE, text: str, keyboard: InlineKeyboardMarkup):
+def _pick(user_id: int, idx: int, items):
+    if not items:
+        return ""
     try:
-        await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
-        await asyncio.sleep(TUTORIAL_TYPING_SECONDS)
+        return items[(int(user_id) + int(idx)) % len(items)]
     except Exception:
-        pass
-    await message.reply_text(text, parse_mode="Markdown", reply_markup=keyboard)
-    try:
-        await asyncio.sleep(TUTORIAL_TRANSITION_SECONDS)
-    except Exception:
-        pass
+        return items[0]
 
-def _kb():
+def _progress_line(idx: int, total: int) -> str:
+    pos = max(1, min(idx + 1, total))
+    blocks = 5
+    filled = int(round((pos / max(1, total)) * blocks))
+    filled = max(0, min(filled, blocks))
+    bar = "▰" * filled + "▱" * (blocks - filled)
+    return f"🎓 {pos}/{total} {bar}"
+
+def _render_card(user_id: int, idx: int, step: dict, state: dict) -> str:
+    total = len(TUTORIAL_STEPS)
+    vibe = _pick(
+        user_id,
+        idx,
+        ["Gas tipis", "Oke, fokus", "Nice", "Mantap", "Yuk lanjut", "Sip"],
+    )
+    prompt = step.get("prompt") or ""
+    if step.get("requires_input"):
+        second = prompt
+    else:
+        second = f"{vibe}: auto lanjut…"
+        if prompt:
+            second = f"{prompt} — auto lanjut…"
+    line1 = _progress_line(idx, total)
+    line2 = second
+    if "\n" in line2:
+        line2 = line2.split("\n", 1)[0]
+    return f"{line1}\n{line2}"
+
+def _keyboard_for(step: dict) -> InlineKeyboardMarkup:
+    if step.get("id") == "done":
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("🚀 Menu Utama", callback_data="suggest_help")],
+        ])
+    if step.get("requires_input"):
+        return InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🔁 Ulangi", callback_data="tut_repeat"),
+                InlineKeyboardButton("⏭️ Lewati", callback_data="tut_skip"),
+            ],
+            [
+                InlineKeyboardButton("🆘 Help", callback_data="tut_help"),
+                InlineKeyboardButton("🚪 Keluar", callback_data="tut_exit"),
+            ],
+        ])
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("➡️ Lanjut", callback_data="tut_next"),
-            InlineKeyboardButton("🔁 Ulangi", callback_data="tut_repeat"),
             InlineKeyboardButton("⏭️ Lewati", callback_data="tut_skip"),
         ],
         [
@@ -86,8 +124,35 @@ def _kb():
         ],
     ])
 
+async def _typing(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    try:
+        await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        await asyncio.sleep(TUTORIAL_TYPING_SECONDS)
+    except Exception:
+        return
+
+async def _upsert(context: ContextTypes.DEFAULT_TYPE, state: dict, chat_id: int, text: str, keyboard: InlineKeyboardMarkup):
+    msg_id = state.get("msg_id")
+    if msg_id:
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=int(msg_id),
+                text=text,
+                parse_mode="Markdown",
+                reply_markup=keyboard,
+            )
+            return
+        except Exception:
+            state["msg_id"] = None
+    try:
+        sent = await context.bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown", reply_markup=keyboard)
+        state["msg_id"] = getattr(sent, "message_id", None)
+    except Exception:
+        return
+
 def intro_text() -> str:
-    return "🎓 Tutorial Mode\nPilih: Pemula / Cepat"
+    return "🎓 Tutorial Mode\nPilih gaya: **Pemula** / **Cepat**"
 
 def intro_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
@@ -107,16 +172,28 @@ def _current_step(state: dict):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE, mode: str):
     user_id = update.effective_user.id
-    context.user_data["tutorial_mode"] = {
+    st = {
         "active": True,
         "idx": 0,
         "mode": mode,
         "last_ts": time.time(),
         "errors": 0,
+        "chat_id": update.effective_chat.id if update.effective_chat else None,
+        "msg_id": None,
     }
+    if update.callback_query and update.callback_query.message:
+        st["chat_id"] = update.callback_query.message.chat_id
+        st["msg_id"] = update.callback_query.message.message_id
+    context.user_data["tutorial_mode"] = st
     _log(user_id, "started", {"mode": mode})
-    idx, step = _current_step(context.user_data["tutorial_mode"])
-    await _send_card(update.callback_query.message, context, step["card"], _kb())
+    idx, step = _current_step(st)
+    chat_id = int(st.get("chat_id") or update.effective_chat.id)
+    await _typing(context, chat_id)
+    await _upsert(context, st, chat_id, _render_card(user_id, idx, step, st), _keyboard_for(step))
+    try:
+        await asyncio.sleep(TUTORIAL_TRANSITION_SECONDS)
+    except Exception:
+        pass
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, action: str) -> bool:
     if action == "tutorial_quickstart":
@@ -134,24 +211,28 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, ac
         return True
 
     if not st:
-        await query.message.reply_text("Tutorial belum aktif. Ketik `tutorial`.", parse_mode="Markdown")
+        await query.message.reply_text("Tutorial belum aktif.\nKetik `tutorial`", parse_mode="Markdown")
         return True
 
     st["last_ts"] = time.time()
     idx, step = _current_step(st)
+    chat_id = int(st.get("chat_id") or (query.message.chat_id if query and query.message else update.effective_chat.id))
 
     if action == "tut_exit":
         context.user_data.pop("tutorial_mode", None)
         _log(user_id, "exited", {"idx": idx})
-        await query.message.reply_text("Tutorial dihentikan. Ketik `tutorial` kalau mau lanjut lagi.")
+        await _typing(context, chat_id)
+        await query.message.reply_text("Tutorial dihentikan.\nKetik `tutorial` lagi.", parse_mode="Markdown")
         return True
 
     if action == "tut_help":
-        await _send_card(query.message, context, "🆘 Help\nContoh: `kopi 25rb`", _kb())
+        await _typing(context, chat_id)
+        await _upsert(context, st, chat_id, "🆘 Help\nContoh: `kopi 25rb`", _keyboard_for(step))
         return True
 
     if action == "tut_repeat":
-        await _send_card(query.message, context, step["card"], _kb())
+        await _typing(context, chat_id)
+        await _upsert(context, st, chat_id, _render_card(user_id, idx, step, st), _keyboard_for(step))
         _log(user_id, "repeat", {"idx": idx})
         return True
 
@@ -160,25 +241,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, ac
         context.user_data["tutorial_mode"] = st
         _log(user_id, "skip", {"from": idx, "to": st["idx"]})
         idx2, step2 = _current_step(st)
-        await _send_card(query.message, context, step2["card"], _kb())
+        await _typing(context, chat_id)
+        await _upsert(context, st, chat_id, _render_card(user_id, idx2, step2, st), _keyboard_for(step2))
+        await _autoplay(update, context, st)
         return True
 
     if action == "tut_next":
-        if step.get("requires_input"):
-            await _send_card(query.message, context, "⛔ Jawab dulu ya\nLalu klik Lanjut", _kb())
-            return True
-
-        await _run_step_side_effect(query.message, context, step.get("id"))
-        st["idx"] = min(idx + 1, len(TUTORIAL_STEPS) - 1)
-        context.user_data["tutorial_mode"] = st
-        _log(user_id, "next", {"from": idx, "to": st["idx"]})
-
-        idx2, step2 = _current_step(st)
-        await _send_card(query.message, context, step2["card"], _kb())
-
-        if step2.get("id") == "done":
-            context.user_data.pop("tutorial_mode", None)
-            _log(user_id, "completed", {})
+        await _typing(context, chat_id)
+        await _upsert(context, st, chat_id, "✅ Oke\nSekarang auto lanjut…", _keyboard_for(step))
+        await _autoplay(update, context, st)
         return True
 
     return True
@@ -190,24 +261,22 @@ async def _run_step_side_effect(message, context: ContextTypes.DEFAULT_TYPE, ste
         if step_id == "budget":
             status = budget_mgr.check_budget_status(user_db.id, "Semua")
             if status:
-                await _send_card(message, context, "📊 Budget\nCek ringkas di atas", _kb())
                 await message.reply_text(status)
         elif step_id == "report":
             msg = budget_mgr.generate_report(user_db.id, "monthly")
-            await _send_card(message, context, "📈 Laporan\nBulan ini (ringkas)", _kb())
             await message.reply_text(msg)
         elif step_id == "insight":
-            await _send_card(message, context, "🧠 AI Tips\nKlik AI Insights menu", _kb())
+            await message.reply_text("🧠 AI tips tersedia di menu.\nKlik **AI Insights**", parse_mode="Markdown")
         elif step_id == "history":
             from handlers.transactions import history
             fake_update = Update(update_id=0, message=message)
             await history(fake_update, context)
         elif step_id == "export":
-            await _send_card(message, context, "📥 Export\nPakai /export", _kb())
+            await message.reply_text("📥 Export: pakai `/export`", parse_mode="Markdown")
         elif step_id == "profile":
-            await _send_card(message, context, "👤 Profil\nKlik menu Profil", _kb())
+            await message.reply_text("👤 Profil: klik menu Profil", parse_mode="Markdown")
         elif step_id == "settings":
-            await _send_card(message, context, "⚙️ Settings\nKlik menu Settings", _kb())
+            await message.reply_text("⚙️ Settings: klik menu Settings", parse_mode="Markdown")
     except Exception:
         pass
 
@@ -221,14 +290,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: 
     if last_ts and (time.time() - last_ts) > TUTORIAL_TIMEOUT_SECONDS:
         _log(user_id, "timeout", {"idx": int(st.get("idx") or 0)})
         context.user_data.pop("tutorial_mode", None)
-        await update.message.reply_text("Tutorial timeout.\nKetik `tutorial` untuk mulai lagi.", parse_mode="Markdown")
+        await update.message.reply_text("Tutorial timeout.\nKetik `tutorial` lagi.", parse_mode="Markdown")
         return True
 
     st["last_ts"] = time.time()
     idx, step = _current_step(st)
+    chat_id = int(st.get("chat_id") or update.effective_chat.id)
 
     if not step.get("requires_input"):
-        await _send_card(update.message, context, "➡️ Klik Lanjut\nPakai tombol ya", _kb())
+        await _typing(context, chat_id)
+        await _upsert(context, st, chat_id, "⏳ Tunggu ya\nLagi lanjut…", _keyboard_for(step))
+        await _autoplay(update, context, st)
         return True
 
     ok = False
@@ -249,7 +321,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: 
     if not ok:
         st["errors"] = int(st.get("errors") or 0) + 1
         _log(user_id, "invalid", {"idx": idx, "text": t[:80]})
-        await _send_card(update.message, context, "❌ Belum kebaca\nKlik Ulangi", _kb())
+        await _typing(context, chat_id)
+        await _upsert(context, st, chat_id, "❌ Belum kebaca\nCoba format contoh ya.", _keyboard_for(step))
         context.user_data["tutorial_mode"] = st
         return True
 
@@ -258,20 +331,81 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: 
     st["idx"] = min(idx + 1, len(TUTORIAL_STEPS) - 1)
     context.user_data["tutorial_mode"] = st
     idx2, step2 = _current_step(st)
-    await _send_card(update.message, context, "✅ Oke\nLanjut ya", _kb())
-    await _send_card(update.message, context, step2["card"], _kb())
+    await _typing(context, chat_id)
+    ack = _ack_for(step.get("id"), t)
+    await _upsert(context, st, chat_id, ack, _keyboard_for(step))
+    try:
+        await asyncio.sleep(TUTORIAL_TRANSITION_SECONDS)
+    except Exception:
+        pass
+    await _typing(context, chat_id)
+    await _upsert(context, st, chat_id, _render_card(user_id, idx2, step2, st), _keyboard_for(step2))
     if step2.get("id") == "done":
         context.user_data.pop("tutorial_mode", None)
         _log(user_id, "completed", {})
+    await _autoplay(update, context, st)
     return True
 
+def _ack_for(step_id: str, raw: str) -> str:
+    t = (raw or "").strip()
+    amt = _extract_amount(t) or 0
+    if step_id == "tx1" and amt > 0:
+        return f"✅ Masuk\nRp{amt:,.0f} tercatat"
+    if step_id == "inc1" and amt > 0:
+        needs = amt * 0.5
+        wants = amt * 0.3
+        save = amt * 0.2
+        return f"✅ Gaji set\n50/30/20: {needs:,.0f}/{wants:,.0f}/{save:,.0f}"
+    if step_id in ("bud1", "bud2") and amt > 0:
+        cat = None
+        low = t.lower()
+        for c in CATEGORIES:
+            if c.lower() in low:
+                cat = c
+                break
+        cat = cat or "Kategori"
+        return f"✅ Budget ok\n{cat}: Rp{amt:,.0f}"
+    if step_id == "cancel":
+        return "✅ Siap\nLanjut ya"
+    return _pick(0, 0, ["✅ Oke", "✅ Sip", "✅ Mantap", "✅ Gas"]) + "\nLanjut…"
+
+async def _autoplay(update: Update, context: ContextTypes.DEFAULT_TYPE, st: dict):
+    if not st or not st.get("active"):
+        return
+    try:
+        chat_id = int(st.get("chat_id") or (update.effective_chat.id if update.effective_chat else 0))
+        user_id = int(update.effective_user.id)
+    except Exception:
+        return
+
+    while True:
+        idx, step = _current_step(st)
+        if step.get("requires_input") or step.get("id") == "done":
+            return
+
+        await _run_step_side_effect(update.effective_message, context, step.get("id"))
+        st["idx"] = min(idx + 1, len(TUTORIAL_STEPS) - 1)
+        context.user_data["tutorial_mode"] = st
+        _log(user_id, "auto_next", {"from": idx, "to": st["idx"]})
+
+        idx2, step2 = _current_step(st)
+        await _typing(context, chat_id)
+        await _upsert(context, st, chat_id, _render_card(user_id, idx2, step2, st), _keyboard_for(step2))
+
+        if step2.get("id") == "done":
+            context.user_data.pop("tutorial_mode", None)
+            _log(user_id, "completed", {})
+            return
+        if step2.get("requires_input"):
+            return
+
 def _looks_like_amount(text: str) -> bool:
-    return any(ch.isdigit() for ch in text) and any(k in text for k in ("rb", "ribu", "k", "jt", "juta", "rp")) or text.isdigit()
+    return parse_primary_amount_id(text) is not None
 
 def _looks_like_budget(text: str) -> bool:
     has_cat = any(c.lower() in text for c in CATEGORIES)
-    has_num = any(ch.isdigit() for ch in text)
-    return has_cat and has_num
+    has_amt = parse_primary_amount_id(text) is not None
+    return has_cat and has_amt
 
 async def _apply_input(update: Update, context: ContextTypes.DEFAULT_TYPE, step_id: str, text: str):
     user_id = update.effective_user.id
@@ -322,16 +456,4 @@ async def _apply_input(update: Update, context: ContextTypes.DEFAULT_TYPE, step_
             pass
 
 def _extract_amount(text: str):
-    t = (text or "").lower().replace("rp", "").replace(" ", "")
-    digits = "".join([c for c in t if c.isdigit()])
-    if not digits:
-        return None
-    try:
-        val = float(digits)
-    except Exception:
-        return None
-    if "jt" in t or "juta" in t:
-        return val * 1000000
-    if "rb" in t or "ribu" in t or "k" in t:
-        return val * 1000
-    return val
+    return parse_primary_amount_id(text)

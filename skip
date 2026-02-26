@@ -1,0 +1,6 @@
+warning: in the working copy of 'handlers/messages.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'handlers/tutorial_mode.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'modules/nlp.py', LF will be replaced by CRLF the next time Git touches it
+handlers/messages.py
+handlers/tutorial_mode.py
+modules/nlp.py
