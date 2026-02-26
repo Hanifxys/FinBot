@@ -70,6 +70,20 @@ class DBHandler:
         
         response = self.supabase.table(Tables.TRANSACTIONS).insert(data).execute()
         
+        # Real-time Broadcast via WebSocket
+        try:
+            from core import ws_server
+            import asyncio
+            asyncio.run_coroutine_threadsafe(
+                ws_server.broadcast({
+                    "event": "new_transaction",
+                    "data": data
+                }),
+                ws_server.loop
+            )
+        except Exception as e:
+            logging.error(f"WS Broadcast Failed: {e}")
+
         # Update budget if it's an expense
         if trans_type == 'expense':
             self.update_budget_usage(user_id, category, amount)

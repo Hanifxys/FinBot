@@ -8,7 +8,9 @@ from modules.rules import RuleEngine
 from modules.ai_engine import AIEngine
 from utils.visuals import VisualReporter
 
-# Initialize Shared instances lazily or properly
+from modules.websocket_server import WebSocketServer
+
+# Initialize Shared instances properly
 db = DBHandler()
 ocr = OCRProcessor()
 nlp = NLPProcessor()
@@ -18,11 +20,13 @@ analyzer = ExpenseAnalyzer(db)
 rules = RuleEngine()
 visual_reporter = VisualReporter()
 
+# Global WebSocket Server Instance
+ws_server = WebSocketServer(port=int(os.getenv("WS_PORT", 8001)))
+
 def init_components():
     """
     Initialize components. 
-    Database initialization is now handled by Supabase, 
-    so this is mostly for backward compatibility.
     """
     logging.info("Core components initialized with Supabase API")
-    pass
+    # Start WS Server in background
+    ws_server.start_in_thread()
