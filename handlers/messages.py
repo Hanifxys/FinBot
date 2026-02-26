@@ -1,6 +1,6 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ContextTypes
-from core import db, ai, ws_server, nlp
+from core import db, premium_ai, ws_server, nlp
 import logging
 import asyncio
 from datetime import datetime
@@ -13,39 +13,41 @@ def get_main_menu_keyboard():
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    user_name = update.effective_user.first_name
     text = update.message.text
     
-    # 1. Autonomous Intent Detection (No commands needed)
-    intent_data = ai.detect_autonomous_intent(text)
-    intent = intent_data.get("intent")
+    # 1. Premium Autonomous Intent & Context Engine
+    # Processes Sentiment, Context (Redis), and Intent in one pass
+    premium_response = await premium_ai.process_interaction(user_id, text, user_name)
+    intent = premium_response.intent
     
-    # 2. Process based on Autonomous Intent
-    if intent == "record" and intent_data.get("structured_data"):
-        data = intent_data["structured_data"]
-        user_db = db.get_or_create_user(user_id, update.effective_user.username)
+    # 2. Advanced Decision Engine
+    if intent == "record" and premium_response.structured_data:
+        data = premium_response.structured_data
         db.add_transaction(
-            user_id=user_db.id,
+            user_id=user_id,
             amount=data.get("amount", 0),
             category=data.get("category", "Lain-lain"),
             description=data.get("description", text),
             trans_type=data.get("type", "expense")
         )
-        response_msg = intent_data.get("suggested_response", "✅ Transaksi dicatat!")
-    elif intent == "query_budget":
-        response_msg = intent_data.get("suggested_response", "Cek budget di dashboard ya!")
+        response_msg = premium_response.suggested_response
+    elif intent == "insight":
+        response_msg = premium_response.predictive_advice or premium_response.suggested_response
     else:
-        # Fallback to smart chat
-        response_msg = intent_data.get("suggested_response", "Aku dengerin, ada yang bisa kubantu?")
+        response_msg = premium_response.suggested_response
 
-    # 3. Real-time WebSocket Interaction
-    if intent_data.get("needs_live_update"):
+    # 3. Real-time Multi-channel Broadcast
+    if premium_response.needs_live_update:
         asyncio.run_coroutine_threadsafe(
             ws_server.broadcast({
-                "event": "ai_interaction",
+                "event": "premium_ai_insight",
                 "data": {
-                    "user_text": text,
-                    "bot_intent": intent,
-                    "response": response_msg
+                    "text": text,
+                    "sentiment": premium_response.sentiment,
+                    "language": premium_response.language,
+                    "response": response_msg,
+                    "advice": premium_response.predictive_advice
                 }
             }),
             ws_server.loop
