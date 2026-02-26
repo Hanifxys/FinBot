@@ -64,13 +64,31 @@ class WebSocketServer:
 
     def run_server(self):
         """Run the server in a separate event loop (for threading)"""
-        self.loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self.loop)
-        
-        start_server = websockets.serve(self.handler, self.host, self.port)
-        self.loop.run_until_complete(start_server)
-        logging.info(f"🚀 WebSocket Server running on ws://{self.host}:{self.port}")
-        self.loop.run_forever()
+        try:
+            # Create new event loop for this thread
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
+            
+            # Create server
+            start_server = websockets.serve(self.handler, self.host, self.port)
+            server = self.loop.run_until_complete(start_server)
+            logging.info(f"🚀 WebSocket Server running on ws://{self.host}:{self.port}")
+            
+            # Run the server
+            self.loop.run_forever()
+        except OSError as e:
+            if "address already in use" in str(e):
+                logging.error(f"Port {self.port} already in use. WebSocket server cannot start.")
+            else:
+                logging.error(f"WebSocket server OS error: {e}")
+        except Exception as e:
+            logging.error(f"WebSocket server error: {e}")
+        finally:
+            # Clean up event loop
+            if self.loop and self.loop.is_running():
+                self.loop.stop()
+            if self.loop:
+                self.loop.close()
 
     def start_in_thread(self):
         thread = threading.Thread(target=self.run_server, daemon=True)
