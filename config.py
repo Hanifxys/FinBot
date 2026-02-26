@@ -1,7 +1,11 @@
 import os
-from dotenv import load_dotenv
+import logging
 
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass # Assume env vars are set manually in prod or test
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")

@@ -2,7 +2,7 @@ import re
 import logging
 import gc
 import difflib
-from typing import Dict, Any, Tuple, Optional
+from typing import Dict, Any, Tuple, Optional, List
 from config import GROQ_API_KEY
 from modules.amounts import parse_primary_amount_id
 
@@ -118,55 +118,6 @@ class NLPProcessor:
     def client(self, value):
         self._client = value
 
-    def process_text(self, text: str) -> Tuple[float, str, str]:
-        """
-        New minimalist processor for bot.py
-        Returns (amount, category, type)
-        """
-        amount = self._extract_amount(text)
-        category = self._detect_category(text)
-        
-        # Determine type (income if 'gaji' or 'income', otherwise expense)
-        type_ = 'income' if category == 'Gaji' else 'expense'
-        
-        return amount, category, type_
-
-    def parse_message(self, text: str) -> Dict[str, Any]:
-        """
-        Parses text to extract amount, category, and intent.
-        Example: "makan siang 50rb" -> {amount: 50000, category: "Makanan", intent: "add_transaction"}
-        """
-        text = text.lower()
-        
-        # Fast regex check
-        if self._intents_map["query_budget"].search(text):
-            category = self._detect_category(text)
-            return {"intent": "query_budget", "category": category}
-
-        if self._intents_map["get_report"].search(text):
-            return {"intent": "get_report"}
-
-        # Check for analysis intent
-        if any(kw in text for kw in ["analisis", "saran", "pola", "tips"]):
-            return {"intent": "get_analysis"}
-
-        # Check for recommendation intent
-        if any(kw in text for kw in ["rekomendasi", "alokasi"]):
-            return {"intent": "get_recommendation"}
-
-        # Extract amount
-        amount = self._extract_amount(text)
-        if amount > 0:
-            category = self._detect_category(text)
-            return {
-                "intent": "add_transaction",
-                "amount": amount,
-                "category": category,
-                "description": text
-            }
-
-        return {"intent": "unknown"}
-
     def normalize_text(self, text: str) -> str:
         """
         Normalizes informal text like '2jt' -> '2000000', '50rb' -> '50000', etc.
@@ -210,115 +161,123 @@ class NLPProcessor:
         
         return text
 
-    def classify_intent(self, text: str, state: str = "IDLE") -> Dict[str, Any]:
+    def hybrid_classify(self, text: str, state: str = "IDLE") -> Dict[str, Any]:
         """
-        Classifies user message into ONE intent based on text and current state.
-        Returns: {"intent": "...", "confidence": 0.0-1.0}
+        Main entry point for intent classification.
+        Uses Hybrid Approach: Fast Regex -> Low Confidence -> Slow LLM.
         """
         normalized_text = self.normalize_text(text)
         
-        # Handle EDIT states strictly
+        # 1. Handle Critical States (Edit/Cancel) - Priority 1
         if state.startswith("WAITING_EDIT"):
             if any(kw in normalized_text for kw in ["batal", "cancel", "gak jadi", "stop", "abaikan"]):
                 return {"intent": "CANCEL", "confidence": 1.0}
             return {"intent": "EDIT_TRANSACTION", "confidence": 0.9}
 
-        # Fast Regex Matching using pre-compiled patterns
-        if self._intents_map["roast_wallet"].search(normalized_text):
-            return {"intent": "ROAST_WALLET", "confidence": 0.95}
+        # 2. Fast Path: Regex Matching (Priority 2)
+        regex_intent = self._regex_classify(normalized_text)
+        if regex_intent["confidence"] >= 0.85:
+            return regex_intent
             
-        if self._intents_map["export_data"].search(normalized_text):
+        # 3. Slow Path: LLM Fallback (Priority 3)
+        # Only if regex failed or low confidence AND LLM is enabled
+        if self.groq_enabled:
+            llm_intent = self._llm_classify_intent(text) # Pass original text for better context
+            if llm_intent and llm_intent.get('confidence', 0) >= 0.7:
+                return llm_intent
+        
+        # 4. Fallback if everything fails
+        # If regex found something weak (e.g. 0.5), return it instead of UNKNOWN
+        if regex_intent["confidence"] > 0.0:
+            return regex_intent
+            
+        return {"intent": "UNKNOWN", "confidence": 0.0}
+
+    def _regex_classify(self, text: str) -> Dict[str, Any]:
+        """Internal regex classifier."""
+        # Check specific features
+        if self._intents_map["roast_wallet"].search(text):
+            return {"intent": "ROAST_WALLET", "confidence": 0.95}
+        if self._intents_map["export_data"].search(text):
             return {"intent": "EXPORT_DATA", "confidence": 0.95}
-
-        if self._intents_map["what_if"].search(normalized_text):
+        if self._intents_map["what_if"].search(text):
             return {"intent": "WHAT_IF", "confidence": 0.95}
+        
+        # Anti-Robot Check (Declarative)
+        declarative_pattern = r'\b(punya|ada|total|sisa|tabungan|saldo|duit|uang|rekening|dompet|cash|aset).*\d+'
+        if re.search(declarative_pattern, text) and not any(kw in text for kw in ["beli", "bayar", "jajan", "keluar", "habis", "tambah", "simpan", "catat"]):
+             return {"intent": "SHARING_INFO", "confidence": 0.85}
 
-        # New Intent Checks for Settings (Before Transaction Check)
-        if self._intents_map["set_budget_alert"].search(normalized_text):
+        # Settings
+        if self._intents_map["set_budget_alert"].search(text):
             return {"intent": "SET_BUDGET_ALERT", "confidence": 0.95}
-
-        if self._intents_map["set_gaji"].search(normalized_text):
+        if self._intents_map["set_gaji"].search(text):
             return {"intent": "SET_GAJI", "confidence": 0.95}
-
-        if self._intents_map["set_budget"].search(normalized_text):
+        if self._intents_map["set_budget"].search(text):
             return {"intent": "SET_BUDGET", "confidence": 0.95}
 
-        # 1. Natural Language Settings
-        if any(kw in normalized_text for kw in ["mode", "ganti mode", "ubah mode"]):
-            if any(kw in normalized_text for kw in ["coach", "galak", "tegas"]):
+        # Natural Language Settings
+        if any(kw in text for kw in ["mode", "ganti mode", "ubah mode"]):
+            if any(kw in text for kw in ["coach", "galak", "tegas"]):
                 return {"intent": "SET_MODE", "value": "coach", "confidence": 0.9}
-            if any(kw in normalized_text for kw in ["buddy", "santai", "teman"]):
+            if any(kw in text for kw in ["buddy", "santai", "teman"]):
                 return {"intent": "SET_MODE", "value": "buddy", "confidence": 0.9}
-            if any(kw in normalized_text for kw in ["analyst", "formal", "data"]):
+            if any(kw in text for kw in ["analyst", "formal", "data"]):
                 return {"intent": "SET_MODE", "value": "analyst", "confidence": 0.9}
                 
-        if any(kw in normalized_text for kw in ["reminder", "ingatkan", "notif"]):
-            if "on" in normalized_text or "nyala" in normalized_text or "hidup" in normalized_text:
+        if any(kw in text for kw in ["reminder", "ingatkan", "notif"]):
+            if "on" in text or "nyala" in text or "hidup" in text:
                 return {"intent": "SET_REMINDER", "value": "on", "confidence": 0.9}
-            if "off" in normalized_text or "mati" in normalized_text:
+            if "off" in text or "mati" in text:
                 return {"intent": "SET_REMINDER", "value": "off", "confidence": 0.9}
 
-        # 2. Check for Transaction (Amount + Category)
-        amount = self._extract_amount(normalized_text)
+        # Transaction Check
+        amount = self._extract_amount(text)
         if amount > 0:
             return {"intent": "ADD_TRANSACTION", "confidence": 0.95}
 
-        # 3. Check for Budget Query
-        if self._intents_map["query_budget"].search(normalized_text):
+        # Query Checks
+        if self._intents_map["query_budget"].search(text):
             return {"intent": "CHECK_BUDGET", "confidence": 0.9}
-
-        # 4. Check for Report/Summary
-        if self._intents_map["get_report"].search(normalized_text):
+        if self._intents_map["get_report"].search(text):
             return {"intent": "QUERY_SUMMARY", "confidence": 0.9}
-
-        # 5. Check for Help/Command List
-        if any(kw in normalized_text for kw in ["help", "tolong", "bantuan", "perintah", "command", "bisa apa"]):
+        if any(kw in text for kw in ["help", "tolong", "bantuan", "perintah", "command", "bisa apa"]):
             return {"intent": "HELP", "confidence": 1.0}
-
-        # 6. Check for Greetings and Social Chat
-        if self._intents_map["greeting"].search(normalized_text):
+        if self._intents_map["greeting"].search(text):
             return {"intent": "GREETING", "confidence": 1.0}
-
-        # 7. LLM Fallback (Groq) for complex queries
-        if self.groq_enabled:
-            llm_intent = self._llm_classify_intent(text)
-            # Only accept LLM intent if confidence is high, otherwise fallback to UNKNOWN
-            if llm_intent and llm_intent.get('confidence', 0) >= 0.7:
-                return llm_intent
-
+            
         return {"intent": "UNKNOWN", "confidence": 0.0}
 
     def _llm_classify_intent(self, text: str) -> Optional[Dict[str, Any]]:
         """
-        Uses Groq LLM to classify intent when regex fails.
+        Uses Groq LLM (Llama 3) as a Transformer-based classifier.
         """
         client = self.client
         if not client:
             return None
             
         try:
+            # Optimized Prompt for Intent Classification
             prompt = f"""
-            Classify the intent of this financial bot user message: "{text}"
+            Analyze the user's message and extract the INTENT.
+            Message: "{text}"
             
-            Allowed intents:
-            - ADD_TRANSACTION: User wants to record an expense or income (e.g., "beli cilok", "tadi makan 20k")
-            - CHECK_BUDGET: User asks about remaining budget or limits (e.g., "sisa budget", "berapa limitku")
-            - QUERY_SUMMARY: User EXPLICITLY wants to see reports, stats, or rekap (e.g., "liat laporan", "rekap bulan ini")
-            - HELP: User needs assistance or command list
-            - GREETING: Casual talk, greetings, or existential/social questions (e.g., "apa kabar", "kamu siapa", "baik2 saja")
-            - UNKNOWN: Anything else
+            INTENT LIST:
+            - ADD_TRANSACTION: User is spending or receiving money (e.g. "beli makan 20k", "gaji masuk 5jt").
+            - SHARING_INFO: User shares status WITHOUT action (e.g. "saldo gw tinggal 50rb", "tabungan ada 10jt").
+            - CHECK_BUDGET: Asking about limits/remaining money (e.g. "sisa budget", "cukup ga").
+            - QUERY_SUMMARY: Asking for reports (e.g. "laporan bulan ini", "rekap").
+            - GREETING: Casual chat (e.g. "halo", "pagi", "thanks").
+            - UNKNOWN: Unclear or out of scope.
             
-            CRITICAL: If the message is just a social question or greeting, return GREETING. 
-            Do NOT return QUERY_SUMMARY unless the user specifically asks for a report or summary.
-            
-            Return ONLY a JSON with "intent" and "confidence" (0.0-1.0).
-            Example: {{"intent": "GREETING", "confidence": 0.95}}
+            Return JSON: {{"intent": "INTENT_NAME", "confidence": 0.0-1.0}}
             """
             
             chat_completion = client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
                 model="llama-3.3-70b-versatile",
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
+                temperature=0.1 # Low temperature for consistent classification
             )
             import json
             return json.loads(chat_completion.choices[0].message.content)
@@ -333,35 +292,30 @@ class NLPProcessor:
         Extracts structured financial transaction data.
         Returns JSON-like dict.
         """
-        text = self.normalize_text(text)
-        amount = self._extract_amount(text)
-        category = self._detect_category(text)
-        merchant = self.extract_merchant(text)
+        # 1. Try LLM Extraction for complex sentences if enabled
+        if self.groq_enabled and len(text.split()) > 4:
+             llm_data = self._llm_extract_entities(text)
+             if llm_data and llm_data.get("amount"):
+                 return llm_data
+
+        # 2. Fallback to Regex/Heuristic (Standard)
+        text_norm = self.normalize_text(text)
+        amount = self._extract_amount(text_norm)
+        category = self._detect_category(text_norm)
+        merchant = self.extract_merchant(text_norm)
         
-        # Mapping categories to allowed list
+        # Mapping categories
         category_map = {
-            "Makanan": "Makanan",
-            "Minuman": "Minuman",
-            "Jajanan": "Jajanan",
-            "Transportasi": "Transportasi",
-            "Belanja": "Belanja",
-            "Tagihan": "Tagihan",
-            "Kesehatan": "Kesehatan",
-            "Lifestyle": "Lifestyle",
-            "Sosial": "Sosial",
-            "Pendidikan": "Pendidikan",
-            "Maintenance": "Maintenance",
-            "Investasi": "Investasi",
-            "Gaji": "Gaji",
-            "Lain-lain": "Lain-lain"
+            "Makanan": "Makanan", "Minuman": "Minuman", "Jajanan": "Jajanan",
+            "Transportasi": "Transportasi", "Belanja": "Belanja", "Tagihan": "Tagihan",
+            "Kesehatan": "Kesehatan", "Lifestyle": "Lifestyle", "Sosial": "Sosial",
+            "Pendidikan": "Pendidikan", "Maintenance": "Maintenance", "Investasi": "Investasi",
+            "Gaji": "Gaji", "Lain-lain": "Lain-lain"
         }
         mapped_cat = category_map.get(category, "Lain-lain")
-        
-        # Determine type
         type_ = "income" if mapped_cat == "Gaji" else "expense"
         
         from datetime import datetime
-        
         return {
             "amount": amount if amount > 0 else None,
             "type": type_ if amount > 0 else None,
@@ -370,6 +324,42 @@ class NLPProcessor:
             "date": datetime.now().strftime("%Y-%m-%d"),
             "confidence": 0.9 if amount > 0 else 0.0
         }
+
+    def _llm_extract_entities(self, text: str) -> Optional[Dict[str, Any]]:
+        """Uses LLM to extract NER (Amount, Category, Merchant) from complex text."""
+        client = self.client
+        if not client: return None
+        
+        try:
+            prompt = f"""
+            Extract financial entities from: "{text}"
+            
+            Return JSON:
+            {{
+                "amount": float (raw number, e.g. 20000),
+                "category": string (Choose: Makanan, Minuman, Jajanan, Transportasi, Belanja, Tagihan, Lain-lain),
+                "merchant": string (e.g. "Starbucks", "Indomaret"),
+                "type": string ("expense" or "income")
+            }}
+            """
+            chat_completion = client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model="llama-3.3-70b-versatile",
+                response_format={"type": "json_object"},
+                temperature=0.1
+            )
+            import json
+            data = json.loads(chat_completion.choices[0].message.content)
+            
+            # Post-process amount
+            if data.get("amount"):
+                data["confidence"] = 0.95
+                from datetime import datetime
+                data["date"] = datetime.now().strftime("%Y-%m-%d")
+                return data
+            return None
+        except Exception:
+            return None
 
     def validate_edit(self, field: str, user_message: str) -> Dict[str, Any]:
         """
@@ -465,3 +455,7 @@ class NLPProcessor:
         
         merchant = clean_text.title()
         return merchant if merchant else "Transaksi"
+
+    # Compatibility alias for classify_intent
+    def classify_intent(self, text: str, state: str = "IDLE") -> Dict[str, Any]:
+        return self.hybrid_classify(text, state)

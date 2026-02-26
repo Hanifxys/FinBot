@@ -547,11 +547,23 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
         return
 
     try:
-        # 1. NLP Pre-check
-        simple_intent = nlp.classify_intent(text)
-        intent = simple_intent.get("intent")
+        # 1. NLP Hybrid Classification
+        # Use state to give context (e.g. if waiting for edit)
+        current_state = context.user_data.get("state", "IDLE")
+        
+        # New: Use Hybrid Classify instead of just regex
+        classification = nlp.hybrid_classify(text, state=current_state)
+        intent = classification.get("intent")
+        confidence = classification.get("confidence", 0.0)
 
-        # 2. Dispatch Simple Intents
+        # 2. Dispatch Based on Intent
+        if intent == "CANCEL":
+             # This is handled inside _handle_pending_states usually, but explicit intent is safer
+             context.user_data.pop("state", None)
+             context.user_data.pop("pending_tx", None)
+             await update.message.reply_text("Oke, dibatalkan ya.")
+             return
+
         if intent == "ROAST_WALLET":
             await _roast_wallet(update, context)
             return
@@ -564,11 +576,7 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
             amount = nlp._extract_amount(text)
             if amount > 0:
                 import re
-                # Remove intent keywords to get description
                 clean = re.sub(r'\b(what if|simulasi|kalo|misal|kalau|andai|seandainya|beli)\b', '', text, flags=re.IGNORECASE)
-                
-                # Pass formatted amount as first arg, description as second
-                # what_if_simulator expects: args[0] = amount, args[1:] = description
                 context.args = [str(int(amount)), clean.strip()]
                 await what_if_simulator(update, context)
             else:
@@ -576,29 +584,25 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
             return
 
         if intent == "SET_MODE":
-            context.args = [simple_intent.get("value")]
+            context.args = [classification.get("value")]
             await set_persona_command(update, context)
             return
             
         if intent == "SET_REMINDER":
-            context.args = [simple_intent.get("value")]
+            context.args = [classification.get("value")]
             await reminder_settings(update, context)
             return
 
         if intent == "CHECK_BUDGET":
             msg = budget_mgr.check_budget_status(user_db.id)
-            
-            # Add Budget Drift Alerts
             drift_alerts = analyzer.detect_budget_drift(user_db.id)
             if drift_alerts:
                 msg += "\n\n⚠️ **Early Warning System (Budget Drift)**\n"
                 for alert in drift_alerts:
                     msg += f"- {alert}\n"
-            
             await update.message.reply_text(msg, parse_mode='Markdown')
             return
 
-        # --- New NLP Settings Handlers ---
         if intent == "SET_GAJI":
             amount = nlp._extract_amount(text)
             if amount > 0:
@@ -626,7 +630,6 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
             pcts = re.findall(r'(\d+)%', text)
             if not pcts:
                  pcts = re.findall(r'(\d+)\s*persen', text)
-            
             if category != "Lain-lain" and pcts:
                 warn = pcts[0]
                 limit = pcts[1] if len(pcts) > 1 else "100"
@@ -640,11 +643,55 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
              await summary_command(update, context)
              return
 
+        if intent == "SHARING_INFO":
+            await _handle_sharing_info(update, context, user_db, text, user_name)
+            return
+            
+        if intent == "GREETING":
+            await _handle_sharing_info(update, context, user_db, text, user_name)
+            return
+
         # 3. Handle Pending States (Edit Flows)
         if await _handle_pending_states(update, context, text):
             return
 
-        # 4. Check other manual heuristics
+        # 4. Check for Transaction (ADD_TRANSACTION)
+        if intent == "ADD_TRANSACTION":
+             # Use the new extraction logic
+             tx_data = nlp.extract_transaction_data(text)
+             if tx_data.get("amount"):
+                 # Wrap into structure expected by _handle_record_intent or handle it directly
+                 # Let's reuse _handle_record_intent logic but construct a mock premium response
+                 # to keep code DRY, or just inline the logic.
+                 
+                 # Prepare Pending Transaction
+                 pending = {
+                    "amount": float(tx_data["amount"]),
+                    "category": tx_data["category"] or "Lain-lain",
+                    "merchant": tx_data["merchant"] or "Transaksi",
+                    "date": datetime.now().strftime("%d-%m-%Y"),
+                    "payment_method": None,
+                 }
+                 
+                 # Contextual Insight
+                 feedback = ""
+                 try:
+                    feedback = analyzer.get_instant_feedback(
+                        user_id, pending["category"], pending["merchant"], pending["amount"]
+                    )
+                 except Exception: pass
+
+                 context.user_data["pending_tx"] = pending
+                 context.user_data.pop("state", None)
+                 
+                 await update.message.reply_text(
+                    _tx_preview_message(pending, feedback), 
+                    parse_mode="Markdown", 
+                    reply_markup=_tx_preview_keyboard()
+                 )
+                 return
+
+        # 5. Check other manual heuristics (Fallback)
         if _looks_like_explain_spending(text):
             await _explain_spending(update)
             return
@@ -656,13 +703,32 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
             await update.message.reply_text(tutorial_mode.intro_text(), parse_mode="Markdown", reply_markup=tutorial_mode.intro_keyboard())
             return
 
-        # 5. Fallback to Premium AI (LLM)
+        # 6. Fallback to Premium AI (LLM) if Intent is UNKNOWN but has text
+        # This catches complex queries that regex missed but LLM might handle as general conversation
         await _process_with_premium_ai(update, context, user_db, text, user_name)
 
     except Exception as e:
         logger.error(f"Critical error in handle_message for {user_id}: {e}", exc_info=True)
         error_msg = "Waduh, ada kendala teknis nih. 🛠️\nTim kami sudah diberitahu. Coba lagi sebentar lagi ya!"
         await update.message.reply_text(error_msg)
+
+async def _handle_sharing_info(update: Update, context: ContextTypes.DEFAULT_TYPE, user_db, text: str, user_name: str):
+    """Handles informational statements (non-transactional)."""
+    try:
+        # Use Premium AI to generate a conversational response
+        premium_response = await premium_ai.process_interaction(user_db.id, text, user_name)
+        
+        response_msg = premium_response.suggested_response or "Wah, mantap! Terima kasih infonya."
+        
+        # Check if there's advice or insight
+        if premium_response.predictive_advice:
+            response_msg += f"\n\n💡 **Saran:**\n{premium_response.predictive_advice}"
+            
+        await update.message.reply_text(response_msg, parse_mode='Markdown')
+        
+    except Exception as e:
+        logger.error(f"Error handling sharing info: {e}")
+        await update.message.reply_text("Wah menarik! Terima kasih sudah cerita.")
 
 async def _handle_pending_states(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
     """Handles explicit state-based flows (editing transactions). Returns True if handled."""

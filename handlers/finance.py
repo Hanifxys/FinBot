@@ -131,6 +131,7 @@ async def what_if_simulator(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Get Current Financial State
         from core import db
+        from datetime import datetime
         now = datetime.now()
         
         # 1. Get Monthly Income & Expenses
@@ -222,6 +223,11 @@ async def what_if_simulator(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(caption, parse_mode='Markdown')
             
     except Exception as e:
-        logging.error(f"What-if error: {e}")
-        await update.message.reply_text("Gagal melakukan simulasi. Coba lagi nanti.")
+        logging.error(f"What-if error for user {user_id}: {e}", exc_info=True)
+        error_msg = (
+            "⚠️ **Terjadi kesalahan saat simulasi**\n"
+            "Sistem gagal memproses permintaan simulasi Anda. Mohon coba lagi nanti.\n"
+            "Jika masalah berlanjut, hubungi admin."
+        )
+        await update.message.reply_text(error_msg, parse_mode='Markdown')
 

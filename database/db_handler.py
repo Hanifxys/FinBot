@@ -369,6 +369,25 @@ class DBHandler:
             self.supabase.table(Tables.BUDGETS).insert(base).execute()
         return True
 
+    def get_last_transaction_date(self, user_id):
+        """
+        Retrieves the date of the most recent transaction for a user.
+        Returns datetime object or None if no transactions found.
+        """
+        try:
+            response = self.supabase.table(Tables.TRANSACTIONS).select("date")\
+                .eq("user_id", user_id).order("date", desc=True).limit(1).execute()
+            
+            if response.data:
+                date_val = response.data[0]['date']
+                if isinstance(date_val, str):
+                    return datetime.fromisoformat(date_val.replace("Z", "+00:00"))
+                return date_val
+            return None
+        except Exception as e:
+            logging.error(f"Error fetching last transaction date: {e}")
+            return None
+
     # --- Internal helpers ---
     def _decrypt_tx(self, item: dict) -> dict:
         try:
