@@ -48,6 +48,33 @@ async def daily_digest(context: ContextTypes.DEFAULT_TYPE):
             
         if budget_info:
             msg += f"\n💡 {budget_info}"
+
+        try:
+            goals = db.get_user_saving_goals(user.id)
+            active = []
+            for g in goals or []:
+                try:
+                    prog = (g.current_amount / g.target_amount) * 100
+                except Exception:
+                    prog = 0
+                if prog < 100:
+                    active.append(g)
+            if active:
+                g = active[0]
+                msg += f"\n\n🎯 Target: **{g.name}**"
+                try:
+                    remaining = g.target_amount - g.current_amount
+                    msg += f"\nSisa: Rp{remaining:,.0f}"
+                    if getattr(g, "target_date", None):
+                        now = datetime.now()
+                        td = g.target_date
+                        months_left = max(1, (td.year - now.year) * 12 + (td.month - now.month) + (1 if td.day > now.day else 0))
+                        req = remaining / months_left
+                        msg += f"\nPerlu: Rp{req:,.0f}/bulan"
+                except Exception:
+                    pass
+        except Exception:
+            pass
             
         try:
             await context.bot.send_message(chat_id=user.telegram_id, text=msg, parse_mode='Markdown')
