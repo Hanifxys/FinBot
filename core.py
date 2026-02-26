@@ -1,4 +1,5 @@
 import logging
+import os
 from database.db_handler import DBHandler
 from modules.ocr import OCRProcessor
 from modules.nlp import NLPProcessor
@@ -9,7 +10,6 @@ from modules.ai_engine import AIEngine
 from modules.premium_ai import PremiumAIEngine
 from utils.visuals import VisualReporter
 from modules.websocket_server import WebSocketServer
-from modules.monitor import start_monitor_thread
 from modules.gamification import GamificationEngine
 
 # Initialize Shared instances properly
@@ -35,4 +35,8 @@ def init_components():
     # Start WS Server in background
     ws_server.start_in_thread()
     # Start Monitoring API for Koyeb Health Checks
-    start_monitor_thread()
+    try:
+        from modules.monitor import start_monitor_thread
+        start_monitor_thread(db=db, premium_ai=premium_ai, ws_server=ws_server, auth_secret=os.getenv("WEB_JWT_SECRET", ""))
+    except Exception as e:
+        logging.error(f"Failed to start monitor: {e}")

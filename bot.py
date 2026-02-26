@@ -8,8 +8,8 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Cal
 
 from config import TELEGRAM_BOT_TOKEN
 from core import init_components, db, ocr, nlp, ai, budget_mgr, analyzer, rules, visual_reporter
-from handlers.commands import start, help_command
-from handlers.finance import set_gaji, set_budget, get_ai_insight
+from handlers.commands import start, help_command, auth_command, summary_command
+from handlers.finance import set_gaji, set_budget, get_ai_insight, set_budget_alerts
 from handlers.transactions import undo, hapus_transaksi, history, export_data
 from handlers.saving import set_target, add_savings, list_targets
 from handlers.messages import handle_message, handle_photo, handle_voice
@@ -61,6 +61,7 @@ async def post_init(application):
         BotCommand("help", "Tampilkan menu bantuan"),
         BotCommand("setgaji", "Atur pendapatan bulanan"),
         BotCommand("setbudget", "Atur limit budget kategori"),
+        BotCommand("budgetalert", "Atur ambang peringatan budget"),
         BotCommand("undo", "Batalkan transaksi terakhir"),
         BotCommand("hapus", "Hapus transaksi spesifik"),
         BotCommand("history", "Lihat riwayat transaksi"),
@@ -69,6 +70,8 @@ async def post_init(application):
         BotCommand("list_target", "Lihat semua target menabung"),
         BotCommand("export", "Download data transaksi CSV"),
         BotCommand("insight", "Analisis cerdas pola pengeluaran"),
+        BotCommand("summary", "Ringkasan bulanan/tahunan"),
+        BotCommand("auth", "Dapatkan token login web"),
     ]
     await application.bot.set_my_commands(commands)
 
@@ -97,6 +100,7 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("setgaji", set_gaji))
     application.add_handler(CommandHandler("setbudget", set_budget))
+    application.add_handler(CommandHandler("budgetalert", set_budget_alerts))
     application.add_handler(CommandHandler("undo", undo))
     application.add_handler(CommandHandler("hapus", hapus_transaksi))
     application.add_handler(CommandHandler("history", history))
@@ -105,6 +109,8 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler("list_target", list_targets))
     application.add_handler(CommandHandler("export", export_data))
     application.add_handler(CommandHandler("insight", get_ai_insight))
+    application.add_handler(CommandHandler("summary", summary_command))
+    application.add_handler(CommandHandler("auth", auth_command))
     application.add_handler(CommandHandler("rekomendasi", set_gaji))
     
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))

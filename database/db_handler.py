@@ -1,6 +1,7 @@
 from .models import get_supabase, Tables
 from datetime import datetime, timedelta
 import logging
+from modules.crypto import EncryptionManager
 
 class DBHandler:
     def __init__(self, session=None):
@@ -8,6 +9,8 @@ class DBHandler:
         self.supabase = get_supabase()
         # Principle 3.1: User-defined day cutoff (Default 04:00 AM)
         self.cutoff_hour = 4
+        # Optional encryption
+        self.crypto = EncryptionManager()
 
     def get_effective_date(self, dt=None):
         """
@@ -38,7 +41,7 @@ class DBHandler:
         
         response = self.supabase.table(Tables.TRANSACTIONS).select("*").eq("user_id", user_id)\
             .gte("date", start_time).lte("date", end_time).execute()
-        return [type('Transaction', (object,), item) for item in response.data]
+        return [type('Transaction', (object,), self._decrypt_tx(item)) for item in response.data]
 
     def get_or_create_user(self, telegram_id, username):
         user = self.get_user(telegram_id)
@@ -63,7 +66,7 @@ class DBHandler:
             "user_id": user_id,
             "amount": float(amount),
             "category": category,
-            "description": description,
+            "description": self.crypto.encrypt(description) if description else None,
             "type": trans_type,
             "date": trans_date
         }
@@ -100,7 +103,7 @@ class DBHandler:
         
         response = self.supabase.table(Tables.TRANSACTIONS).select("*").eq("user_id", user_id)\
             .gte("date", start_date).lte("date", end_date_iso).execute()
-        return [type('Transaction', (object,), item) for item in response.data]
+        return [type('Transaction', (object,), self._decrypt_tx(item)) for item in response.data]
 
     def set_budget(self, user_id, category, limit_amount):
         now = datetime.now()
@@ -165,7 +168,7 @@ class DBHandler:
             query = query.gte("amount", float(min_amount))
             
         response = query.order("date", desc=True).limit(limit).execute()
-        return [type('Transaction', (object,), item) for item in response.data]
+        return [type('Transaction', (object,), self._decrypt_tx(item)) for item in response.data]
 
     def delete_transaction(self, user_id, transaction_id):
         response = self.supabase.table(Tables.TRANSACTIONS).select("*")\
@@ -200,7 +203,7 @@ class DBHandler:
         start_date = datetime(year, month, 1).isoformat()
         response = self.supabase.table(Tables.TRANSACTIONS).select("*")\
             .eq("user_id", user_id).gte("date", start_date).execute()
-        return [type('Transaction', (object,), item) for item in response.data]
+        return [type('Transaction', (object,), self._decrypt_tx(item)) for item in response.data]
 
     # --- SAVING GOALS ---
     def add_saving_goal(self, user_id, name, target_amount, target_date=None):
@@ -258,7 +261,7 @@ class DBHandler:
             'Tipe': 'Pengeluaran' if tx['type'] == 'expense' else 'Pemasukan',
             'Kategori': tx['category'],
             'Nominal': f"Rp{tx['amount']:,.0f}",
-            'Catatan': tx['description'] or '-'
+            'Catatan': (self.crypto.decrypt(tx['description']) if tx.get('description') else '-') 
         } for tx in response.data])
         
         df.to_csv(filepath, index=False)
@@ -289,3 +292,42 @@ class DBHandler:
         if response.data:
             return type('MonthlyIncome', (object,), response.data[0])
         return None
+
+    # --- Yearly Report ---
+    def get_yearly_report(self, user_id, year):
+        start_date = datetime(year, 1, 1).isoformat()
+        end_date = datetime(year + 1, 1, 1).isoformat()
+        response = self.supabase.table(Tables.TRANSACTIONS).select("*")\
+            .eq("user_id", user_id).gte("date", start_date).lt("date", end_date).execute()
+        return [type('Transaction', (object,), self._decrypt_tx(item)) for item in response.data]
+
+    # --- Budget thresholds ---
+    def set_budget_threshold(self, user_id, category, warn_threshold: float, limit_threshold: float):
+        now = datetime.now()
+        existing = self.supabase.table(Tables.BUDGETS).select("*")\
+            .eq("user_id", user_id).eq("category", category)\
+            .eq("month", now.month).eq("year", now.year).execute()
+        data = {"warn_threshold": float(warn_threshold), "limit_threshold": float(limit_threshold)}
+        if existing.data:
+            self.supabase.table(Tables.BUDGETS).update(data).eq("id", existing.data[0]['id']).execute()
+        else:
+            base = {
+                "user_id": user_id,
+                "category": category,
+                "limit_amount": 0.0,
+                "month": now.month,
+                "year": now.year,
+                "current_usage": 0.0
+            }
+            base.update(data)
+            self.supabase.table(Tables.BUDGETS).insert(base).execute()
+        return True
+
+    # --- Internal helpers ---
+    def _decrypt_tx(self, item: dict) -> dict:
+        try:
+            if item.get("description"):
+                item["description"] = self.crypto.decrypt(item["description"])
+        except Exception:
+            pass
+        return item

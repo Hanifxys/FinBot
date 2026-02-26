@@ -17,6 +17,7 @@ fastapi>=0.109.0
 uvicorn>=0.27.0
 locust>=2.21.0
 pytest-asyncio>=0.23.3
+cryptography>=42.0.0
 torch==2.2.1+cpu
 torchvision==0.17.1+cpu
 easyocr==1.7.1

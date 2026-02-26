@@ -29,13 +29,37 @@ class BudgetManager:
         
         msg = f"Sisa budget {category}: Rp {remaining:,.0f}"
         
+        # Custom thresholds if available
+        warn_th = getattr(target_budget, 'warn_threshold', 0.8) * 100
+        limit_th = getattr(target_budget, 'limit_threshold', 1.0) * 100
+        
         # Dual-threshold warnings
-        if percent >= 100:
+        if percent >= limit_th:
             msg = f"🔴 LIMIT! Budget {category} sudah 100% terpakai.\nSisa: Rp 0"
-        elif percent >= 80:
+        elif percent >= warn_th:
             msg = f"⚠️ WARNING! Budget {category} sudah {percent:.0f}% terpakai.\nSisa: Rp {remaining:,.0f}"
             
         return msg
+
+    def generate_yearly_summary(self, user_id, year: int):
+        transactions = self.db.get_yearly_report(user_id, year)
+        if not transactions:
+            return f"Tidak ada transaksi untuk tahun {year}."
+        df = pd.DataFrame([{
+            'amount': t.amount,
+            'category': t.category,
+            'type': t.type
+        } for t in transactions])
+        summary = df.groupby(['type'])['amount'].sum()
+        total_income = summary.get('income', 0)
+        total_expense = summary.get('expense', 0)
+        balance = total_income - total_expense
+        return (
+            f"📅 Ringkasan Tahun {year}\n\n"
+            f"Total Pemasukan: Rp {total_income:,.0f}\n"
+            f"Total Pengeluaran: Rp {total_expense:,.0f}\n"
+            f"Saldo Tahun Ini: Rp {balance:,.0f}"
+        )
 
     def get_detailed_budget_status(self, user_id, category):
         """

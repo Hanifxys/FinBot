@@ -63,3 +63,23 @@ async def get_ai_insight(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     target = update.callback_query.message if update.callback_query else update.message
     await target.reply_text(f"🤖 **FINBOT AI ADVISOR**\n\n{ai_insight}", parse_mode='Markdown')
+
+async def set_budget_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Configure alert thresholds for a budget category.
+    Usage: /budgetalert [Kategori] [warn%] [limit%]
+    """
+    user_id = update.effective_user.id
+    user_db = db.get_user(user_id)
+    if not user_db: return
+    if len(context.args) < 3:
+        await update.message.reply_text("Cara pakai: `/budgetalert [Kategori] [warn%] [limit%]`\nContoh: `/budgetalert Makanan 80 100`", parse_mode='Markdown')
+        return
+    category = context.args[0].capitalize()
+    try:
+        warn = float(context.args[1]) / 100.0
+        limit = float(context.args[2]) / 100.0
+        db.set_budget_threshold(user_db.id, category, warn, limit)
+        await update.message.reply_text(f"✅ Alert {category} diatur: Warning {warn*100:.0f}% • Limit {limit*100:.0f}%")
+    except Exception as e:
+        await update.message.reply_text(f"Gagal mengatur alert: {e}")
