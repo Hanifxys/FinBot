@@ -5,6 +5,7 @@ import uvicorn
 import threading
 import os
 import logging
+import json
 from typing import Optional, Dict, Any
 
 app = FastAPI(title="FinBot Pro Monitoring")
@@ -69,8 +70,8 @@ class BudgetAlert(BaseModel):
     limit_threshold: float = Field(..., gt=0, lte=1)
 
 @app.get("/health")
-def health_check():
-    """Koyeb health check endpoint"""
+async def health_check():
+    """Koyeb health check endpoint with deep diagnostics"""
     # Check Supabase
     db_ok = (_db is not None) and (_db.supabase is not None)
     
@@ -80,16 +81,25 @@ def health_check():
     # Check WS
     ws_ok = (_ws_server is not None) and (_ws_server.loop is not None) and _ws_server.loop.is_running()
     
-    if db_ok and redis_ok and ws_ok:
-        return {
-            "status": "healthy",
-            "db": "connected",
-            "redis": "connected",
-            "websocket": "running"
+    # Check AI Configuration
+    ai_ok = (_premium_ai is not None) and (_premium_ai.client is not None)
+
+    status_data = {
+        "status": "healthy" if (db_ok and redis_ok) else "degraded",
+        "components": {
+            "database": "connected" if db_ok else "disconnected",
+            "redis": "connected" if redis_ok else "disconnected",
+            "websocket": "running" if ws_ok else "stopped",
+            "ai_engine": "ready" if ai_ok else "not_configured"
         }
+    }
+
+    if db_ok and redis_ok:
+        return status_data
     
     return Response(
-        content="unhealthy", 
+        content=json.dumps(status_data), 
+        media_type="application/json",
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE
     )
 

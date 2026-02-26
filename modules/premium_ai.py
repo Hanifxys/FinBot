@@ -4,7 +4,7 @@ import logging
 import gc
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
-from groq import Groq
+from groq import AsyncGroq
 from config import GROQ_API_KEY, CATEGORIES
 from modules.redis_mgr import RedisManager
 
@@ -18,14 +18,14 @@ class TransactionModel(BaseModel):
     is_transaction: bool = Field(..., description="Whether this is a valid transaction")
 
 class AIIntentResponse(BaseModel):
-    intent: str
-    confidence: float
-    sentiment: str
-    language: str
-    structured_data: Dict[str, Any] = {}
-    suggested_response: str
+    intent: str = Field(default="chat")
+    confidence: float = Field(default=0.0)
+    sentiment: str = Field(default="neutral")
+    language: str = Field(default="id")
+    structured_data: Dict[str, Any] = Field(default_factory=dict)
+    suggested_response: str = Field(default="Maaf, saya sedang mengalami gangguan koneksi. Bisa diulangi?")
     predictive_advice: Optional[str] = None
-    needs_live_update: bool = True
+    needs_live_update: bool = Field(default=False)
 
 class PremiumAIEngine:
     """
@@ -46,7 +46,7 @@ class PremiumAIEngine:
     def client(self):
         if self._client is None and GROQ_API_KEY:
             try:
-                self._client = Groq(api_key=GROQ_API_KEY)
+                self._client = AsyncGroq(api_key=GROQ_API_KEY, timeout=30.0, max_retries=2)
             except Exception as e:
                 logger.error(f"Failed to initialize Premium Groq client: {e}")
         return self._client
@@ -62,7 +62,7 @@ class PremiumAIEngine:
                 {"role": "user", "content": user_prompt}
             ]
             
-            response = client.chat.completions.create(
+            response = await client.chat.completions.create(
                 messages=messages,
                 model=self.primary_model,
                 response_format={"type": "json_object"} if schema else None,
@@ -70,7 +70,7 @@ class PremiumAIEngine:
             )
             return response.choices[0].message.content
         except Exception as e:
-            logger.error(f"Premium AI Call Failed: {e}")
+            logger.error(f"Premium AI Call Failed: {e}", exc_info=True)
             return "{}"
         finally:
             gc.collect()
@@ -80,49 +80,93 @@ class PremiumAIEngine:
         Main entry point for real-time processing.
         Handles Context, Sentiment, and Intent in one pass.
         """
-        # 1. Fetch Context from Redis (Long-term Memory)
-        history = self.redis.client.lrange(f"history:{user_id}", 0, self.max_history)
-        context_str = "\n".join(history) if history else "New Session"
+        try:
+            # 1. Fetch Context from Redis (Long-term Memory)
+            history = self.redis.client.lrange(f"history:{user_id}", 0, self.max_history)
+            context_str = "\n".join(history) if history else "New Session"
 
-        system_prompt = f"""
-        You are FinBot Elite, a world-class Premium Financial AI Advisor.
-        Role: CFO level strategic insight + Personalized concierge.
-        Target: High Net-Worth Individuals / Smart Savers.
-        Categories: {', '.join(CATEGORIES)}
-        
-        Requirements:
-        1. Multi-language: Respond in the language user uses.
-        2. Context-Aware: Use provided history to detect patterns.
-        3. Sentiment: Identify if user is stressed, happy, or neutral.
-        4. Precision: Accuracy must be >95%.
-        """
+            system_prompt = f"""
+            You are FinBot Elite, a world-class Premium Financial AI Advisor.
+            Role: CFO level strategic insight + Personalized concierge.
+            Target: High Net-Worth Individuals / Smart Savers.
+            Categories: {', '.join(CATEGORIES)}
+            
+            Requirements:
+            1. Multi-language: Respond in the language user uses.
+            2. Context-Aware: Use provided history to detect patterns.
+            3. Sentiment: Identify if user is stressed, happy, or neutral.
+            4. Precision: Accuracy must be >95%.
+            """
 
-        user_prompt = f"""
-        User Name: {user_name}
-        Context History: {context_str}
-        Current Input: "{text}"
-        
-        Analyze and return JSON:
-        {{
-            "intent": "record|query|insight|warning|chat",
-            "confidence": 0.0-1.0,
-            "sentiment": "string",
-            "language": "string",
-            "structured_data": {{}},
-            "suggested_response": "Polished, elite advisor response",
-            "predictive_advice": "Advice based on historical trends",
-            "needs_live_update": true
-        }}
-        """
+            user_prompt = f"""
+            User Name: {user_name}
+            Context History: {context_str}
+            Current Input: "{text}"
+            
+            Analyze and return JSON:
+            {{
+                "intent": "record|query|insight|warning|chat",
+                "confidence": 0.0-1.0,
+                "sentiment": "string",
+                "language": "string",
+                "structured_data": {{}},
+                "suggested_response": "Polished, elite advisor response",
+                "predictive_advice": "Advice based on historical trends",
+                "needs_live_update": true
+            }}
+            """
 
-        raw_res = await self._call_llm(system_prompt, user_prompt, schema=AIIntentResponse)
-        data = json.loads(raw_res)
-        
-        # 2. Update Memory (Redis)
-        self.redis.client.lpush(f"history:{user_id}", f"User: {text} | AI: {data.get('intent')}")
-        self.redis.client.ltrim(f"history:{user_id}", 0, self.max_history)
-        
-        return AIIntentResponse(**data)
+            raw_res = await self._call_llm(system_prompt, user_prompt, schema=AIIntentResponse)
+            if not raw_res or raw_res == "{}":
+                logger.warning(f"Empty response from LLM for user {user_id}")
+                return AIIntentResponse(
+                    intent="chat",
+                    confidence=0.0,
+                    suggested_response="Maaf, server AI sedang sibuk. Bisa diulangi lagi nanti?",
+                    needs_live_update=False
+                )
+
+            try:
+                data = json.loads(raw_res)
+            except json.JSONDecodeError:
+                logger.error(f"Invalid JSON from LLM: {raw_res}")
+                return AIIntentResponse(
+                    intent="chat", 
+                    confidence=0.0,
+                    suggested_response="Maaf, saya gagal memproses permintaanmu. Coba gunakan format yang lebih sederhana.",
+                    needs_live_update=False
+                )
+            
+            # Validate with Pydantic model (and handle validation errors gracefully)
+            try:
+                response_model = AIIntentResponse(**data)
+            except Exception as e:
+                logger.error(f"Validation error for AI response: {e}")
+                # Fallback to chat intent if structured data fails
+                return AIIntentResponse(
+                    intent="chat",
+                    confidence=0.5,
+                    suggested_response=data.get("suggested_response", "Maaf, saya kurang mengerti. Bisa dijelaskan lagi?"),
+                    needs_live_update=False
+                )
+
+            # 2. Update Memory (Redis)
+            try:
+                self.redis.client.lpush(f"history:{user_id}", f"User: {text} | AI: {data.get('intent')}")
+                self.redis.client.ltrim(f"history:{user_id}", 0, self.max_history)
+            except Exception as e:
+                logger.error(f"Redis write error: {e}")
+            
+            return response_model
+
+        except Exception as e:
+            logger.error(f"Critical error in process_interaction: {e}", exc_info=True)
+            return AIIntentResponse(
+                intent="chat",
+                confidence=0.0,
+                suggested_response="Maaf, terjadi kesalahan internal pada sistem AI. Tim teknis sedang memperbaikinya.",
+                needs_live_update=False
+            )
 
     async def transcribe_voice(self, audio_file_path: str) -> str:
         """
@@ -133,7 +177,7 @@ class PremiumAIEngine:
         
         try:
             with open(audio_file_path, "rb") as file:
-                transcription = client.audio.transcriptions.create(
+                transcription = await client.audio.transcriptions.create(
                     file=(audio_file_path, file.read()),
                     model="whisper-large-v3",
                     response_format="text",
@@ -141,7 +185,7 @@ class PremiumAIEngine:
                 )
                 return transcription
         except Exception as e:
-            logger.error(f"Voice Transcription Failed: {e}")
+            logger.error(f"Voice Transcription Failed: {e}", exc_info=True)
             return ""
         finally:
             gc.collect()

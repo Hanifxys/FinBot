@@ -58,11 +58,17 @@ async def get_ai_insight(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_db = db.get_user(user_id)
     if not user_db: return
     
-    raw_insight = analyzer.analyze_patterns(user_db.id)
-    ai_insight = ai.generate_smart_insight(raw_insight)
-    
     target = update.callback_query.message if update.callback_query else update.message
-    await target.reply_text(f"🤖 **FINBOT AI ADVISOR**\n\n{ai_insight}", parse_mode='Markdown')
+    processing_msg = await target.reply_text("🤖 Sedang menganalisis keuanganmu...", parse_mode='Markdown')
+
+    try:
+        raw_insight = analyzer.analyze_patterns(user_db.id)
+        ai_insight = await ai.generate_smart_insight(raw_insight)
+        
+        await processing_msg.edit_text(f"🤖 **FINBOT AI ADVISOR**\n\n{ai_insight}", parse_mode='Markdown')
+    except Exception as e:
+        logging.error(f"Error generating AI insight for {user_id}: {e}", exc_info=True)
+        await processing_msg.edit_text("Maaf, gagal membuat analisis AI. Coba lagi nanti ya! 🙏")
 
 async def set_budget_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """

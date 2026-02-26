@@ -1,9 +1,10 @@
 import os
 import json
+
 import logging
-import time
+import asyncio
 import gc
-from groq import Groq
+from groq import AsyncGroq
 from config import GROQ_API_KEY, CATEGORIES
 
 logger = logging.getLogger(__name__)
@@ -19,13 +20,13 @@ class AIEngine:
         """Lazy load Groq client to save memory on startup"""
         if self._client is None and GROQ_API_KEY:
             try:
-                self._client = Groq(api_key=GROQ_API_KEY)
+                self._client = AsyncGroq(api_key=GROQ_API_KEY, timeout=30.0, max_retries=2)
             except Exception as e:
                 logger.error(f"Failed to initialize Groq client: {e}")
                 self._client = None
         return self._client
 
-    def _safe_ai_call(self, prompt, response_format=None, retries=2):
+    async def _safe_ai_call(self, prompt, response_format=None, retries=2):
         """Helper to handle AI calls with retry logic and error handling"""
         client = self.client
         if not client:
@@ -40,18 +41,18 @@ class AIEngine:
                 if response_format:
                     params["response_format"] = response_format
 
-                response = client.chat.completions.create(**params)
+                response = await client.chat.completions.create(**params)
                 return response.choices[0].message.content
             except Exception as e:
-                logger.error(f"Groq API Error (attempt {attempt+1}): {e}")
+                logger.error(f"Groq API Error (attempt {attempt+1}): {e}", exc_info=True)
                 if attempt == retries:
                     return None
-                time.sleep(1)
+                await asyncio.sleep(1)
             finally:
                 gc.collect()
         return None
 
-    def parse_transaction(self, text):
+    async def parse_transaction(self, text):
         """
         Parses natural language text into a structured transaction JSON.
         """
@@ -72,7 +73,7 @@ class AIEngine:
         - Example: "beli sate 50rb" -> {{"amount": 50000, "category": "Makanan", "description": "beli sate", "type": "expense", "is_transaction": true}}
         """
         
-        content = self._safe_ai_call(prompt, response_format={"type": "json_object"})
+        content = await self._safe_ai_call(prompt, response_format={"type": "json_object"})
         if content:
             try:
                 return json.loads(content)
@@ -80,7 +81,7 @@ class AIEngine:
                 logger.error("Failed to decode AI JSON response")
         return None
 
-    def detect_autonomous_intent(self, text, user_context=None):
+    async def detect_autonomous_intent(self, text, user_context=None):
         """
         Autonomous Intent Engine: Mendeteksi keinginan user tanpa command eksplisit.
         """
@@ -103,7 +104,7 @@ class AIEngine:
         }}
         """
 
-        content = self._safe_ai_call(prompt, response_format={"type": "json_object"})
+        content = await self._safe_ai_call(prompt, response_format={"type": "json_object"})
         if content:
             try:
                 return json.loads(content)
@@ -112,7 +113,7 @@ class AIEngine:
         
         return {"intent": "chat", "confidence": 0.0, "suggested_response": "Aduh, otak AI-ku lagi nge-lag nih. Coba lagi ya!"}
 
-    def chat_response(self, text, user_name="Teman"):
+    async def chat_response(self, text, user_name="Teman"):
         """
         Handles general chat messages with a friendly Gen-Z persona.
         """
@@ -128,5 +129,20 @@ class AIEngine:
         4. Selalu akhiri dengan pertanyaan pancingan/ajakan interaksi.
         """
 
-        response = self._safe_ai_call(prompt)
+        response = await self._safe_ai_call(prompt)
         return response if response else f"Halo {user_name}! Ada yang bisa aku bantu catat hari ini? 💸"
+
+    async def generate_smart_insight(self, raw_data_summary: str) -> str:
+        """
+        Generates a smart, actionable financial insight based on raw analysis data.
+        """
+        prompt = f"""
+        As a Senior Financial Advisor, analyze this raw data summary:
+        "{raw_data_summary}"
+
+        Provide a concise, motivating, and actionable insight (max 3 bullet points).
+        Use emojis and friendly tone.
+        """
+        
+        response = await self._safe_ai_call(prompt)
+        return response if response else "Belum ada insight yang cukup untuk saat ini. Yuk rajin catat pengeluaran!"

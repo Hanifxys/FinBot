@@ -40,58 +40,75 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = update.effective_user.first_name
     text = update.message.text
     
-    # 1. Premium Autonomous Intent & Context Engine
-    premium_response = await premium_ai.process_interaction(user_id, text, user_name)
-    intent = premium_response.intent
-    
-    # 2. Advanced Decision Engine with Smart Reconciliation
-    if intent == "record" and premium_response.structured_data:
-        data = premium_response.structured_data
+    logger = logging.getLogger(__name__)
+    logger.info(f"Processing message from {user_id} ({user_name}): {text[:50]}...")
+
+    try:
+        # 1. Premium Autonomous Intent & Context Engine
+        premium_response = await premium_ai.process_interaction(user_id, text, user_name)
+        intent = premium_response.intent
         
-        # [NEW] Check for Duplicates
-        is_duplicate = await premium_ai.check_reconciliation(user_id, data)
-        if is_duplicate:
-            response_msg = "⚠️ **Potensi Duplikat Terdeteksi!**\nTransaksi serupa baru saja dicatat. Yakin mau simpan lagi?"
-            # Add inline button for confirmation if needed
-        else:
-            db.add_transaction(
-                user_id=user_id,
-                amount=data.get("amount", 0),
-                category=data.get("category", "Lain-lain"),
-                description=data.get("description", text),
-                trans_type=data.get("type", "expense")
-            )
-            response_msg = premium_response.suggested_response
-    elif intent == "insight":
-        response_msg = premium_response.predictive_advice or premium_response.suggested_response
-    else:
+        # 2. Advanced Decision Engine with Smart Reconciliation
         response_msg = premium_response.suggested_response
-
-    # 3. Real-time Multi-channel Broadcast
-    if premium_response.needs_live_update:
-        # [NEW] Add XP for interaction
-        from core import gamify
-        xp_status = await gamify.add_xp(user_id, "transaction" if intent == "record" else "insight")
         
-        asyncio.run_coroutine_threadsafe(
-            ws_server.broadcast_to_user(
-                user_id=user_id,
-                message={
-                    "event": "premium_ai_insight",
-                    "data": {
-                        "text": text,
-                        "sentiment": premium_response.sentiment,
-                        "language": premium_response.language,
-                        "response": response_msg,
-                        "advice": premium_response.predictive_advice,
-                        "gamify": xp_status
-                    }
-                }
-            ),
-            ws_server.loop
-        )
+        if intent == "record" and premium_response.structured_data:
+            data = premium_response.structured_data
+            
+            try:
+                # [NEW] Check for Duplicates
+                is_duplicate = await premium_ai.check_reconciliation(user_id, data)
+                if is_duplicate:
+                    response_msg = "⚠️ **Potensi Duplikat Terdeteksi!**\nTransaksi serupa baru saja dicatat. Yakin mau simpan lagi?"
+                else:
+                    db.add_transaction(
+                        user_id=user_id,
+                        amount=data.get("amount", 0),
+                        category=data.get("category", "Lain-lain"),
+                        description=data.get("description", text),
+                        trans_type=data.get("type", "expense")
+                    )
+                    response_msg = premium_response.suggested_response
+            except Exception as e:
+                logger.error(f"Error saving transaction for {user_id}: {e}", exc_info=True)
+                response_msg = "Maaf, saya gagal menyimpan transaksi tersebut. Silakan coba lagi."
 
-    await update.message.reply_text(response_msg, parse_mode='Markdown')
+        elif intent == "insight":
+            response_msg = premium_response.predictive_advice or premium_response.suggested_response
+
+        # 3. Real-time Multi-channel Broadcast
+        if premium_response.needs_live_update:
+            try:
+                # [NEW] Add XP for interaction
+                from core import gamify
+                xp_status = await gamify.add_xp(user_id, "transaction" if intent == "record" else "insight")
+                
+                if ws_server.loop and ws_server.loop.is_running():
+                    asyncio.run_coroutine_threadsafe(
+                        ws_server.broadcast_to_user(
+                            user_id=user_id,
+                            message={
+                                "event": "premium_ai_insight",
+                                "data": {
+                                    "text": text,
+                                    "sentiment": premium_response.sentiment,
+                                    "language": premium_response.language,
+                                    "response": response_msg,
+                                    "advice": premium_response.predictive_advice,
+                                    "gamify": xp_status
+                                }
+                            }
+                        ),
+                        ws_server.loop
+                    )
+            except Exception as ws_err:
+                logger.warning(f"WS Broadcast failed for {user_id}: {ws_err}")
+
+        await update.message.reply_text(response_msg, parse_mode='Markdown')
+
+    except Exception as e:
+        logger.error(f"Critical error in handle_message for {user_id}: {e}", exc_info=True)
+        error_msg = "Waduh, ada kendala teknis nih. 🛠️\nTim kami sudah diberitahu. Coba lagi sebentar lagi ya!"
+        await update.message.reply_text(error_msg)
 
 async def send_budget_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
