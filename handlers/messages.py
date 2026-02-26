@@ -21,6 +21,54 @@ def get_main_menu_keyboard():
         [KeyboardButton("💡 Tips Hemat"), KeyboardButton("🚀 Menu Utama")]
     ], resize_keyboard=True)
 
+def _is_tutorial_request(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    keys = [
+        "tutorial", "tutor", "cara pakai", "cara pake", "guide", "panduan",
+        "gimana pakenya", "gimana makenya", "cara kerja", "step", "step by step",
+        "mulai dari mana", "onboarding", "help dong", "ajarin", "ajari"
+    ]
+    return any(k in t for k in keys)
+
+def _tutorial_message() -> str:
+    return (
+        "🚀 **TUTORIAL FINBOT (End-to-End)**\n\n"
+        "Tujuan: catat pengeluaran → cek budget → dapat insight → rapihin data → kalau salah, bisa batalin.\n\n"
+        "**Flow Cepat (30 detik):**\n"
+        "1) Catat: ketik `kopi 25rb` atau `gajian 7jt`\n"
+        "2) Cek: klik **📊 Cek Budget** atau ketik `cek budget`\n"
+        "3) Laporan: klik **📈 Laporan** atau `/summary monthly`\n"
+        "4) Insight: klik **🧠 AI Insights** (di menu)\n"
+        "5) Salah catat? ketik: `batal yang 25rb` / `hapus #ID` / `batal transaksi terakhir`\n\n"
+        "**Diagram Alur:**\n"
+        "Input ➜ (AI/NLP) ➜ Simpan transaksi ➜ Update budget ➜ Insight/Laporan\n"
+        "          │\n"
+        "          └─ Jika salah ➜ Deteksi pembatalan ➜ Konfirmasi 1-klik ➜ Update riwayat\n\n"
+        "Pilih bagian tutorial yang kamu mau:"
+    )
+
+def _tutorial_keyboard():
+    keyboard = [
+        [
+            InlineKeyboardButton("⚡ Quickstart", callback_data="tutorial_quickstart"),
+            InlineKeyboardButton("📸 Scan Struk", callback_data="tutorial_scan"),
+        ],
+        [
+            InlineKeyboardButton("↩️ Batalin Transaksi", callback_data="tutorial_cancel"),
+            InlineKeyboardButton("📊 Laporan & Budget", callback_data="tutorial_reports"),
+        ],
+        [
+            InlineKeyboardButton("⚙️ Settings", callback_data="tutorial_settings"),
+            InlineKeyboardButton("✅ Best Practices", callback_data="tutorial_best"),
+        ],
+        [
+            InlineKeyboardButton("🚀 Menu Utama", callback_data="suggest_help"),
+        ],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
 def _format_tx(tx) -> str:
     try:
         date_str = tx.date.strftime("%d/%m %H:%M")
@@ -180,6 +228,10 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
         return
 
     try:
+        if _is_tutorial_request(text):
+            await update.message.reply_text(_tutorial_message(), parse_mode="Markdown", reply_markup=_tutorial_keyboard())
+            return
+
         premium_response = await premium_ai.process_interaction(user_id, text, user_name)
         intent = premium_response.intent
         

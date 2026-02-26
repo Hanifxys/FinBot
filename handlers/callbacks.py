@@ -15,6 +15,96 @@ def get_main_menu_keyboard():
         [KeyboardButton("💡 Tips Hemat"), KeyboardButton("🚀 Menu Utama")]
     ], resize_keyboard=True)
 
+def _tutorial_text(section: str) -> str:
+    if section == "quickstart":
+        return (
+            "⚡ **Quickstart (Step-by-step)**\n\n"
+            "1) **Catat pengeluaran**\n"
+            "   - Ketik: `kopi 25rb` / `makan 40rb` / `parkir 5rb`\n"
+            "   - Atau: klik **📸 Scan Struk** lalu kirim foto.\n\n"
+            "2) **Catat pemasukan**\n"
+            "   - Ketik: `gajian 7jt` atau `/setgaji 7000000`\n\n"
+            "3) **Cek budget**\n"
+            "   - Klik **📊 Cek Budget** atau ketik `cek budget`\n\n"
+            "4) **Lihat laporan**\n"
+            "   - Klik **📈 Laporan** atau `/summary monthly`\n\n"
+            "5) **Minta insight**\n"
+            "   - Klik **🧠 AI Insights**\n"
+        )
+    if section == "scan":
+        return (
+            "📸 **Scan Struk (Biar Cepet & Akurat)**\n\n"
+            "1) Klik **📸 Scan Struk**\n"
+            "2) Kirim foto struk yang:\n"
+            "   - terang, tidak blur\n"
+            "   - struk memenuhi frame\n"
+            "   - tidak miring (kalau miring sedikit, masih bisa)\n\n"
+            "3) Bot akan baca **merchant + total**, lalu auto-catat.\n"
+            "Tips: kalau struk panjang, foto bagian yang ada tulisan **TOTAL**.\n"
+        )
+    if section == "cancel":
+        return (
+            "↩️ **Pembatalan Transaksi (1-klik)**\n\n"
+            "Kalau kamu salah catat, cukup ketik salah satu:\n"
+            "- `batal transaksi terakhir`\n"
+            "- `batal yang 25rb`\n"
+            "- `hapus #123`\n\n"
+            "Bot akan menampilkan kandidat transaksi dan tombol:\n"
+            "✅ Batalkan (1-klik) / 🔁 Pilih lain / ❌ Tidak jadi\n\n"
+            "Tips: kalau sering salah pilih, selalu sertakan nominal: `batal yang 25000`.\n"
+        )
+    if section == "reports":
+        return (
+            "📊 **Budget & Laporan**\n\n"
+            "**Cek budget cepat:**\n"
+            "- Klik **📊 Cek Budget**\n\n"
+            "**Laporan:**\n"
+            "- Klik **📈 Laporan** untuk periode\n"
+            "- Atau `/summary monthly`\n\n"
+            "**Riwayat transaksi:**\n"
+            "- `/history` untuk lihat ID transaksi (buat hapus manual)\n"
+            "- `/export` untuk CSV\n"
+        )
+    if section == "settings":
+        return (
+            "⚙️ **Pengaturan Penting**\n\n"
+            "- `/setgaji 7000000` untuk set pemasukan bulanan\n"
+            "- `/setbudget [Kategori] [Nominal]` untuk limit kategori\n"
+            "- `/budgetalert [Kategori] [Warn%] [Limit%]` untuk notifikasi\n\n"
+            "Contoh:\n"
+            "- `/setbudget Makanan 1500000`\n"
+            "- `/budgetalert Makanan 0.8 1.0`\n"
+        )
+    if section == "best":
+        return (
+            "✅ **Best Practices (Biar Keuangan Kebaca Jelas)**\n\n"
+            "1) Catat segera setelah transaksi (biar nggak lupa)\n"
+            "2) Pakai deskripsi singkat: `kopi`, `makan siang`, `ongkir`\n"
+            "3) Set budget kategori (biar ada kontrol)\n"
+            "4) Kalau ragu kategori, tetap catat dulu—nanti dirapihin\n"
+            "5) Kalau salah catat, pakai `batal yang ...` secepatnya\n"
+        )
+    return "Pilih bagian tutorial yang kamu mau."
+
+def _tutorial_kb():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("⚡ Quickstart", callback_data="tutorial_quickstart"),
+            InlineKeyboardButton("📸 Scan Struk", callback_data="tutorial_scan"),
+        ],
+        [
+            InlineKeyboardButton("↩️ Pembatalan", callback_data="tutorial_cancel"),
+            InlineKeyboardButton("📊 Laporan", callback_data="tutorial_reports"),
+        ],
+        [
+            InlineKeyboardButton("⚙️ Settings", callback_data="tutorial_settings"),
+            InlineKeyboardButton("✅ Best Practices", callback_data="tutorial_best"),
+        ],
+        [
+            InlineKeyboardButton("🚀 Menu Utama", callback_data="suggest_help"),
+        ],
+    ])
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = update.effective_user.id
@@ -26,6 +116,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = query.data
     pending = user_data.get('pending_tx')
     pending_cancel = user_data.get("pending_cancel")
+
+    if action.startswith("tutorial_"):
+        section = action.replace("tutorial_", "", 1)
+        await query.edit_message_text(_tutorial_text(section), parse_mode="Markdown", reply_markup=_tutorial_kb())
+        return
 
     if action == "open_history":
         from handlers.transactions import history
