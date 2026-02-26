@@ -24,31 +24,6 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-class HealthCheckHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header('Content-type', 'text/plain')
-        self.end_headers()
-        self.wfile.write(b"OK")
-
-    def do_HEAD(self):
-        self.send_response(200)
-        self.end_headers()
-
-    def log_message(self, format, *args):
-        return
-
-def run_health_check_server():
-    try:
-        port = int(os.getenv("PORT", 8000))
-        server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
-        logging.info(f"✅ Health check server started on port {port}")
-        sys.stdout.flush()
-        server.serve_forever()
-    except Exception as e:
-        logging.error(f"❌ Failed to start health check server: {e}")
-        sys.stdout.flush()
-
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logging.error(f"Exception while handling an update: {context.error}")
     from telegram.error import Conflict
@@ -76,9 +51,7 @@ async def post_init(application):
     await application.bot.set_my_commands(commands)
 
 if __name__ == '__main__':
-    health_thread = threading.Thread(target=run_health_check_server, daemon=True)
-    health_thread.start()
-    
+    # Initialize Core Components (includes Database, AI, and Monitoring Server)
     init_components()
     
     if not TELEGRAM_BOT_TOKEN:
