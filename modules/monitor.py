@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import uvicorn
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -44,6 +44,7 @@ class AppDependencies:
     db: object = None
     premium_ai: object = None
     ws_server: object = None
+    bot: object = None
     auth_secret: str = field(
         default_factory=lambda: os.getenv("WEB_JWT_SECRET", "")
     )
@@ -64,6 +65,16 @@ def get_deps() -> AppDependencies:
     if _deps is None:
         raise RuntimeError("Dependencies not initialised; call init_dependencies() first.")
     return _deps
+
+
+def set_bot_instance(bot: object) -> None:
+    """Update the global dependencies with the bot instance once it's available."""
+    global _deps
+    if _deps:
+        _deps.bot = bot
+        logger.info("Bot instance registered to monitor dependencies")
+    else:
+        logger.warning("Attempted to set bot instance before dependencies were initialised")
 
 
 # ---------------------------------------------------------------------------
@@ -331,14 +342,14 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
         if not message:
             raise HTTPException(status_code=400, detail="Message empty")
 
-        # Broadcast logic - this would call the telegram bot instance
-        from bot import bot
+        if not deps.bot:
+            raise HTTPException(status_code=503, detail="Bot service not initialised")
 
         users = deps.db.get_all_users()
         count = 0
         for u in users:
             try:
-                await bot.send_message(
+                await deps.bot.send_message(
                     chat_id=u.telegram_id,
                     text=f"📢 **BROADCAST**\n\n{message}",
                     parse_mode="Markdown",
@@ -363,10 +374,11 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
         if not message:
             raise HTTPException(status_code=400, detail="Message empty")
 
-        from bot import bot
+        if not deps.bot:
+            raise HTTPException(status_code=503, detail="Bot service not initialised")
 
         try:
-            await bot.send_message(
+            await deps.bot.send_message(
                 chat_id=target_id,
                 text=f"💬 **ADMIN MESSAGE**\n\n{message}",
                 parse_mode="Markdown",
@@ -390,7 +402,7 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
     # -----------------------------------------------------------------------
     @app.get("/transactions", tags=["finance"])
     def list_transactions(
-        limit: int = Field(50, ge=1, le=500),
+        limit: int = Query(50, ge=1, le=500),
         user_id: int = Depends(get_current_user),
     ):
         user = _require_user(deps.db, user_id)
@@ -450,8 +462,8 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
     # -----------------------------------------------------------------------
     @app.get("/reports/monthly", tags=["finance"])
     def monthly_report(
-        month: int = Field(..., ge=1, le=12),
-        year: int = Field(..., ge=2000, le=2100),
+        month: int = Query(..., ge=1, le=12),
+        year: int = Query(..., ge=2000, le=2100),
         user_id: int = Depends(get_current_user),
     ):
         user = _require_user(deps.db, user_id)
@@ -460,7 +472,7 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
 
     @app.get("/reports/yearly", tags=["finance"])
     def yearly_report(
-        year: int = Field(..., ge=2000, le=2100),
+        year: int = Query(..., ge=2000, le=2100),
         user_id: int = Depends(get_current_user),
     ):
         user = _require_user(deps.db, user_id)

@@ -154,6 +154,13 @@ if __name__ == '__main__':
         
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
     
+    # Register bot instance to monitor dependencies for broadcast/DM support
+    try:
+        from modules.monitor import set_bot_instance
+        set_bot_instance(application.bot)
+    except Exception as e:
+        logging.error(f"Failed to register bot to monitor: {e}")
+
     application.add_error_handler(error_handler)
     
     job_queue = application.job_queue
