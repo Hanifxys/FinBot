@@ -3,14 +3,34 @@ import logging
 import asyncio
 import time
 from typing import Dict, Any, Optional
-from pydantic import ValidationError
+from pydantic import ValidationError, BaseModel, Field, validator
 from groq import AsyncGroq
 from config import GROQ_API_KEY, CATEGORIES
 from modules.redis_mgr import RedisManager
 from modules.ai_memory import AIMemory
 from modules.ai_persona import PersonaManager
 from modules.document_processor import DocumentProcessor
-from .models import AIIntentResponse
+
+class TransactionModel(BaseModel):
+    amount: float = Field(..., description="The transaction amount")
+    category: str = Field(..., description="Financial category")
+    description: str = Field(..., description="Brief transaction description")
+    type: str = Field(..., pattern="^(expense|income)$")
+    is_transaction: bool = Field(..., description="Whether this is a valid transaction")
+
+class AIIntentResponse(BaseModel):
+    intent: str = Field(default="chat")
+    confidence: float = Field(default=0.0)
+    sentiment: str = Field(default="neutral")
+    language: str = Field(default="id")
+    structured_data: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    suggested_response: str = Field(default="Maaf, saya sedang mengalami gangguan koneksi. Bisa diulangi?")
+    predictive_advice: Optional[str] = None
+    needs_live_update: bool = Field(default=False)
+
+    @validator('structured_data', pre=True, always=True)
+    def set_structured_data(cls, v):
+        return v or {}
 
 logger = logging.getLogger(__name__)
 
