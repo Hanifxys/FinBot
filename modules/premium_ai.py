@@ -235,17 +235,27 @@ class PremiumAIEngine:
                 recent_tx_list = []
 
         # 2. AI-based similarity check
-        new_amount = new_tx_data.get('amount', 0)
+        new_amount = new_tx_data.get('amount') or 0
+        try:
+            new_amount = float(new_amount)
+        except (ValueError, TypeError):
+            new_amount = 0.0
+            
         new_category = new_tx_data.get('category')
 
         for tx in recent_tx_list:
             # Normalize data access (dict vs object)
             if isinstance(tx, dict):
-                amount = tx.get('amount', 0)
+                amount = tx.get('amount') or 0
                 category = tx.get('category')
             else:
-                amount = getattr(tx, 'amount', 0)
+                amount = getattr(tx, 'amount', 0) or 0
                 category = getattr(tx, 'category', None)
+
+            try:
+                amount = float(amount)
+            except (ValueError, TypeError):
+                amount = 0.0
 
             # Simple but effective check for now: same amount and similar category
             if abs(amount - new_amount) < 1.0 and category == new_category:
