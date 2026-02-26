@@ -1336,27 +1336,49 @@
 
                 const fetchData = async () => {
                     isLoading.value = true;
-                    try {
-                        const date = new Date();
-                        const [reportRes, txRes] = await Promise.all([
-                            api.get(`/reports/monthly?month=${date.getMonth() + 1}&year=${date.getFullYear()}`),
-                            api.get('/transactions?limit=20')
-                        ]);
-                        stats.value = reportRes.data;
-                        transactions.value = txRes.data;
-                        if (currentView.value === 'dashboard') setTimeout(renderChart, 300);
-                        if (isAdmin.value) {
-                            fetchUsers();
-                            fetchAdminStats();
-                            fetchAIStats();
-                            fetchModerationData();
-                            if (isSuperadmin.value) fetchLogs();
+                    const date = new Date();
+                    const month = date.getMonth() + 1;
+                    const year = date.getFullYear();
+
+                    // Parallel but independent fetches to prevent one failure from blocking all
+                    const tasks = [
+                        // Core user data
+                        async () => {
+                            try {
+                                const res = await api.get(`/reports/monthly?month=${month}&year=${year}`);
+                                stats.value = res.data;
+                            } catch (e) { 
+                                console.error("Monthly report failed", e);
+                                showToast("Gagal memuat laporan bulanan", "error");
+                            }
+                        },
+                        async () => {
+                            try {
+                                const res = await api.get('/transactions?limit=20');
+                                transactions.value = res.data;
+                                if (currentView.value === 'dashboard') setTimeout(renderChart, 300);
+                            } catch (e) { 
+                                console.error("Transactions failed", e);
+                                showToast("Gagal memuat transaksi", "error");
+                            }
                         }
-                    } catch (e) {
-                        if (e.response?.status === 401) logout();
-                    } finally {
-                        isLoading.value = false;
+                    ];
+
+                    // Admin data fetches
+                    if (isAdmin.value) {
+                        tasks.push(
+                            async () => { try { const res = await api.get('/admin/users'); users.value = res.data; } catch(e) {} },
+                            async () => { try { const res = await api.get('/admin/stats/system'); adminStats.value = res.data; } catch(e) {} },
+                            async () => { try { const res = await api.get('/admin/stats/ai'); aiStats.value = res.data; } catch(e) {} },
+                            async () => { try { fetchModerationData(); } catch(e) {} }
+                        );
+                        if (isSuperadmin.value) {
+                            tasks.push(async () => { try { const res = await api.get('/admin/logs'); adminLogs.value = res.data; } catch(e) {} });
+                        }
                     }
+
+                    await Promise.all(tasks.map(t => t()));
+                    isLoading.value = false;
                 };
 
                 const fetchModerationData = async () => {

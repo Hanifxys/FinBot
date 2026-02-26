@@ -47,13 +47,34 @@ class DBHandler:
             return (dt - timedelta(days=1)).date()
         return dt.date()
 
+    def _safe_execute(self, query_builder):
+        """Execute a Supabase query with retry logic for connection errors."""
+        max_retries = 5 # Increased retries
+        for attempt in range(max_retries):
+            try:
+                return query_builder.execute()
+            except Exception as e:
+                err_msg = str(e)
+                # Check for common connection/protocol errors
+                # RemoteProtocolError is often caused by HTTP/2 issues with Supabase/Koyeb
+                is_protocol_error = any(kw in err_msg for kw in ["RemoteProtocolError", "ConnectionTerminated", "PROTOCOL_ERROR"])
+                
+                if is_protocol_error and attempt < max_retries - 1:
+                    logging.warning(f"Supabase protocol error detected ({err_msg}), retrying ({attempt+1}/{max_retries})...")
+                    time.sleep(1.0 * (attempt + 1)) # More aggressive backoff
+                    continue
+                
+                # Also log non-protocol errors for debugging
+                logging.error(f"Supabase Execution Error: {err_msg}")
+                raise e
+
     def get_user(self, telegram_id):
         now = time.time()
         cached = self._user_cache.get(telegram_id)
         if cached and (now - cached['ts'] < CACHE_TTL_USER):
             return cached['data']
 
-        response = self.supabase.table(Tables.USERS).select("*").eq("telegram_id", telegram_id).execute()
+        response = self._safe_execute(self.supabase.table(Tables.USERS).select("*").eq("telegram_id", telegram_id))
         if response.data:
             user = type('User', (object,), response.data[0])
             self._user_cache[telegram_id] = {'data': user, 'ts': now}
@@ -62,28 +83,28 @@ class DBHandler:
 
     def get_all_users(self):
         # Heavy query, consider pagination for scale
-        response = self.supabase.table(Tables.USERS).select("*").execute()
+        response = self._safe_execute(self.supabase.table(Tables.USERS).select("*"))
         return [type('User', (object,), item) for item in response.data]
 
     def get_daily_transactions(self, user_id, date_obj):
         start_time = datetime.combine(date_obj, datetime.min.time()).isoformat()
         end_time = datetime.combine(date_obj, datetime.max.time()).isoformat()
         
-        response = self.supabase.table(Tables.TRANSACTIONS).select("*").eq("user_id", user_id)\
-            .gte("date", start_time).lte("date", end_time).execute()
+        response = self._safe_execute(self.supabase.table(Tables.TRANSACTIONS).select("*").eq("user_id", user_id)\
+            .gte("date", start_time).lte("date", end_time))
         return [type('Transaction', (object,), self._decrypt_tx(item)) for item in response.data]
 
     def get_or_create_user(self, telegram_id, username):
         user = self.get_user(telegram_id)
         if not user:
             data = {"telegram_id": telegram_id, "username": username}
-            response = self.supabase.table(Tables.USERS).insert(data).execute()
+            response = self._safe_execute(self.supabase.table(Tables.USERS).insert(data))
             new_user = type('User', (object,), response.data[0])
             self._user_cache[telegram_id] = {'data': new_user, 'ts': time.time()}
             return new_user
         elif getattr(user, 'username', '') != username:
             data = {"username": username}
-            self.supabase.table(Tables.USERS).update(data).eq("telegram_id", telegram_id).execute()
+            self._safe_execute(self.supabase.table(Tables.USERS).update(data).eq("telegram_id", telegram_id))
             # Update cache
             user.username = username
             self._user_cache[telegram_id] = {'data': user, 'ts': time.time()}
@@ -106,7 +127,7 @@ class DBHandler:
             "date": trans_date
         }
         
-        response = self.supabase.table(Tables.TRANSACTIONS).insert(data).execute()
+        response = self._safe_execute(self.supabase.table(Tables.TRANSACTIONS).insert(data))
         
         # Balance Snapshot Logic (Daily)
         try:
@@ -158,19 +179,19 @@ class DBHandler:
         end_date_iso = end_date.isoformat()
         
         # Add index on (user_id, date) in Supabase for speed
-        response = self.supabase.table(Tables.TRANSACTIONS).select("*").eq("user_id", user_id)\
-            .gte("date", start_date).lte("date", end_date_iso).execute()
+        response = self._safe_execute(self.supabase.table(Tables.TRANSACTIONS).select("*").eq("user_id", user_id)\
+            .gte("date", start_date).lte("date", end_date_iso))
         return [type('Transaction', (object,), self._decrypt_tx(item)) for item in response.data]
 
     def set_budget(self, user_id, category, limit_amount):
         now = datetime.now()
-        existing = self.supabase.table(Tables.BUDGETS).select("*")\
+        existing = self._safe_execute(self.supabase.table(Tables.BUDGETS).select("*")\
             .eq("user_id", user_id).eq("category", category)\
-            .eq("month", now.month).eq("year", now.year).execute()
+            .eq("month", now.month).eq("year", now.year))
         
         if existing.data:
             data = {"limit_amount": float(limit_amount)}
-            response = self.supabase.table(Tables.BUDGETS).update(data).eq("id", existing.data[0]['id']).execute()
+            response = self._safe_execute(self.supabase.table(Tables.BUDGETS).update(data).eq("id", existing.data[0]['id']))
         else:
             data = {
                 "user_id": user_id,
@@ -180,7 +201,7 @@ class DBHandler:
                 "year": now.year,
                 "current_usage": 0.0
             }
-            response = self.supabase.table(Tables.BUDGETS).insert(data).execute()
+            response = self._safe_execute(self.supabase.table(Tables.BUDGETS).insert(data))
         
         # Invalidate cache
         cache_key = f"{user_id}:{category}"
@@ -194,30 +215,30 @@ class DBHandler:
         # Check cache first? No, usage needs atomic update or consistency.
         # But we can read from cache if we trust it.
         
-        existing = self.supabase.table(Tables.BUDGETS).select("*")\
+        existing = self._safe_execute(self.supabase.table(Tables.BUDGETS).select("*")\
             .eq("user_id", user_id).eq("category", category)\
-            .eq("month", now.month).eq("year", now.year).execute()
+            .eq("month", now.month).eq("year", now.year))
         
         if existing.data:
             new_usage = existing.data[0]['current_usage'] + float(amount)
-            response = self.supabase.table(Tables.BUDGETS).update({"current_usage": new_usage})\
-                .eq("id", existing.data[0]['id']).execute()
+            response = self._safe_execute(self.supabase.table(Tables.BUDGETS).update({"current_usage": new_usage})\
+                .eq("id", existing.data[0]['id']))
             return type('Budget', (object,), response.data[0])
         return None
 
     def get_budget(self, user_id, category):
         now = datetime.now()
-        response = self.supabase.table(Tables.BUDGETS).select("*")\
+        response = self._safe_execute(self.supabase.table(Tables.BUDGETS).select("*")\
             .eq("user_id", user_id).eq("category", category)\
-            .eq("month", now.month).eq("year", now.year).execute()
+            .eq("month", now.month).eq("year", now.year))
         if response.data:
             return type('Budget', (object,), response.data[0])
         return None
 
     def get_user_budgets(self, user_id):
         now = datetime.now()
-        response = self.supabase.table(Tables.BUDGETS).select("*")\
-            .eq("user_id", user_id).eq("month", now.month).eq("year", now.year).execute()
+        response = self._safe_execute(self.supabase.table(Tables.BUDGETS).select("*")\
+            .eq("user_id", user_id).eq("month", now.month).eq("year", now.year))
         return [type('Budget', (object,), item) for item in response.data]
 
     def get_transactions_history(self, user_id, limit=50, category=None, start_date=None, end_date=None, min_amount=None):
@@ -232,24 +253,24 @@ class DBHandler:
         if min_amount:
             query = query.gte("amount", float(min_amount))
             
-        response = query.order("date", desc=True).limit(limit).execute()
+        response = self._safe_execute(query.order("date", desc=True).limit(limit))
         return [type('Transaction', (object,), self._decrypt_tx(item)) for item in response.data]
 
     def delete_transaction(self, user_id, transaction_id):
-        response = self.supabase.table(Tables.TRANSACTIONS).select("*")\
-            .eq("id", transaction_id).eq("user_id", user_id).execute()
+        response = self._safe_execute(self.supabase.table(Tables.TRANSACTIONS).select("*")\
+            .eq("id", transaction_id).eq("user_id", user_id))
         if response.data:
             tx = response.data[0]
             if tx['type'] == 'expense':
                 self.update_budget_usage(user_id, tx['category'], -tx['amount'])
             
-            self.supabase.table(Tables.TRANSACTIONS).delete().eq("id", transaction_id).execute()
+            self._safe_execute(self.supabase.table(Tables.TRANSACTIONS).delete().eq("id", transaction_id))
             return True
         return False
 
     def undo_last_transaction(self, user_id):
-        response = self.supabase.table(Tables.TRANSACTIONS).select("*")\
-            .eq("user_id", user_id).order("id", desc=True).limit(1).execute()
+        response = self._safe_execute(self.supabase.table(Tables.TRANSACTIONS).select("*")\
+            .eq("user_id", user_id).order("id", desc=True).limit(1))
         if response.data:
             return self.delete_transaction(user_id, response.data[0]['id'])
         return False
@@ -266,8 +287,8 @@ class DBHandler:
 
     def get_monthly_report(self, user_id, month, year):
         start_date = datetime(year, month, 1).isoformat()
-        response = self.supabase.table(Tables.TRANSACTIONS).select("*")\
-            .eq("user_id", user_id).gte("date", start_date).execute()
+        response = self._safe_execute(self.supabase.table(Tables.TRANSACTIONS).select("*")\
+            .eq("user_id", user_id).gte("date", start_date))
         return [type('Transaction', (object,), self._decrypt_tx(item)) for item in response.data]
 
     # --- SAVING GOALS ---
@@ -280,19 +301,19 @@ class DBHandler:
             "is_active": 1,
             "current_amount": 0.0
         }
-        response = self.supabase.table(Tables.SAVING_GOALS).insert(data).execute()
+        response = self._safe_execute(self.supabase.table(Tables.SAVING_GOALS).insert(data))
         return type('SavingGoal', (object,), response.data[0])
 
     def get_user_saving_goals(self, user_id, active_only=True):
         query = self.supabase.table(Tables.SAVING_GOALS).select("*").eq("user_id", user_id)
         if active_only:
             query = query.eq("is_active", 1)
-        response = query.execute()
+        response = self._safe_execute(query)
         return [type('SavingGoal', (object,), item) for item in response.data]
 
     def update_saving_progress(self, user_id, goal_id, amount):
-        response = self.supabase.table(Tables.SAVING_GOALS).select("*")\
-            .eq("id", goal_id).eq("user_id", user_id).execute()
+        response = self._safe_execute(self.supabase.table(Tables.SAVING_GOALS).select("*")\
+            .eq("id", goal_id).eq("user_id", user_id))
         if response.data:
             goal = response.data[0]
             new_amount = goal['current_amount'] + float(amount)
@@ -301,15 +322,15 @@ class DBHandler:
                 is_active = 0
             
             update_data = {"current_amount": new_amount, "is_active": is_active}
-            update_response = self.supabase.table(Tables.SAVING_GOALS).update(update_data).eq("id", goal_id).execute()
+            update_response = self._safe_execute(self.supabase.table(Tables.SAVING_GOALS).update(update_data).eq("id", goal_id))
             return type('SavingGoal', (object,), update_response.data[0])
         return None
 
     # --- EXPORT ---
     def export_transactions_to_csv(self, user_id, filepath):
         import pandas as pd
-        response = self.supabase.table(Tables.TRANSACTIONS).select("*")\
-            .eq("user_id", user_id).order("date", desc=True).execute()
+        response = self._safe_execute(self.supabase.table(Tables.TRANSACTIONS).select("*")\
+            .eq("user_id", user_id).order("date", desc=True))
         
         if not response.data:
             return None
@@ -334,12 +355,12 @@ class DBHandler:
 
     def add_monthly_income(self, user_id, amount):
         now = datetime.now()
-        existing = self.supabase.table(Tables.MONTHLY_INCOMES).select("*")\
-            .eq("user_id", user_id).eq("month", now.month).eq("year", now.year).execute()
+        existing = self._safe_execute(self.supabase.table(Tables.MONTHLY_INCOMES).select("*")\
+            .eq("user_id", user_id).eq("month", now.month).eq("year", now.year))
         
         if existing.data:
-            response = self.supabase.table(Tables.MONTHLY_INCOMES).update({"amount": float(amount)})\
-                .eq("id", existing.data[0]['id']).execute()
+            response = self._safe_execute(self.supabase.table(Tables.MONTHLY_INCOMES).update({"amount": float(amount)})\
+                .eq("id", existing.data[0]['id']))
         else:
             data = {
                 "user_id": user_id,
@@ -347,13 +368,13 @@ class DBHandler:
                 "month": now.month,
                 "year": now.year
             }
-            response = self.supabase.table(Tables.MONTHLY_INCOMES).insert(data).execute()
+            response = self._safe_execute(self.supabase.table(Tables.MONTHLY_INCOMES).insert(data))
         
         return type('MonthlyIncome', (object,), response.data[0])
 
     def get_latest_income(self, user_id):
-        response = self.supabase.table(Tables.MONTHLY_INCOMES).select("*")\
-            .eq("user_id", user_id).order("id", desc=True).limit(1).execute()
+        response = self._safe_execute(self.supabase.table(Tables.MONTHLY_INCOMES).select("*")\
+            .eq("user_id", user_id).order("id", desc=True).limit(1))
         if response.data:
             return type('MonthlyIncome', (object,), response.data[0])
         return None
@@ -362,19 +383,19 @@ class DBHandler:
     def get_yearly_report(self, user_id, year):
         start_date = datetime(year, 1, 1).isoformat()
         end_date = datetime(year + 1, 1, 1).isoformat()
-        response = self.supabase.table(Tables.TRANSACTIONS).select("*")\
-            .eq("user_id", user_id).gte("date", start_date).lt("date", end_date).execute()
+        response = self._safe_execute(self.supabase.table(Tables.TRANSACTIONS).select("*")\
+            .eq("user_id", user_id).gte("date", start_date).lt("date", end_date))
         return [type('Transaction', (object,), self._decrypt_tx(item)) for item in response.data]
 
     # --- Budget thresholds ---
     def set_budget_threshold(self, user_id, category, warn_threshold: float, limit_threshold: float):
         now = datetime.now()
-        existing = self.supabase.table(Tables.BUDGETS).select("*")\
+        existing = self._safe_execute(self.supabase.table(Tables.BUDGETS).select("*")\
             .eq("user_id", user_id).eq("category", category)\
-            .eq("month", now.month).eq("year", now.year).execute()
+            .eq("month", now.month).eq("year", now.year))
         data = {"warn_threshold": float(warn_threshold), "limit_threshold": float(limit_threshold)}
         if existing.data:
-            self.supabase.table(Tables.BUDGETS).update(data).eq("id", existing.data[0]['id']).execute()
+            self._safe_execute(self.supabase.table(Tables.BUDGETS).update(data).eq("id", existing.data[0]['id']))
         else:
             base = {
                 "user_id": user_id,
@@ -385,7 +406,7 @@ class DBHandler:
                 "current_usage": 0.0
             }
             base.update(data)
-            self.supabase.table(Tables.BUDGETS).insert(base).execute()
+            self._safe_execute(self.supabase.table(Tables.BUDGETS).insert(base))
         return True
 
     def get_last_transaction_date(self, user_id):
@@ -394,8 +415,8 @@ class DBHandler:
         Returns datetime object or None if no transactions found.
         """
         try:
-            response = self.supabase.table(Tables.TRANSACTIONS).select("date")\
-                .eq("user_id", user_id).order("date", desc=True).limit(1).execute()
+            response = self._safe_execute(self.supabase.table(Tables.TRANSACTIONS).select("date")\
+                .eq("user_id", user_id).order("date", desc=True).limit(1))
             
             if response.data:
                 date_val = response.data[0]['date']
@@ -425,7 +446,7 @@ class DBHandler:
     # --- ADMIN METHODS ---
     def update_user_role(self, telegram_id, role):
         data = {"role": role}
-        self.supabase.table(Tables.USERS).update(data).eq("telegram_id", telegram_id).execute()
+        self._safe_execute(self.supabase.table(Tables.USERS).update(data).eq("telegram_id", telegram_id))
         # Invalidate cache
         if telegram_id in self._user_cache:
             del self._user_cache[telegram_id]
@@ -433,7 +454,7 @@ class DBHandler:
 
     def update_user_status(self, telegram_id, is_active):
         data = {"is_active": is_active}
-        self.supabase.table(Tables.USERS).update(data).eq("telegram_id", telegram_id).execute()
+        self._safe_execute(self.supabase.table(Tables.USERS).update(data).eq("telegram_id", telegram_id))
         # Invalidate cache
         if telegram_id in self._user_cache:
             del self._user_cache[telegram_id]
@@ -465,7 +486,7 @@ class DBHandler:
             "timestamp": datetime.now().isoformat()
         }
         try:
-            self.supabase.table(Tables.ADMIN_LOGS).insert(data).execute()
+            self._safe_execute(self.supabase.table(Tables.ADMIN_LOGS).insert(data))
         except Exception as e:
             logging.error(f"Failed to log admin action: {e}")
         return True
@@ -473,8 +494,8 @@ class DBHandler:
     def get_admin_logs(self, limit=100):
         """Fetch audit logs, sorted by most recent."""
         try:
-            response = self.supabase.table(Tables.ADMIN_LOGS).select("*")\
-                .order("timestamp", desc=True).limit(limit).execute()
+            response = self._safe_execute(self.supabase.table(Tables.ADMIN_LOGS).select("*")\
+                .order("timestamp", desc=True).limit(limit))
             return response.data
         except Exception as e:
             logging.error(f"Failed to fetch admin logs: {e}")
@@ -482,8 +503,8 @@ class DBHandler:
 
     def get_flagged_transactions(self, limit=50):
         try:
-            response = self.supabase.table(Tables.FLAGGED_TRANSACTIONS).select("*, transactions(*)")\
-                .order("created_at", desc=True).limit(limit).execute()
+            response = self._safe_execute(self.supabase.table(Tables.FLAGGED_TRANSACTIONS).select("*, transactions(*)")\
+                .order("created_at", desc=True).limit(limit))
             return response.data
         except Exception as e:
             logging.error(f"Failed to fetch flagged transactions: {e}")
@@ -506,8 +527,8 @@ class DBHandler:
 
     def get_dispute_tickets(self, limit=50):
         try:
-            response = self.supabase.table(Tables.DISPUTES).select("*")\
-                .order("created_at", desc=True).limit(limit).execute()
+            response = self._safe_execute(self.supabase.table(Tables.DISPUTES).select("*")\
+                .order("created_at", desc=True).limit(limit))
             return response.data
         except Exception as e:
             logging.error(f"Failed to fetch disputes: {e}")
@@ -515,7 +536,7 @@ class DBHandler:
 
     def get_moderation_settings(self):
         try:
-            response = self.supabase.table(Tables.MODERATION_SETTINGS).select("*").execute()
+            response = self._safe_execute(self.supabase.table(Tables.MODERATION_SETTINGS).select("*"))
             if response.data:
                 return response.data[0]
             return {
@@ -537,9 +558,9 @@ class DBHandler:
             # Try to update if exists, else insert
             existing = self.get_moderation_settings()
             if "id" in existing:
-                self.supabase.table(Tables.MODERATION_SETTINGS).update(settings).eq("id", existing["id"]).execute()
+                self._safe_execute(self.supabase.table(Tables.MODERATION_SETTINGS).update(settings).eq("id", existing["id"]))
             else:
-                self.supabase.table(Tables.MODERATION_SETTINGS).insert(settings).execute()
+                self._safe_execute(self.supabase.table(Tables.MODERATION_SETTINGS).insert(settings))
             return True
         except Exception as e:
             logging.error(f"Failed to update moderation settings: {e}")
@@ -549,7 +570,7 @@ class DBHandler:
         """Update the status of a flagged transaction."""
         try:
             data = {"status": status, "reviewed_by": admin_id, "reviewed_at": datetime.now().isoformat()}
-            self.supabase.table(Tables.FLAGGED_TRANSACTIONS).update(data).eq("id", flag_id).execute()
+            self._safe_execute(self.supabase.table(Tables.FLAGGED_TRANSACTIONS).update(data).eq("id", flag_id))
             return True
         except Exception as e:
             logging.error(f"Failed to moderate transaction: {e}")
@@ -563,7 +584,7 @@ class DBHandler:
                 "resolved_by": admin_id, 
                 "resolved_at": datetime.now().isoformat()
             }
-            self.supabase.table(Tables.DISPUTES).update(data).eq("id", dispute_id).execute()
+            self._safe_execute(self.supabase.table(Tables.DISPUTES).update(data).eq("id", dispute_id))
             return True
         except Exception as e:
             logging.error(f"Failed to resolve dispute: {e}")

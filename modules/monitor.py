@@ -144,12 +144,22 @@ def get_current_user(
     FastAPI dependency that resolves the authenticated user_id from a Bearer token.
     Supports a static 'admin' backdoor for development/emergency access.
     """
-    if not authorization or not authorization.startswith("Bearer "):
-        logger.warning(f"Auth failed: Missing or malformed Bearer token. Header: {authorization}")
-        raise HTTPException(status_code=401, detail="Missing or malformed Bearer token")
+    if not authorization:
+        logger.warning("Auth failed: Authorization header missing")
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
 
-    token = authorization.split(" ", 1)[1].strip()
-    logger.info(f"Auth attempt with token: {token[:5]}...")
+    # More robust header parsing (handle case-insensitive 'bearer' and extra spaces)
+    try:
+        auth_type, token = authorization.split(None, 1)
+        if auth_type.lower() != "bearer":
+            logger.warning(f"Auth failed: Invalid auth type {auth_type}")
+            raise HTTPException(status_code=401, detail="Invalid authorization type")
+        
+        token = token.strip()
+        logger.info(f"Auth attempt: token={token[:5]}... (full_len={len(token)})")
+    except ValueError:
+        logger.warning(f"Auth failed: Malformed Authorization header: {authorization}")
+        raise HTTPException(status_code=401, detail="Malformed Authorization header")
 
     # Backdoor: 'admin' static token
     if token == "admin":
