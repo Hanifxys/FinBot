@@ -8,7 +8,7 @@ from modules.rules import RuleEngine
 from modules.ai_engine import AIEngine
 from utils.visuals import VisualReporter
 
-# Shared instances
+# Initialize Shared instances lazily or properly
 db = DBHandler()
 ocr = OCRProcessor()
 nlp = NLPProcessor()
@@ -19,6 +19,10 @@ rules = RuleEngine()
 visual_reporter = VisualReporter()
 
 def init_components():
-    # This is now handled by module-level instantiation
-    # but kept for backward compatibility if needed
+    """
+    Initialize components. 
+    Database initialization is now handled by Supabase, 
+    so this is mostly for backward compatibility.
+    """
+    logging.info("Core components initialized with Supabase API")
     pass
