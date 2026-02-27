@@ -14,6 +14,80 @@ from modules.redis_mgr import RedisManager
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Monthly Wrapper (Spotify-style)
+# ---------------------------------------------------------------------------
+
+async def monthly_wrapper_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Monthly wrapper job (runs 1st of every month at 09:00 WIB).
+    Sends personalized monthly summary to all users.
+    """
+    now = datetime.now()
+    # If it's the 1st, we summarize PREVIOUS month
+    target_date = now - timedelta(days=5) # Go back to previous month
+    month = target_date.month
+    year = target_date.year
+    
+    users = db.get_all_users()
+    logger.info("monthly_wrapper_job started — summarizing %d/%d for %d users", month, year, len(users))
+
+    from modules.analysis import ExpenseAnalyzer
+    analyzer_obj = ExpenseAnalyzer(db)
+    
+    success = 0
+    failed = 0
+    
+    for user in users:
+        try:
+            # Check if already sent
+            existing = db.get_monthly_wrapper(user.id, month, year)
+            if existing and existing['status'] == 'sent':
+                continue
+                
+            wrapper_data = analyzer_obj.generate_monthly_wrapper(user.id, month, year)
+            if not wrapper_data:
+                continue
+            
+            # Save as pending first (Tracking)
+            db.save_monthly_wrapper(user.id, month, year, wrapper_data, status="pending")
+            
+            # Format and send
+            msg = _format_wrapper_message(user, wrapper_data)
+            await context.bot.send_message(
+                chat_id=user.telegram_id,
+                text=msg,
+                parse_mode="Markdown"
+            )
+            
+            # Mark as sent
+            db.save_monthly_wrapper(user.id, month, year, wrapper_data, status="sent")
+            success += 1
+            
+        except Exception as e:
+            logger.error(f"Failed to send monthly wrapper to {user.id}: {e}")
+            db.save_monthly_wrapper(user.id, month, year, wrapper_data if 'wrapper_data' in locals() else {}, status="failed")
+            failed += 1
+            
+    logger.info("monthly_wrapper_job done — success=%d failed=%d", success, failed)
+
+
+def _format_wrapper_message(user, data: dict) -> str:
+    """Formats the monthly wrapper message."""
+    month_name = datetime(2000, data['month'], 1).strftime('%B')
+    
+    lines = [
+        f"🌟 **FINBOT WRAPPED: {month_name.upper()} {data['year']}** 🌟\n",
+        f"Halo {user.username or 'Sobat Cuan'}! Bulan lalu seru banget ya. Ini rangkuman finansialmu:\n",
+        f"🏆 Gelar Kamu: **{data['title']}**\n",
+        f"📊 Total Pengeluaran: *Rp{data['total_spend']:,.0f}*",
+        f"🏷️ Kategori Teratas: *{data['top_category']}* (Rp{data['top_category_spend']:,.0f})",
+        f"🏦 Saving Rate: *{data['saving_rate']:.1f}%*",
+        f"📝 Total Transaksi: *{data['transaction_count']}*",
+        "\nTetap semangat kontrol keuanganmu di bulan ini ya! 💪"
+    ]
+    return "\n".join(lines)
+
+# ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 

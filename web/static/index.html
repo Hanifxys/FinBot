@@ -348,6 +348,21 @@
                                 <div v-if="currentView === 'dashboard'" class="space-y-8">
                                     <!-- KPI Cards -->
                                     <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                        <div v-if="isAdmin" class="glass-card p-6 rounded-2xl relative overflow-hidden group border-l-4 border-brand-500">
+                                            <div class="flex justify-between items-start mb-4">
+                                                <div>
+                                                    <p class="text-slate-400 text-xs font-medium uppercase tracking-wider">Monthly Wrapped Status</p>
+                                                    <h3 class="text-2xl font-bold text-white mt-1 font-mono tracking-tight">{{ wrapperStats.sent }} / {{ wrapperStats.total }}</h3>
+                                                </div>
+                                                <div class="p-2 rounded-lg bg-brand-500/10">
+                                                    <i class="fas fa-gift text-brand-500"></i>
+                                                </div>
+                                            </div>
+                                            <div class="flex items-center gap-2 text-xs">
+                                                <span class="text-brand-400 font-medium">{{ ((wrapperStats.sent / (wrapperStats.total || 1)) * 100).toFixed(0) }}% SENT</span>
+                                                <span class="text-danger-500 font-bold" v-if="wrapperStats.failed > 0">{{ wrapperStats.failed }} FAILED</span>
+                                            </div>
+                                        </div>
                                         <div v-for="(card, index) in kpiCards" :key="index" class="glass-card p-6 rounded-2xl relative overflow-hidden group">
                                             <div class="flex justify-between items-start mb-4">
                                                 <div>
@@ -1653,6 +1668,16 @@
                     return { sent, failed, successRate: (sent / denom) * 100 };
                 });
 
+                const wrapperStats = ref({ total: 0, sent: 0, failed: 0, pending: 0 });
+                const fetchWrapperStats = async () => {
+                    try {
+                        const res = await axios.get(`${apiBase}/admin/wrapper/stats`, { headers: { Authorization: `Bearer ${token.value}` } });
+                        wrapperStats.value = res.data;
+                    } catch (e) {
+                        console.error("Failed to fetch wrapper stats", e);
+                    }
+                };
+
                 const userSearch = ref('');
                 const flaggedTransactions = ref([]);
                 const suspiciousUsers = ref([]);
@@ -2415,7 +2440,10 @@
                 watch(currentView, (newView) => {
                     if (newView === 'dashboard') {
                         setTimeout(renderChart, 300);
-                        if (isAdmin.value) fetchAdminStats();
+                        if (isAdmin.value) {
+                            fetchAdminStats();
+                            fetchWrapperStats();
+                        }
                     } else if (newView === 'admin_users') {
                         if (isAdmin.value) fetchUsers();
                     } else if (newView === 'admin_ai') {
@@ -2546,7 +2574,7 @@
                     flaggedTransactions, suspiciousUsers, disputes, modSettings, modActiveTab, modTabs, flaggedCount,
                     isDarkTheme, normalizedRole, profileMenuOpen, profileMenuRoot, profileAvatarUrl,
                     login, logout, fetchData, fetchHealth, setView, toggleTheme, updateUserRole, toggleUserStatus, sendBroadcast, fetchLogs, fetchAdminStats, fetchAIStats, fetchBroadcastTemplates, fetchBroadcastHistory, fetchBroadcastScheduled, cancelBroadcastScheduled, refreshBroadcastAudienceEstimate, toggleBroadcastRole, applyBroadcastTemplate, insertBroadcastVariable, resetBroadcastVariables, addBroadcastButton, removeBroadcastButton, toggleBroadcastPreview, openPrivateMessage, sendPrivateMessage, openUserDrawer, removeToast,
-                    toggleProfileMenu, onProfileAction,
+                    toggleProfileMenu, onProfileAction, wrapperStats, fetchWrapperStats,
                     fetchModerationData, saveModSettings, resolveFlag,
                     getRoleClass, formatCurrency, formatCompact, formatDate, formatDateShort, formatDateRelative, getCategoryIcon
                 };

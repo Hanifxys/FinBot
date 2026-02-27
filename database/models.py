@@ -42,3 +42,4 @@ class Tables:
     FLAGGED_TRANSACTIONS = "flagged_transactions"
     DISPUTES = "disputes"
     MODERATION_SETTINGS = "moderation_settings"
+    MONTHLY_WRAPPERS = "monthly_wrappers" # Spotify-style monthly updates

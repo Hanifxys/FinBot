@@ -199,6 +199,54 @@ class ExpenseAnalyzer:
         
         return insight
 
+    def generate_monthly_wrapper(self, user_id, month, year):
+        """
+        Spotify-style monthly summary logic.
+        Identifies top category, total spend, saving rate, and persona-based message.
+        """
+        transactions = self.db.get_monthly_report(user_id, month, year)
+        if not transactions:
+            return None
+            
+        df = pd.DataFrame([{
+            'amount': t.amount,
+            'category': t.category,
+            'type': t.type
+        } for t in transactions])
+        
+        expenses = df[df['type'] == 'expense']
+        if expenses.empty:
+            return None
+            
+        total_spend = float(expenses['amount'].sum())
+        top_cat = expenses.groupby('category')['amount'].sum().idxmax()
+        top_cat_amount = float(expenses.groupby('category')['amount'].sum().max())
+        
+        income_data = self.db.get_latest_income(user_id)
+        income_val = float(income_data.amount) if income_data else 0.0
+        saving_rate = ((income_val - total_spend) / income_val * 100) if income_val > 0 else 0.0
+        
+        # User title based on saving rate
+        if saving_rate > 30:
+            title = "The Saver 🛡️"
+        elif saving_rate > 10:
+            title = "The Balanced ⚖️"
+        elif total_spend > income_val and income_val > 0:
+            title = "The Big Spender 💸"
+        else:
+            title = "The Explorer 🧭"
+            
+        return {
+            "month": month,
+            "year": year,
+            "total_spend": total_spend,
+            "top_category": top_cat,
+            "top_category_spend": top_cat_amount,
+            "saving_rate": saving_rate,
+            "title": title,
+            "transaction_count": len(transactions)
+        }
+
     async def get_ai_trend_analysis(self, user_id):
         """
         Premium Trend Analysis using the Elite AI Engine.

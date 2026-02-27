@@ -298,6 +298,49 @@ class DBHandler:
             "name": name,
             "target_amount": float(target_amount),
             "target_date": target_date.isoformat() if isinstance(target_date, datetime) else target_date,
+            "current_amount": 0.0,
+            "is_active": True
+        }
+        response = self._safe_execute(self.supabase.table(Tables.SAVING_GOALS).insert(data))
+        return type('SavingGoal', (object,), response.data[0])
+
+    def get_monthly_wrapper(self, user_id, month, year):
+        """Fetch the Spotify-style monthly wrapper if it exists."""
+        response = self._safe_execute(self.supabase.table(Tables.MONTHLY_WRAPPERS).select("*")\
+            .eq("user_id", user_id).eq("month", month).eq("year", year))
+        if response.data:
+            return response.data[0]
+        return None
+
+    def save_monthly_wrapper(self, user_id, month, year, content, status="pending"):
+        """Save/Update a monthly wrapper record."""
+        data = {
+            "user_id": user_id,
+            "month": month,
+            "year": year,
+            "content": content,
+            "status": status,
+            "updated_at": datetime.now().isoformat()
+        }
+        
+        # Check if exists
+        existing = self.get_monthly_wrapper(user_id, month, year)
+        if existing:
+            response = self._safe_execute(self.supabase.table(Tables.MONTHLY_WRAPPERS).update(data).eq("id", existing['id']))
+        else:
+            data["created_at"] = datetime.now().isoformat()
+            response = self._safe_execute(self.supabase.table(Tables.MONTHLY_WRAPPERS).insert(data))
+        return response.data[0]
+
+    def get_wrapper_stats(self, month, year):
+        """Aggregate stats for the admin dashboard."""
+        response = self._safe_execute(self.supabase.table(Tables.MONTHLY_WRAPPERS).select("status")\
+            .eq("month", month).eq("year", year))
+        
+        stats = {"total": len(response.data), "sent": 0, "failed": 0, "pending": 0}
+        for r in response.data:
+            stats[r['status']] = stats.get(r['status'], 0) + 1
+        return stats
             "is_active": 1,
             "current_amount": 0.0
         }

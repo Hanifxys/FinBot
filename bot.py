@@ -22,7 +22,7 @@ from handlers.transactions import undo, hapus_transaksi, history, export_data
 from handlers.saving import set_target, add_savings, list_targets
 from handlers.messages import handle_message, handle_photo, handle_voice, handle_document
 from handlers.callbacks import handle_callback
-from handlers.digest import daily_digest, smart_reminder_check
+from handlers.digest import daily_digest, smart_reminder_check, monthly_wrapper_job
 from middlewares.logging import log_update
 from telegram import BotCommand
 
@@ -172,6 +172,8 @@ if __name__ == '__main__':
     job_queue = application.job_queue
     # Daily Digest at 21:00 WIB (14:00 UTC)
     job_queue.run_daily(daily_digest, time(hour=14, minute=0, tzinfo=timezone.utc))
+    # Monthly Wrapper on 1st of every month at 09:00 WIB (02:00 UTC)
+    job_queue.run_monthly(monthly_wrapper_job, when=time(hour=2, minute=0, tzinfo=timezone.utc), day=1)
     # 24-hour Intelligent Reminder Check (runs every hour to check inactive users)
     job_queue.run_repeating(smart_reminder_check, interval=3600, first=60)
     

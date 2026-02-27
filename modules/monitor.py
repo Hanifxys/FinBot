@@ -446,6 +446,17 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
             raise HTTPException(status_code=403, detail="Admin only")
         return deps.db.get_dispute_tickets()
 
+    @app.get("/admin/wrapper/stats", tags=["admin"])
+    def admin_get_wrapper_stats(month: int = None, year: int = None, user_id: int = Depends(get_current_user)):
+        if not deps.db.has_permission(user_id, "view_reports"):
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        
+        now = datetime.now()
+        target_month = month or (now - timedelta(days=5)).month
+        target_year = year or (now - timedelta(days=5)).year
+        
+        return deps.db.get_wrapper_stats(target_month, target_year)
+
     @app.get("/admin/moderation/settings", tags=["admin"])
     def admin_get_mod_settings(user_id: int = Depends(get_current_user)):
         if not deps.db.is_admin(user_id):
