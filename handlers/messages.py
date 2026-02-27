@@ -38,6 +38,9 @@ class Config:
     OCR_MAX_MEMORY_PERCENT = float(os.getenv("OCR_MAX_MEMORY_PERCENT", "80"))
     CANCEL_CANDIDATE_LIMIT = int(os.getenv("CANCEL_CANDIDATE_LIMIT", "30"))
     AI_TIMEOUT_SECONDS = float(os.getenv("AI_TIMEOUT_SECONDS", "25"))
+    NLP_CONTEXT_TURNS = int(os.getenv("NLP_CONTEXT_TURNS", "4"))
+    NLP_METRICS_ENABLED = os.getenv("NLP_METRICS_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    NLP_SLOW_MS = float(os.getenv("NLP_SLOW_MS", "350"))
     TUTORIAL_TIMEOUT_SECONDS = int(os.getenv("TUTORIAL_TIMEOUT_SECONDS", "900"))
     TUTORIAL_TOTAL_STEPS = 5
 
@@ -150,6 +153,46 @@ def _looks_like_explain_spending(text: str) -> bool:
     t = (text or "").lower()
     keys = ["diatas rata", "di atas rata", "rata2", "rata-rata", "datanya dari mana", "data nya dari mana", "dari mana", "overspending", "boros"]
     return any(k in t for k in keys)
+
+def _build_context_messages(context_buffer: dict) -> List[str]:
+    """Build a compact multi-turn context list for transformer-aware classifiers."""
+    messages: List[str] = []
+    data = context_buffer.get("data") or {}
+    if data:
+        hint_parts = []
+        if data.get("merchant"):
+            hint_parts.append(str(data.get("merchant")))
+        if data.get("category"):
+            hint_parts.append(str(data.get("category")))
+        if data.get("amount"):
+            hint_parts.append(str(int(float(data.get("amount")))))
+        if hint_parts:
+            messages.append(" ".join(hint_parts))
+    history = context_buffer.get("history") or []
+    if isinstance(history, list):
+        for item in history[-Config.NLP_CONTEXT_TURNS :]:
+            if isinstance(item, str) and item.strip():
+                messages.append(item.strip())
+    return messages[-Config.NLP_CONTEXT_TURNS :]
+
+def _log_nlp_metrics(user_id: int, text: str, extracted: dict, metrics: dict):
+    if not Config.NLP_METRICS_ENABLED:
+        return
+    payload = {
+        "event": "nlp_router_metrics",
+        "user_id": user_id,
+        "text_len": len(text or ""),
+        "intent": extracted.get("intent"),
+        "confidence": extracted.get("confidence"),
+        "is_partial": bool(extracted.get("is_partial")),
+        "needs_disambiguation": bool(extracted.get("needs_disambiguation")),
+        "timings_ms": metrics,
+    }
+    total_ms = float(metrics.get("total", 0.0))
+    if total_ms >= Config.NLP_SLOW_MS:
+        logger.warning("SLOW_NLP_PIPELINE %s", json.dumps(payload, ensure_ascii=False))
+    else:
+        logger.info("NLP_PIPELINE %s", json.dumps(payload, ensure_ascii=False))
 
 def _score_cancel_candidate(tx, amount_hint=None, merchant_hint=None, text_hint=None) -> float:
     """Scores a transaction to determine if it matches the cancellation request."""
@@ -690,15 +733,46 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
         user_db = db.get_or_create_user(user_id, update.effective_user.username)
         
         # --- Context Memory Layer (Short-term Brain) ---
+        started_total = time.perf_counter()
         context_buffer = context.user_data.get("context_buffer", {})
         last_ts = context_buffer.get("ts", 0)
         current_ts = datetime.now().timestamp()
+        metrics_ms: Dict[str, float] = {}
         
         # If last message was < 5 minutes ago, try to merge context
         is_follow_up = (current_ts - last_ts) < 300 
         
-        # --- Intelligent Input Parsing & Validation ---
-        extracted = nlp.extract_transaction_data(text)
+        # --- Intelligent Input Parsing & Validation (Transformer + Context aware) ---
+        t0 = time.perf_counter()
+        context_messages = _build_context_messages(context_buffer)
+        classification = nlp.classify_intent_with_context(text, context_messages=context_messages)
+        metrics_ms["classify"] = round((time.perf_counter() - t0) * 1000.0, 2)
+
+        intent = classification.get("intent") or "UNKNOWN"
+        forced_type = classification.get("type")
+        passthrough_intents = {
+            "ROAST_WALLET", "EXPORT_DATA", "WHAT_IF", "SET_MODE", "SET_REMINDER",
+            "CHECK_BUDGET", "SET_GAJI", "UNDO", "EXECUTIVE_MODE", "ELITE_ANALYSIS",
+            "INVESTMENT_OPPS", "DOC_ANALYSIS", "SET_BUDGET", "SET_BUDGET_ALERT",
+            "QUERY_SUMMARY", "SHARING_INFO", "GREETING", "SMALL_TALK", "HELP",
+            "STOP_NOTIF", "CANCEL", "ASK_FOR_NOTIF", "EDIT_TRANSACTION"
+        }
+
+        t1 = time.perf_counter()
+        if intent in passthrough_intents:
+            extracted = classification
+        else:
+            extracted = nlp.extract_transaction_data_with_context(
+                text,
+                context_messages=context_messages,
+                forced_type=forced_type
+            )
+            if isinstance(classification, dict):
+                for k in ("sentiment", "language", "response", "value", "attention", "source"):
+                    if classification.get(k) is not None and extracted.get(k) is None:
+                        extracted[k] = classification.get(k)
+            extracted["intent"] = extracted.get("intent") or intent or "ADD_TRANSACTION"
+        metrics_ms["extract"] = round((time.perf_counter() - t1) * 1000.0, 2)
         intent = extracted.get("intent")
 
         # Merge logic: if this message is partial (e.g. "di mixue"), merge with previous data
@@ -746,9 +820,15 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
             )
             if looks_like_partial_tx:
                 # Keep partial payload so user can complete it in next message.
+                history = context_buffer.get("history") or []
+                if not isinstance(history, list):
+                    history = []
+                history.append((text or "").strip())
+                history = history[-Config.NLP_CONTEXT_TURNS :]
                 context.user_data["context_buffer"] = {
                     "ts": current_ts,
-                    "data": extracted
+                    "data": extracted,
+                    "history": history
                 }
                 await update.message.reply_text(f"⚠️ {extracted['error']}")
                 return
@@ -759,10 +839,19 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
 
         # Save current state to context buffer
         if persist_context:
+            history = context_buffer.get("history") or []
+            if not isinstance(history, list):
+                history = []
+            history.append((text or "").strip())
+            history = history[-Config.NLP_CONTEXT_TURNS :]
             context.user_data["context_buffer"] = {
                 "ts": current_ts,
-                "data": extracted
+                "data": extracted,
+                "history": history
             }
+
+        metrics_ms["total"] = round((time.perf_counter() - started_total) * 1000.0, 2)
+        _log_nlp_metrics(user_id, text, extracted, metrics_ms)
         
         # --- Intent Routing (Fixed) ---
         if intent == "STOP_NOTIF":
