@@ -161,13 +161,13 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     help_text = (
         "💡 *Pusat Bantuan FinBot*\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "Halo! Aku asisten finansialmu. Kamu bisa mengelola keuangan dengan mudah di sini.\n\n"
-        "✨ *Cara Cepat Pencatatan:*\n"
-        "Langsung ketik saja, contoh:\n"
-        "• `kopi 25rb`\n"
-        "• `gaji masuk 10jt`\n"
-        "• `bayar listrik 200k`\n\n"
-        "Gunakan menu di bawah untuk fitur lainnya! 👇"
+        "Halo! Aku asisten finansialmu. Kamu bisa mengobrol denganku secara natural atau menggunakan menu di bawah.\n\n"
+        "✨ *Apa yang bisa aku bantu?*\n"
+        "• *Catat*: `kopi 25rb` atau `gaji 10jt`\n"
+        "• *Pantau*: `sisa budget` atau `laporan bulan ini`\n"
+        "• *Kelola*: `riwayat transaksi` atau `hapus transaksi #123`\n"
+        "• *Analisis*: `apa dampaknya kalo beli hp 5jt?`\n\n"
+        "Gunakan tombol interaktif di bawah untuk akses cepat! 👇"
     )
     await _edit_or_reply(
         update,

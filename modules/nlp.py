@@ -5,6 +5,7 @@ import gc
 import difflib
 import time
 import random
+from collections import Counter
 from typing import Dict, Any, Tuple, Optional, List, Sequence
 from config import GROQ_API_KEY
 from modules.amounts import parse_primary_amount_id
@@ -152,6 +153,30 @@ class NLPProcessor:
             "GREETING": "sapaan pembuka",
             "HELP": "permintaan bantuan fitur",
             "UNKNOWN": "tidak jelas atau di luar cakupan",
+        }
+
+        # Deep-topic taxonomy for richer contextual understanding.
+        self.topic_taxonomy = {
+            "investasi": [
+                "saham", "reksadana", "obligasi", "yield", "dividen", "portfolio", "risk", "volatilitas",
+                "crypto", "dca", "compound", "return", "alpha", "beta", "sharpe"
+            ],
+            "cashflow": [
+                "cashflow", "arus kas", "burn rate", "saldo", "likuiditas", "tagihan", "gaji", "utang",
+                "piutang", "cicilan", "budget", "anggaran", "defisit", "surplus"
+            ],
+            "makro": [
+                "inflasi", "suku bunga", "bi rate", "fed", "resesi", "gdp", "pdb", "currency", "usd", "idr",
+                "yield curve", "moneter", "fiskal"
+            ],
+            "risk": [
+                "risiko", "anomaly", "fraud", "penipuan", "drawdown", "vaR", "stress test", "hedging",
+                "stop loss", "exposure"
+            ],
+            "operasional": [
+                "biaya", "opex", "capex", "efisiensi", "margin", "revenue", "net income", "assets", "liability",
+                "reconciliation", "audit"
+            ],
         }
 
         self.transformer_backend = None
@@ -596,6 +621,30 @@ class NLPProcessor:
         if "\n" in text or (text.count(',') >= 2 and self._extract_amount(text) > 0):
              # High probability of bulk entry
              return {"intent": "BULK_TRANSACTION", "confidence": 0.8}
+
+        # History / Riwayat
+        if any(kw in text for kw in ["history", "riwayat", "rekap transaksi", "daftar transaksi", "list transaksi", "tunjukin transaksi"]):
+            return {"intent": "HISTORY", "confidence": 0.95}
+
+        # Delete Transaction
+        if any(kw in text for kw in ["hapus", "delete", "buang", "ilangin"]) and any(kw in text for kw in ["transaksi", "data", "catatan"]):
+            return {"intent": "DELETE_TRANSACTION", "confidence": 0.9}
+
+        # Profile / Gamification
+        if any(kw in text for kw in ["profil", "profile", "rank", "level", "xp", "badge", "pencapaian", "skor"]):
+            return {"intent": "PROFILE", "confidence": 0.95}
+
+        # Auth / Web Token
+        if any(kw in text for kw in ["login", "token", "web", "akses", "masuk ke web"]):
+            return {"intent": "AUTH", "confidence": 0.9}
+
+        # Question Answering (Conversational)
+        if any(kw in text for kw in ["apa itu", "bagaimana", "gimana", "jelasin", "kenapa", "jelaskan", "mengapa"]) and len(text.split()) >= 3:
+            return {"intent": "QUESTION", "confidence": 0.9}
+
+        # Summarization
+        if any(kw in text for kw in ["rangkum", "summarize", "rekap poin", "singkatkan", "ringkaskan"]):
+            return {"intent": "SUMMARIZE", "confidence": 0.9}
 
         # Natural Language Settings
         if any(kw in text for kw in ["mode", "ganti mode", "ubah mode"]):
@@ -1707,6 +1756,192 @@ class NLPProcessor:
                 rounds=rounds,
             )
         return result
+
+    def audit_nlp_capabilities(self) -> Dict[str, Any]:
+        """
+        Audit current NLP stack, highlight weaknesses, and provide upgrade priorities.
+        """
+        features = {
+            "regex_intent": True,
+            "transformer_backend": bool(self.transformer_backend and self.transformer_backend.is_ready),
+            "llm_intent_fallback": bool(self.groq_enabled),
+            "ensemble_intent": bool(self.intent_ensemble_enabled),
+            "confidence_calibration": True,
+            "explainability": bool(self.explainability_enabled),
+            "context_understanding": True,
+            "multilingual_support": bool(self.transformer_backend and self.transformer_backend.is_ready),
+        }
+
+        weaknesses = []
+        if not features["transformer_backend"]:
+            weaknesses.append("Transformer backend belum aktif; semantic understanding masih terbatas.")
+        if not self.groq_enabled:
+            weaknesses.append("LLM fallback nonaktif; reasoning untuk pertanyaan kompleks menurun.")
+        if not self.llm_category_enabled:
+            weaknesses.append("LLM category guessing dimatikan; kasus edge-domain bisa underfit.")
+        if not self.intent_ensemble_enabled:
+            weaknesses.append("Intent ensemble nonaktif; robust voting lintas model tidak berjalan.")
+
+        priorities = [
+            "Aktifkan transformer backend + model multilingual berkualitas.",
+            "Bangun fine-tuning set dari data produksi (hard examples + multilingual).",
+            "Kalibrasi confidence per intent agar threshold lebih presisi.",
+            "Tambahkan offline eval rutin: macro-F1, per-language accuracy, dan latency p95.",
+        ]
+
+        return {
+            "features": features,
+            "weaknesses": weaknesses,
+            "improvement_priorities": priorities,
+        }
+
+    def _analyze_topic_domains(self, text: str, context_messages: Optional[Sequence[str]] = None) -> Dict[str, float]:
+        corpus = " ".join([text] + list(context_messages or [])).lower()
+        scores: Dict[str, float] = {}
+        for topic, keywords in self.topic_taxonomy.items():
+            hits = sum(1 for kw in keywords if kw in corpus)
+            if hits > 0:
+                scores[topic] = round(min(1.0, hits / max(len(keywords) * 0.25, 1.0)), 4)
+        if not scores:
+            scores["general_finance"] = 0.2
+        return scores
+
+    def _complexity_score(self, text: str, topic_scores: Dict[str, float]) -> float:
+        tokens = re.findall(r"\b\w+\b", (text or "").lower())
+        long_words = sum(1 for t in tokens if len(t) >= 8)
+        numeric_tokens = sum(1 for t in tokens if any(ch.isdigit() for ch in t))
+        topic_depth = len([k for k, v in topic_scores.items() if v >= 0.35])
+        base = (
+            0.15
+            + min(0.35, len(tokens) / 80.0)
+            + min(0.2, long_words / 25.0)
+            + min(0.15, numeric_tokens / 10.0)
+            + min(0.25, topic_depth / 5.0)
+        )
+        if self.transformer_backend:
+            attn = self.transformer_backend.attention_summary(text)
+            entropy = float((attn or {}).get("attention_entropy", 0.0))
+            # High entropy usually indicates broader semantic spread -> slightly more complex.
+            base += min(0.12, entropy * 0.12)
+        return round(max(0.0, min(1.0, base)), 4)
+
+    def _reasoning_strategy(self, intent: str, complexity: float, confidence: float) -> str:
+        if confidence < 0.55:
+            return "clarify_first"
+        if intent in {"ADD_TRANSACTION", "CORRECTION"} and complexity < 0.45:
+            return "direct_execution"
+        if complexity >= 0.75:
+            return "step_by_step_advisory"
+        if intent in {"QUERY_SUMMARY", "CHECK_BUDGET", "ELITE_ANALYSIS", "INVESTMENT_OPPS"}:
+            return "analytical_response"
+        return "concise_response"
+
+    def deep_understanding_analysis(
+        self,
+        text: str,
+        context_messages: Optional[Sequence[str]] = None,
+        state: str = "IDLE",
+    ) -> Dict[str, Any]:
+        """
+        High-level semantic analysis for complex multi-topic user messages.
+        Returns intent, transaction extraction, domain map, complexity, and response strategy.
+        """
+        context_messages = list(context_messages or [])
+        intent_data = self.classify_intent_with_context(text, context_messages=context_messages, state=state)
+        tx_data = self.extract_transaction_data_with_context(
+            text, context_messages=context_messages, forced_type=intent_data.get("type")
+        )
+
+        topic_scores = self._analyze_topic_domains(text, context_messages=context_messages)
+        complexity = self._complexity_score(text, topic_scores)
+        confidence = float(intent_data.get("confidence", 0.0))
+        strategy = self._reasoning_strategy(intent_data.get("intent", "UNKNOWN"), complexity, confidence)
+        dominant_topics = [k for k, _ in sorted(topic_scores.items(), key=lambda x: x[1], reverse=True)[:3]]
+
+        return {
+            "intent": intent_data.get("intent", "UNKNOWN"),
+            "intent_confidence": confidence,
+            "intent_source": intent_data.get("source", "unknown"),
+            "transaction": tx_data,
+            "complexity_score": complexity,
+            "topic_scores": topic_scores,
+            "dominant_topics": dominant_topics,
+            "language": intent_data.get("language", self._detect_language_safe(text)),
+            "recommended_strategy": strategy,
+            "reasoning_trace": {
+                "intent_explanation": intent_data.get("explanation", ""),
+                "tx_explanation": tx_data.get("explanation", ""),
+            },
+        }
+
+    def build_finetuning_corpus(
+        self,
+        samples: List[Dict[str, Any]],
+        *,
+        include_context: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """
+        Prepare fine-tuning corpus format from production samples.
+        Input sample fields expected:
+        - text
+        - intent
+        - category (optional)
+        - amount (optional)
+        - merchant (optional)
+        - language (optional)
+        - context_messages (optional)
+        """
+        corpus: List[Dict[str, Any]] = []
+        for row in samples:
+            text = str(row.get("text", "")).strip()
+            if not text:
+                continue
+            context_messages = row.get("context_messages") or []
+            prompt = text
+            if include_context and context_messages:
+                ctx = " </s> ".join(str(x) for x in context_messages[-3:])
+                prompt = f"[CTX] {ctx} [QUERY] {text}"
+            completion = {
+                "intent": str(row.get("intent", "UNKNOWN")),
+                "category": row.get("category"),
+                "amount": row.get("amount"),
+                "merchant": row.get("merchant"),
+                "language": row.get("language") or self._detect_language_safe(text),
+            }
+            corpus.append({"input": prompt, "output": completion})
+        return corpus
+
+    def get_finetuning_recipe(self) -> Dict[str, Any]:
+        """
+        Returns recommended production-grade fine-tuning recipe.
+        """
+        return {
+            "base_models": {
+                "intent_multilingual": "joeddav/xlm-roberta-large-xnli",
+                "ner_multilingual": "Davlan/xlm-roberta-base-ner-hrl",
+                "embedding_context": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+            },
+            "training_strategy": {
+                "method": "PEFT-LoRA",
+                "batch_size": 16,
+                "learning_rate": 2e-5,
+                "epochs": 3,
+                "warmup_ratio": 0.1,
+                "max_length": 192,
+                "early_stopping_patience": 2,
+            },
+            "dataset_guidelines": {
+                "min_samples": 20000,
+                "language_mix": {"id": 0.65, "en": 0.25, "other": 0.10},
+                "hard_examples_ratio": 0.3,
+                "contextual_samples_ratio": 0.4,
+            },
+            "evaluation_targets": {
+                "intent_macro_f1": 0.9,
+                "transaction_field_f1": 0.9,
+                "latency_p95_ms_cpu": 180,
+            },
+        }
 
     # Compatibility alias for classify_intent
     def classify_intent(self, text: str, state: str = "IDLE") -> Dict[str, Any]:

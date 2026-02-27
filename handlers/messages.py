@@ -755,7 +755,9 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
             "CHECK_BUDGET", "SET_GAJI", "UNDO", "EXECUTIVE_MODE", "ELITE_ANALYSIS",
             "INVESTMENT_OPPS", "DOC_ANALYSIS", "SET_BUDGET", "SET_BUDGET_ALERT",
             "QUERY_SUMMARY", "SHARING_INFO", "GREETING", "SMALL_TALK", "HELP",
-            "STOP_NOTIF", "CANCEL", "ASK_FOR_NOTIF", "EDIT_TRANSACTION"
+            "STOP_NOTIF", "CANCEL", "ASK_FOR_NOTIF", "EDIT_TRANSACTION",
+            "HISTORY", "DELETE_TRANSACTION", "PROFILE", "AUTH",
+            "QUESTION", "SUMMARIZE"
         }
 
         t1 = time.perf_counter()
@@ -995,9 +997,58 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
             await _handle_sharing_info(update, context, user_db, text, user_name)
             return
 
+        if intent == "HISTORY":
+            from handlers.transactions import history
+            await history(update, context)
+            return
+
+        if intent == "DELETE_TRANSACTION":
+            from handlers.transactions import hapus_transaksi
+            # Extract ID if possible
+            import re
+            ids = re.findall(r'#(\d+)', text) or re.findall(r'(\d+)', text)
+            if ids:
+                context.args = [ids[0]]
+                await hapus_transaksi(update, context)
+            else:
+                await update.message.reply_text("ID transaksi yang mana? Contoh: 'hapus transaksi #123'")
+            return
+
+        if intent == "PROFILE":
+            from handlers.commands import profile_command
+            await profile_command(update, context)
+            return
+
+        if intent == "AUTH":
+            from handlers.commands import auth_command
+            await auth_command(update, context)
+            return
+
         if intent == "HELP":
             from handlers.commands import help_command
             await help_command(update, context)
+            return
+
+        if intent == "QUESTION":
+            await update.message.reply_text("🤔 *Sedang menganalisis pertanyaanmu...*", parse_mode='Markdown')
+            qa_res = await nlp.answer_question_with_reasoning(text)
+            answer = qa_res.get("answer", "Maaf, aku kesulitan menjawab itu.")
+            reasoning = "\n\n🧠 **Penalaran:**\n- " + "\n- ".join(qa_res.get("reasoning_steps", []))
+            await update.message.reply_text(f"{answer}{reasoning}", parse_mode='Markdown')
+            return
+
+        if intent == "SUMMARIZE":
+            history = context_buffer.get("history") or []
+            if not history:
+                await update.message.reply_text("Belum ada riwayat percakapan yang bisa aku rangkum nih.")
+                return
+            
+            await update.message.reply_text("📝 *Sedang merangkum percakapan kita...*", parse_mode='Markdown')
+            combined_text = "\n".join(history)
+            summary_res = await nlp.summarize_text(combined_text, style="executive")
+            summary = summary_res.get("summary", "Gagal merangkum.")
+            takeaways = "\n\n📌 **Poin Penting:**\n- " + "\n- ".join(summary_res.get("key_takeaways", []))
+            await update.message.reply_text(f"{summary}{takeaways}", parse_mode='Markdown')
             return
 
         if intent == "SMALL_TALK":
