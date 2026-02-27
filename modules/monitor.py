@@ -17,7 +17,7 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 import uvicorn
@@ -570,35 +570,63 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
         return out
 
     def _filter_recipients(all_users: list, flt: BroadcastAudienceFilter) -> list:
+        # Perbaikan: Validasi filter untuk mencegah "No recipients matched filter" yang tidak disengaja
         roles = {r.strip().lower() for r in (flt.roles or []) if r and r.strip()}
         username_contains = (flt.username_contains or "").strip().lower()
-        include_ids = set(int(x) for x in (flt.include_telegram_ids or []) if str(x).isdigit())
-        exclude_ids = set(int(x) for x in (flt.exclude_telegram_ids or []) if str(x).isdigit())
+        include_ids = set()
+        for x in (flt.include_telegram_ids or []):
+            try:
+                include_ids.add(int(x))
+            except (ValueError, TypeError):
+                continue
+
+        exclude_ids = set()
+        for x in (flt.exclude_telegram_ids or []):
+            try:
+                exclude_ids.add(int(x))
+            except (ValueError, TypeError):
+                continue
+
         created_after = _safe_parse_dt(flt.created_after)
         created_before = _safe_parse_dt(flt.created_before)
 
         out = []
         for u in all_users:
+            # Perbaikan: Penanganan atribut yang lebih aman
             tid = int(getattr(u, "telegram_id", 0) or 0)
+            if not tid:
+                continue
+
+            # Logika filter yang lebih robust
             if include_ids and tid not in include_ids:
                 continue
             if tid in exclude_ids:
                 continue
-            if flt.active_only and not bool(getattr(u, "is_active", True)):
+            
+            is_active = bool(getattr(u, "is_active", True))
+            if flt.active_only and not is_active:
                 continue
+
             role = (getattr(u, "role", "user") or "user").strip().lower()
             if roles and role not in roles:
                 continue
+
             uname = (getattr(u, "username", "") or "").strip().lower()
             if username_contains and username_contains not in uname:
                 continue
+
             created_at_raw = getattr(u, "created_at", None)
-            created_at = _safe_parse_dt(created_at_raw) if isinstance(created_at_raw, str) else None
-            if created_after and created_at and created_at < created_after:
-                continue
-            if created_before and created_at and created_at > created_before:
-                continue
+            if created_at_raw:
+                created_at = _safe_parse_dt(created_at_raw) if isinstance(created_at_raw, str) else None
+                if created_after and created_at and created_at < created_after:
+                    continue
+                if created_before and created_at and created_at > created_before:
+                    continue
+
             out.append(u)
+        
+        # Log hasil filter untuk debugging admin
+        logger.info(f"Broadcast filter: {len(all_users)} users processed -> {len(out)} recipients matched")
         return out
 
     @app.get("/admin/broadcast/templates", tags=["admin"])
@@ -640,6 +668,15 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
     def admin_broadcast_preview(payload: BroadcastPreviewRequest, user_id: int = Depends(get_current_user)):
         if not deps.db.has_permission(user_id, "broadcast"):
             raise HTTPException(status_code=403, detail="Insufficient permissions")
+        
+        # Penanganan Template di Preview
+        message_to_render = payload.message
+        if payload.template_id:
+            templates = admin_broadcast_templates(user_id)
+            template = next((t for t in templates if t["id"] == payload.template_id), None)
+            if template:
+                message_to_render = template["body"]
+
         sample = payload.sample_user or {}
         builtins = {
             "name": sample.get("username") or sample.get("name") or "Customer",
@@ -648,8 +685,13 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
             "date": datetime.now(timezone.utc).astimezone().strftime("%d-%m-%Y"),
         }
         vars_final = {**builtins, **(payload.variables or {})}
-        rendered = _render_message(payload.message or "", vars_final)
-        return {"channel": payload.channel, "rendered": rendered, "variables": vars_final}
+        rendered = _render_message(message_to_render or "", vars_final)
+        return {
+            "channel": payload.channel, 
+            "rendered": rendered, 
+            "variables": vars_final,
+            "template_used": payload.template_id if payload.template_id else None
+        }
 
     @app.post("/admin/broadcast/estimate", tags=["admin"])
     def admin_broadcast_estimate(payload: BroadcastAudienceFilter, user_id: int = Depends(get_current_user)):
@@ -739,6 +781,10 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
         if not deps.db.has_permission(user_id, "broadcast"):
             raise HTTPException(status_code=403, detail="Insufficient permissions")
 
+        # Validasi pesan
+        if not payload.message and not payload.template_id:
+            raise HTTPException(status_code=400, detail="Message or Template ID is required")
+
         channels = [c.strip().lower() for c in (payload.channels or ["telegram"]) if c and c.strip()]
         channels = list(dict.fromkeys(channels))
         unsupported = [c for c in channels if c not in {"telegram"}]
@@ -748,11 +794,28 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
         all_users = deps.db.get_all_users()
         recipients = _filter_recipients(all_users, payload.audience)
         if not recipients:
-            raise HTTPException(status_code=400, detail="No recipients matched filter")
+            # Feedback yang lebih jelas jika tidak ada penerima
+            msg = "No recipients matched the current filters."
+            if payload.audience.active_only:
+                msg += " (Try disabling 'active_only')"
+            if payload.audience.roles:
+                msg += f" (Check roles: {', '.join(payload.audience.roles)})"
+            raise HTTPException(status_code=400, detail=msg)
+
+        # Penanganan Template
+        final_message = payload.message
+        if payload.template_id:
+            templates = admin_broadcast_templates(user_id)
+            template = next((t for t in templates if t["id"] == payload.template_id), None)
+            if template:
+                final_message = template["body"]
+            else:
+                logger.warning(f"Template {payload.template_id} not found, using raw message")
 
         schedule_dt = _safe_parse_dt(payload.schedule_at)
         schedule_dt = schedule_dt if schedule_dt and schedule_dt.tzinfo else (schedule_dt.replace(tzinfo=timezone.utc) if schedule_dt else None)
         now = datetime.now(timezone.utc)
+        
         if schedule_dt and schedule_dt > now:
             job_id = hashlib.sha256(f"{user_id}:{payload.schedule_at}:{time.time()}".encode()).hexdigest()[:16]
             scheduled_broadcasts[job_id] = {
@@ -764,6 +827,7 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
                 "channels": channels,
                 "priority": payload.priority,
                 "template_id": payload.template_id,
+                "message": final_message, # Simpan pesan akhir
             }
 
             async def _job_runner():
@@ -772,7 +836,7 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
                 }
                 ok, fail = await _send_telegram_broadcast(
                     recipients,
-                    _render_message(payload.message, {**sample_vars, **(payload.variables or {})}),
+                    _render_message(final_message, {**sample_vars, **(payload.variables or {})}),
                     payload.media,
                     payload.buttons,
                 )
@@ -796,17 +860,24 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
                     action="broadcast_scheduled_send",
                     action_type="communication",
                     new_value=f"To {ok} users",
-                    reason=(payload.message or "")[:50] + "...",
+                    reason=(final_message or "")[:50] + "...",
                     ip_address=request.client.host,
                 )
 
             def _timer_fire():
                 try:
                     import asyncio
-
+                    # Perbaikan: Menggunakan loop yang ada jika memungkinkan
+                    try:
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            loop.create_task(_job_runner())
+                            return
+                    except Exception:
+                        pass
                     asyncio.run(_job_runner())
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.error(f"Timer fire error: {e}")
 
             delay = max(0.0, (schedule_dt - now).total_seconds())
             t = threading.Timer(delay, _timer_fire)
@@ -820,13 +891,13 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
                 action="broadcast_schedule",
                 action_type="communication",
                 new_value=f"At {schedule_dt.isoformat()}",
-                reason=(payload.message or "")[:50] + "...",
+                reason=(final_message or "")[:50] + "...",
                 ip_address=request.client.host,
             )
             return {"status": "scheduled", "job_id": job_id, "estimated_recipients": len(recipients)}
 
         builtins = {"date": datetime.now(timezone.utc).astimezone().strftime("%d-%m-%Y")}
-        rendered = _render_message(payload.message, {**builtins, **(payload.variables or {})})
+        rendered = _render_message(final_message, {**builtins, **(payload.variables or {})})
         ok, fail = await _send_telegram_broadcast(recipients, f"📢 **BROADCAST**\n\n{rendered}", payload.media, payload.buttons)
 
         deps.db.log_admin_action(

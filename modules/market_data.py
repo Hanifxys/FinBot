@@ -1,8 +1,3 @@
-try:
-    import aiohttp
-    AIOHTTP_AVAILABLE = True
-except ImportError:
-    AIOHTTP_AVAILABLE = False
 import logging
 import os
 import random
@@ -23,7 +18,13 @@ class MarketDataConnector:
         """
         Fetches real-time price for a ticker.
         """
-        if not self.api_key or not AIOHTTP_AVAILABLE:
+        try:
+            import aiohttp
+            aiohttp_available = True
+        except ImportError:
+            aiohttp_available = False
+
+        if not self.api_key or not aiohttp_available:
             # Return stub data if no API key or aiohttp is not available
             return {
                 "ticker": ticker,
