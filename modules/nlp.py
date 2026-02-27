@@ -19,6 +19,9 @@ class NLPProcessor:
         self.groq_enabled = bool(GROQ_API_KEY and GROQ_API_KEY.strip())
         self.llm_sentiment_enabled = os.getenv("NLP_ENABLE_LLM_SENTIMENT", "false").lower() in ("1", "true", "yes", "on")
         self.llm_category_enabled = os.getenv("NLP_ENABLE_LLM_CATEGORY", "false").lower() in ("1", "true", "yes", "on")
+        self.intent_ensemble_enabled = os.getenv("NLP_ENABLE_INTENT_ENSEMBLE", "true").lower() in ("1", "true", "yes", "on")
+        self.explainability_enabled = os.getenv("NLP_ENABLE_EXPLAINABILITY", "true").lower() in ("1", "true", "yes", "on")
+        self.confidence_temperature = float(os.getenv("NLP_CONFIDENCE_TEMPERATURE", "0.85"))
 
         # Slang & Abbreviation Mapping (Indonesian)
         self.slang_map = {
@@ -159,6 +162,102 @@ class NLPProcessor:
         except Exception as e:
             logger.error(f"Transformer backend init failed: {e}")
             self.transformer_backend = None
+
+    def _calibrate_confidence(self, score: float, *, penalty: float = 0.0, floor: float = 0.0, ceil: float = 0.99) -> float:
+        """Lightweight confidence calibration for more stable downstream gating."""
+        try:
+            s = float(score) - float(penalty)
+        except Exception:
+            s = 0.0
+        s = max(0.0, min(1.0, s))
+        # Temperature scaling style compression/expansion around 0.5
+        t = max(0.2, min(2.5, self.confidence_temperature))
+        z = (s - 0.5) / t + 0.5
+        z = max(floor, min(ceil, z))
+        return round(float(z), 4)
+
+    def _build_intent_explanation(
+        self,
+        text: str,
+        intent: str,
+        source: str,
+        candidates: Optional[List[Dict[str, Any]]] = None,
+    ) -> str:
+        if not self.explainability_enabled:
+            return ""
+        short_text = (text or "").strip()
+        if len(short_text) > 80:
+            short_text = short_text[:77] + "..."
+        candidate_text = ""
+        if candidates:
+            top = sorted(candidates, key=lambda x: x.get("weighted", 0.0), reverse=True)[:2]
+            candidate_text = " | ".join(
+                f"{c.get('intent')}={round(float(c.get('weighted', 0.0)), 3)}" for c in top
+            )
+        if candidate_text:
+            return f"intent={intent}; source={source}; top={candidate_text}; text='{short_text}'"
+        return f"intent={intent}; source={source}; text='{short_text}'"
+
+    def _detect_language_safe(self, text: str) -> str:
+        backend = self.transformer_backend
+        if backend and hasattr(backend, "detect_language"):
+            try:
+                return backend.detect_language(text)
+            except Exception:
+                pass
+        return "unknown"
+
+    def _intent_ensemble_classify(
+        self,
+        text: str,
+        regex_intent: Dict[str, Any],
+        transformer_intent: Optional[Dict[str, Any]],
+        llm_intent: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Ensemble voting from deterministic + transformer + LLM classifiers."""
+        votes: Dict[str, float] = {}
+        details: List[Dict[str, Any]] = []
+
+        def add_vote(src: str, payload: Optional[Dict[str, Any]], weight: float):
+            if not payload:
+                return
+            intent = payload.get("intent")
+            if not intent:
+                return
+            raw_conf = float(payload.get("confidence", 0.0))
+            weighted = max(0.0, raw_conf) * weight
+            votes[intent] = votes.get(intent, 0.0) + weighted
+            details.append(
+                {
+                    "source": src,
+                    "intent": intent,
+                    "raw_confidence": round(raw_conf, 4),
+                    "weighted": round(weighted, 4),
+                }
+            )
+
+        add_vote("regex", regex_intent, 0.45)
+        add_vote("transformer", transformer_intent, 0.4)
+        add_vote("llm", llm_intent, 0.15)
+
+        if not votes:
+            return {"intent": "UNKNOWN", "confidence": 0.0, "source": "none", "candidates": []}
+
+        best_intent = max(votes, key=votes.get)
+        total = sum(votes.values()) or 1e-9
+        confidence = votes[best_intent] / total
+        confidence = self._calibrate_confidence(confidence, floor=0.0, ceil=0.98)
+        return {
+            "intent": best_intent,
+            "confidence": confidence,
+            "source": "ensemble",
+            "candidates": details,
+            "language": (
+                (transformer_intent or {}).get("language")
+                or (llm_intent or {}).get("language")
+                or self._detect_language_safe(text)
+            ),
+        }
 
     @property
     def client(self):
@@ -347,9 +446,15 @@ class NLPProcessor:
         
         # 3. Fast Path: Regex Matching (Priority 2)
         regex_intent = self._regex_classify(normalized_text)
-        if regex_intent["confidence"] >= 0.85:
+        if regex_intent["confidence"] >= 0.96:
+            regex_intent["confidence"] = self._calibrate_confidence(regex_intent["confidence"], ceil=0.99)
             regex_intent["sentiment"] = sentiment_data
+            regex_intent["source"] = "regex"
+            regex_intent["explanation"] = self._build_intent_explanation(text, regex_intent["intent"], "regex")
             return regex_intent
+
+        transformer_intent = None
+        llm_intent = None
 
         # 4. Transformer Path: multilingual zero-shot with contextual understanding.
         if self.transformer_backend and self.transformer_backend.is_ready:
@@ -357,29 +462,79 @@ class NLPProcessor:
                 text=text,
                 intent_descriptions=self._intent_descriptions,
             )
-            if transformer_intent and transformer_intent.get("confidence", 0.0) >= 0.72:
+            if transformer_intent:
+                transformer_intent["confidence"] = self._calibrate_confidence(
+                    transformer_intent.get("confidence", 0.0),
+                    ceil=0.99
+                )
+            if transformer_intent and transformer_intent.get("confidence", 0.0) >= 0.83 and not self.intent_ensemble_enabled:
                 transformer_intent["sentiment"] = sentiment_data
+                transformer_intent["source"] = transformer_intent.get("source") or "transformer"
+                transformer_intent["explanation"] = self._build_intent_explanation(
+                    text, transformer_intent.get("intent", "UNKNOWN"), transformer_intent["source"]
+                )
                 return transformer_intent
             
         # 5. Slow Path: LLM Fallback (Priority 3)
-        # Only if regex failed or low confidence AND LLM is enabled
-        if self.groq_enabled:
+        # Only when confidence is still uncertain.
+        needs_llm = (
+            self.groq_enabled
+            and (
+                regex_intent.get("confidence", 0.0) < 0.85
+                or not transformer_intent
+                or transformer_intent.get("confidence", 0.0) < 0.8
+            )
+        )
+        if needs_llm:
             llm_intent = self._llm_classify_intent(text) # Pass original text for better context
-            if llm_intent and llm_intent.get('confidence', 0) >= 0.7:
+            if llm_intent:
+                llm_intent["confidence"] = self._calibrate_confidence(llm_intent.get("confidence", 0.0), ceil=0.95)
+            if llm_intent and llm_intent.get('confidence', 0) >= 0.78 and not self.intent_ensemble_enabled:
                 llm_intent["sentiment"] = sentiment_data
+                llm_intent["source"] = "llm"
+                llm_intent["explanation"] = self._build_intent_explanation(text, llm_intent["intent"], "llm")
                 return llm_intent
+
+        # 5b. Ensemble voting path (regex + transformer + llm)
+        if self.intent_ensemble_enabled:
+            ensemble = self._intent_ensemble_classify(text, regex_intent, transformer_intent, llm_intent)
+            if ensemble.get("confidence", 0.0) >= 0.62:
+                ensemble["sentiment"] = sentiment_data
+                ensemble["explanation"] = self._build_intent_explanation(
+                    text,
+                    ensemble.get("intent", "UNKNOWN"),
+                    ensemble.get("source", "ensemble"),
+                    candidates=ensemble.get("candidates"),
+                )
+                return ensemble
         
         # 6. Small Talk Fallback (New)
         small_talk_res = self.handle_small_talk(text)
         if small_talk_res:
-            return {"intent": "SMALL_TALK", "response": small_talk_res, "confidence": 1.0, "sentiment": sentiment_data}
+            return {
+                "intent": "SMALL_TALK",
+                "response": small_talk_res,
+                "confidence": self._calibrate_confidence(1.0, ceil=0.99),
+                "sentiment": sentiment_data,
+                "source": "small_talk",
+                "explanation": self._build_intent_explanation(text, "SMALL_TALK", "small_talk"),
+            }
 
         # 7. Fallback if everything fails
         if regex_intent["confidence"] > 0.0:
             regex_intent["sentiment"] = sentiment_data
+            regex_intent["confidence"] = self._calibrate_confidence(regex_intent["confidence"], ceil=0.9)
+            regex_intent["source"] = "regex_fallback"
+            regex_intent["explanation"] = self._build_intent_explanation(text, regex_intent["intent"], "regex_fallback")
             return regex_intent
             
-        return {"intent": "UNKNOWN", "confidence": 0.0, "sentiment": sentiment_data}
+        return {
+            "intent": "UNKNOWN",
+            "confidence": 0.0,
+            "sentiment": sentiment_data,
+            "source": "fallback",
+            "explanation": self._build_intent_explanation(text, "UNKNOWN", "fallback"),
+        }
 
     def _regex_classify(self, text: str) -> Dict[str, Any]:
         """Internal regex classifier."""
@@ -532,19 +687,40 @@ class NLPProcessor:
 
     async def analyze_financial_sentiment(self, text: str) -> Dict[str, Any]:
         """
-        Sentiment analysis specialized for financial news and reports (ID/EN).
+        Multi-language Sentiment Analysis with intensity and emotion detection.
+        Supports ID, EN, and other common languages.
         """
         if not self.groq_enabled:
-            return {"sentiment": "neutral", "score": 0.5}
+            return {
+                "language": "unknown",
+                "sentiment": "NEUTRAL", 
+                "emotion": "CALM",
+                "intensity": "LOW",
+                "score": 0.0, 
+                "reason": "AI client not enabled (fallback)"
+            }
 
         try:
             prompt = f"""
-            Analyze the financial sentiment of this text. It could be in Indonesian or English.
+            Analyze the multi-language financial sentiment and emotion of this text.
             Text: "{text}"
             
-            Classify as: BULLISH, BEARISH, or NEUTRAL.
-            Provide a confidence score between 0.0 and 1.0.
-            Return JSON: {{"sentiment": "class", "score": float, "reason": "brief explanation"}}
+            Task:
+            1. Detect the language.
+            2. Classify sentiment as: POSITIVE, NEGATIVE, or NEUTRAL.
+            3. Detect specific financial emotion: OPTIMISM, FEAR, GREED, CONCERN, or CALM.
+            4. Provide intensity (LOW, MEDIUM, HIGH).
+            5. Calculate a score from -1.0 (very negative) to 1.0 (very positive).
+            
+            Return JSON: 
+            {{
+                "language": "detected_lang",
+                "sentiment": "class", 
+                "emotion": "emotion_class",
+                "intensity": "intensity_level",
+                "score": float, 
+                "reason": "brief explanation"
+            }}
             """
             chat_completion = self.client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
@@ -556,7 +732,103 @@ class NLPProcessor:
             return json.loads(chat_completion.choices[0].message.content)
         except Exception as e:
             logger.error(f"Financial sentiment analysis failed: {e}")
-            return {"sentiment": "neutral", "score": 0.5, "error": str(e)}
+            return {
+                "language": "unknown",
+                "sentiment": "NEUTRAL", 
+                "emotion": "CALM",
+                "intensity": "LOW",
+                "score": 0.0, 
+                "reason": f"Error: {str(e)}"
+            }
+
+    async def answer_question_with_reasoning(self, question: str, context: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Question Answering System with Chain-of-Thought reasoning capabilities.
+        """
+        if not self.groq_enabled:
+            return {
+                "answer": "Sistem AI sedang offline. Gunakan mode manual untuk sementara.", 
+                "reasoning_steps": ["AI client disabled", "Checking local context", "Returning generic fallback"],
+                "confidence": 0.0
+            }
+
+        try:
+            prompt = f"""
+            Answer the following financial question with detailed reasoning (Chain-of-Thought).
+            Context (if any): {context or 'General financial knowledge'}
+            Question: "{question}"
+            
+            Instructions:
+            1. Think step-by-step to arrive at the answer.
+            2. Provide clear, logical reasoning.
+            3. Answer in the same language as the question.
+            
+            Return JSON:
+            {{
+                "reasoning_steps": ["step 1", "step 2", "..."],
+                "answer": "The final concise answer",
+                "confidence": 0.0-1.0
+            }}
+            """
+            chat_completion = self.client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model="llama-3.3-70b-versatile",
+                response_format={"type": "json_object"},
+                temperature=0.2
+            )
+            import json
+            return json.loads(chat_completion.choices[0].message.content)
+        except Exception as e:
+            logger.error(f"QA Reasoning failed: {e}")
+            return {
+                "answer": "Gagal memproses pertanyaan.", 
+                "reasoning_steps": [f"Error encountered: {str(e)}"],
+                "confidence": 0.0
+            }
+
+    async def summarize_text(self, text: str, style: str = "concise") -> Dict[str, Any]:
+        """
+        Text Summarization with multiple styles: 'executive', 'creative', 'concise'.
+        """
+        if not self.groq_enabled:
+            return {
+                "summary": text[:100] + "...", 
+                "style_applied": style,
+                "key_takeaways": ["AI client disabled"]
+            }
+
+        styles_map = {
+            "executive": "Professional, data-driven, focus on key metrics and bottom line.",
+            "creative": "Engaging, storytelling style, using analogies and emojis.",
+            "concise": "Very brief, bullet points only, maximum 3 points."
+        }
+        
+        style_desc = styles_map.get(style, styles_map["concise"])
+
+        try:
+            prompt = f"""
+            Summarize the following financial text using the specified style.
+            Style: {style} ({style_desc})
+            Text: "{text}"
+            
+            Return JSON:
+            {{
+                "summary": "The formatted summary text",
+                "style_applied": "{style}",
+                "key_takeaways": ["point 1", "point 2", "..."]
+            }}
+            """
+            chat_completion = self.client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model="llama-3.3-70b-versatile",
+                response_format={"type": "json_object"},
+                temperature=0.5
+            )
+            import json
+            return json.loads(chat_completion.choices[0].message.content)
+        except Exception as e:
+            logger.error(f"Summarization failed: {e}")
+            return {"summary": "Gagal merangkum teks.", "error": str(e)}
 
     async def extract_financial_entities(self, text: str) -> List[Dict[str, Any]]:
         """
@@ -690,6 +962,17 @@ class NLPProcessor:
                      llm_data["confidence"] = 0.65
                  else:
                      llm_data["needs_disambiguation"] = is_ambiguous and llm_data.get("category") == "Lain-lain"
+                 llm_data["confidence"] = self._calibrate_confidence(
+                     llm_data.get("confidence", 0.85),
+                     penalty=0.08 if is_ambiguous else 0.0,
+                     ceil=0.97
+                 )
+                 llm_data["source"] = llm_data.get("source") or "llm_entities"
+                 if self.explainability_enabled:
+                     llm_data["explanation"] = (
+                         f"source=llm_entities; ambiguous={is_ambiguous}; "
+                         f"category={llm_data.get('category')}; merchant={llm_data.get('merchant')}"
+                     )
                  return llm_data
 
         # 3. Transformer entity extraction for multilingual and context-heavy utterances.
@@ -729,10 +1012,16 @@ class NLPProcessor:
                 "category": category if category != "Lain-lain" else None,
                 "merchant": merchant,
                 "date": date,
-                "confidence": 0.45 if merchant != "Transaksi" else 0.3,
+                "confidence": self._calibrate_confidence(0.45 if merchant != "Transaksi" else 0.3, ceil=0.7),
                 "is_partial": True,
                 "needs_disambiguation": is_ambiguous and category == "Lain-lain",
-                "error": self._generate_error_message("transaction")
+                "error": self._generate_error_message("transaction"),
+                "source": "heuristic_partial",
+                "language": self._detect_language_safe(text),
+                "explanation": (
+                    f"amount_missing; category={category}; merchant={merchant}; "
+                    f"transformer_hint={bool(transformer_hint)}"
+                ) if self.explainability_enabled else ""
             }
 
         type_ = forced_type or ("income" if category == "Gaji" else "expense")
@@ -744,9 +1033,19 @@ class NLPProcessor:
             "category": category,
             "merchant": merchant,
             "date": date,
-            "confidence": min(0.95, cat_conf + 0.1) if is_complete else 0.5,
+            "confidence": self._calibrate_confidence(
+                min(0.95, cat_conf + 0.1) if is_complete else 0.5,
+                penalty=0.07 if is_ambiguous else 0.0,
+                ceil=0.97
+            ),
             "is_partial": not is_complete,
-            "needs_disambiguation": is_ambiguous and category == "Lain-lain"
+            "needs_disambiguation": is_ambiguous and category == "Lain-lain",
+            "source": "heuristic",
+            "language": self._detect_language_safe(text),
+            "explanation": (
+                f"amount={amount}; category_conf={round(cat_conf, 3)}; "
+                f"merchant={merchant}; ambiguous={is_ambiguous}; transformer_hint={bool(transformer_hint)}"
+            ) if self.explainability_enabled else "",
         }
 
     def extract_split_bill(self, text: str) -> Dict[str, Any]:
@@ -1071,16 +1370,57 @@ class NLPProcessor:
         state: str = "IDLE",
     ) -> Dict[str, Any]:
         """Context-aware intent classification using transformer attention when available."""
+        # Ensemble with contextual message history for better multi-turn robustness.
+        normalized = self.normalize_text(text)
+        regex_intent = self._regex_classify(normalized)
+        transformer_intent = None
+        llm_intent = None
+        sentiment = self.analyze_sentiment(text)
+
         if self.transformer_backend and self.transformer_backend.is_ready:
-            sentiment = self.analyze_sentiment(text)
-            res = self.transformer_backend.classify_intent(
+            transformer_intent = self.transformer_backend.classify_intent(
                 text=text,
                 intent_descriptions=self._intent_descriptions,
                 context_messages=context_messages,
             )
-            if res and res.get("confidence", 0.0) >= 0.72:
-                res["sentiment"] = sentiment
-                return res
+            if transformer_intent:
+                transformer_intent["confidence"] = self._calibrate_confidence(
+                    transformer_intent.get("confidence", 0.0), ceil=0.98
+                )
+            # Strong transformer signal can short-circuit to preserve deterministic behavior.
+            if transformer_intent and transformer_intent.get("confidence", 0.0) >= 0.9:
+                transformer_intent["sentiment"] = sentiment
+                transformer_intent["source"] = transformer_intent.get("source") or "transformer_context"
+                transformer_intent["explanation"] = self._build_intent_explanation(
+                    text, transformer_intent.get("intent", "UNKNOWN"), transformer_intent["source"]
+                )
+                return transformer_intent
+
+        if self.groq_enabled and self.intent_ensemble_enabled and (
+            regex_intent.get("confidence", 0.0) < 0.9
+            or (transformer_intent and transformer_intent.get("confidence", 0.0) < 0.85)
+        ):
+            llm_intent = self._llm_classify_intent(text)
+            if llm_intent:
+                llm_intent["confidence"] = self._calibrate_confidence(llm_intent.get("confidence", 0.0), ceil=0.95)
+
+        if self.intent_ensemble_enabled:
+            ens = self._intent_ensemble_classify(text, regex_intent, transformer_intent, llm_intent)
+            if ens.get("confidence", 0.0) >= 0.6:
+                ens["sentiment"] = sentiment
+                ens["explanation"] = self._build_intent_explanation(
+                    text, ens.get("intent", "UNKNOWN"), ens.get("source", "ensemble"), ens.get("candidates")
+                )
+                return ens
+
+        if transformer_intent and transformer_intent.get("confidence", 0.0) >= 0.72:
+            transformer_intent["sentiment"] = sentiment
+            transformer_intent["source"] = transformer_intent.get("source") or "transformer_context"
+            transformer_intent["explanation"] = self._build_intent_explanation(
+                text, transformer_intent.get("intent", "UNKNOWN"), transformer_intent["source"]
+            )
+            return transformer_intent
+
         return self.hybrid_classify(text, state)
 
     def extract_transaction_data_with_context(
@@ -1186,8 +1526,9 @@ class NLPProcessor:
         for row in samples:
             text = str(row.get("text", "")).strip()
             expected = str(row.get("intent", "UNKNOWN"))
+            context_messages = row.get("context_messages") or row.get("context") or []
             t0 = time.perf_counter()
-            pred = self.hybrid_classify(text)
+            pred = self.classify_intent_with_context(text, context_messages=context_messages)
             latencies.append((time.perf_counter() - t0) * 1000.0)
             y_true.append(expected)
             y_pred.append(str(pred.get("intent", "UNKNOWN")))
@@ -1219,6 +1560,39 @@ class NLPProcessor:
             "latency_p95_ms": round(self._percentile(latencies, 95.0), 2),
             "confusion_matrix": matrix,
             "labels": labels,
+        }
+
+    def evaluate_multilingual_robustness(self, samples: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Evaluates intent quality split by language.
+        Expected sample format: {"text": "...", "intent": "...", "language": "id|en|..."}.
+        """
+        if not samples:
+            return {"samples": 0, "by_language": {}, "overall_accuracy": 0.0}
+
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        for row in samples:
+            lang = str(row.get("language") or "unknown").lower().strip() or "unknown"
+            grouped.setdefault(lang, []).append(row)
+
+        by_language: Dict[str, Any] = {}
+        total = 0
+        weighted_acc = 0.0
+        for lang, rows in grouped.items():
+            report = self.evaluate_intent_benchmark(rows)
+            by_language[lang] = {
+                "samples": report["samples"],
+                "accuracy": report["accuracy"],
+                "macro_f1": report["macro_f1"],
+                "latency_p95_ms": report["latency_p95_ms"],
+            }
+            total += report["samples"]
+            weighted_acc += report["accuracy"] * report["samples"]
+
+        return {
+            "samples": total,
+            "overall_accuracy": round(weighted_acc / max(total, 1), 4),
+            "by_language": by_language,
         }
 
     def evaluate_transaction_extraction(self, samples: List[Dict[str, Any]]) -> Dict[str, Any]:
