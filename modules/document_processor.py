@@ -2,7 +2,7 @@ import io
 import json
 import logging
 import asyncio
-from typing import Optional, List
+from typing import Optional, List, Any
 from modules.ocr import extract_text_from_image, extract_text_from_url
 from modules.amounts import parse_amount_id
 
