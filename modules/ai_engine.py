@@ -188,14 +188,22 @@ class AIEngine:
 
     async def chat_response(self, text: str, user_name="Teman"):
         prompt = f"""
-        Kamu adalah FinBot. Friendly, cerdas, profesional.
+        Kamu adalah FinBot, asisten keuangan pribadi yang cerdas dan suportif.
+        
+        Konteks:
         User: "{text}"
         Nama: {user_name}
-        Jawab max 3 kalimat.
+        
+        Instruksi:
+        1. Berikan jawaban yang terstruktur (gunakan paragraf pendek).
+        2. Gunakan bullet points jika memberikan list atau tips.
+        3. Pastikan nada bicara profesional namun tetap bersahabat.
+        4. Jika relevan, berikan contoh sederhana.
+        5. Batasi respons maksimal 3-4 paragraf agar tetap ringkas di Telegram.
         """
 
         response = await self._safe_ai_call(prompt)
-        return response or f"Halo {user_name}! Mau catat pengeluaran apa hari ini? 💸"
+        return response or f"Halo {user_name}! Ada yang bisa FinBot bantu terkait keuanganmu hari ini? 💸"
 
     # -----------------------------------
     # SMART INSIGHT

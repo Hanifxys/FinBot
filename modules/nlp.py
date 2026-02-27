@@ -552,53 +552,57 @@ class NLPProcessor:
         return self.extract_transaction_data_simple(text, forced_type)
 
     def extract_transaction_data_simple(self, text: str, forced_type: str = None) -> Dict[str, Any]:
-        """Standard single transaction extraction logic with granular confidence."""
-        # Ambiguity Check (Intent Disambiguation Layer)
-        ambiguous_keywords = ["transfer", "bayar", "kirim", "masuk"]
-        is_ambiguous = any(kw in text.lower() for kw in ambiguous_keywords) and "intent" not in text # intent is internal flag
+        """Standard single transaction extraction logic with granular confidence and validation."""
+        # 0. Ambiguity & Intent Disambiguation Layer
+        ambiguous_keywords = ["transfer", "bayar", "kirim", "masuk", "bayarin"]
+        is_ambiguous = any(kw in text.lower() for kw in ambiguous_keywords)
 
-        # Try LLM Extraction for complex sentences
+        # 1. Validation: Basic parameters check
+        text_norm = self.normalize_text(text)
+        amount = self._extract_amount(text_norm)
+        
+        # If no amount, return early with partial status
+        if amount <= 0:
+            return {
+                "amount": None,
+                "confidence": 0.3,
+                "is_partial": True,
+                "error": "Nominal tidak ditemukan. Contoh: 'kopi 25rb'"
+            }
+
+        # 2. Advanced Extraction (LLM or Heuristic)
         if self.groq_enabled and (len(text.split()) > 4 or is_ambiguous):
              llm_data = self._llm_extract_entities(text)
              if llm_data and llm_data.get("amount"):
-                 if forced_type:
-                     llm_data["type"] = forced_type
+                 # Post-extraction validation & transformation
+                 llm_data["type"] = forced_type or llm_data.get("type", "expense")
                  llm_data["date"] = self._extract_date(text)
-                 # Adjust confidence for ambiguous terms
+                 
+                 # Logic for ambiguous terms
                  if is_ambiguous and llm_data.get("confidence", 0.9) > 0.7:
                      llm_data["needs_disambiguation"] = True
                      llm_data["confidence"] = 0.65
                  return llm_data
 
-        # Fallback to Regex/Heuristic (Standard)
-        text_norm = self.normalize_text(text)
-        amount = self._extract_amount(text_norm)
+        # 3. Heuristic Extraction (Standard)
         category, cat_conf = self._detect_category(text_norm)
         merchant = self.extract_merchant(text_norm)
         date = self._extract_date(text)
         
-        # Determine type
-        if forced_type:
-            type_ = forced_type
-        else:
-            type_ = "income" if category == "Gaji" else "expense"
+        type_ = forced_type or ("income" if category == "Gaji" else "expense")
         
-        # Base confidence
-        conf = cat_conf
-        if amount > 0:
-            conf = min(0.95, conf + 0.1) # Boost if amount exists
-        else:
-            conf = 0.4 # Low if no amount (partial entry)
-
+        # Final validation check
+        is_complete = amount > 0 and category != "Lain-lain" and merchant != "Transaksi"
+        
         return {
-            "amount": amount if amount > 0 else None,
-            "type": type_ if amount > 0 else None,
-            "category": category if amount > 0 else None,
-            "merchant": merchant if merchant != "Transaksi" else None,
+            "amount": amount,
+            "type": type_,
+            "category": category,
+            "merchant": merchant,
             "date": date,
-            "confidence": conf,
-            "is_partial": amount <= 0 or merchant == "Transaksi",
-            "needs_disambiguation": is_ambiguous and conf < 0.8
+            "confidence": min(0.95, cat_conf + 0.1) if is_complete else 0.5,
+            "is_partial": not is_complete,
+            "needs_disambiguation": is_ambiguous and category == "Lain-lain"
         }
 
     def extract_split_bill(self, text: str) -> Dict[str, Any]:
