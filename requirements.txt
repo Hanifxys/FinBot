@@ -19,6 +19,9 @@ locust>=2.21.0
 cryptography>=42.0.0
 torch==2.2.1+cpu
 torchvision==0.17.1+cpu
+transformers>=4.48.0
+tokenizers>=0.15.2
+sentencepiece>=0.2.0
 easyocr==1.7.1
 opencv-python-headless==4.9.0.80
 pyarrow

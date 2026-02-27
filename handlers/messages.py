@@ -56,17 +56,26 @@ def get_main_menu_keyboard() -> ReplyKeyboardMarkup:
         [KeyboardButton("💡 Tips Hemat"), KeyboardButton("🚀 Menu Utama")]
     ], resize_keyboard=True)
 
-def _tx_preview_keyboard() -> InlineKeyboardMarkup:
+def _tx_preview_keyboard(category: str = None) -> InlineKeyboardMarkup:
     """Returns inline keyboard for transaction preview actions."""
-    return InlineKeyboardMarkup([
+    buttons = [
         [
             InlineKeyboardButton("✅ Simpan", callback_data="tx_confirm"),
             InlineKeyboardButton("✎ Edit", callback_data="tx_edit"),
-        ],
-        [
-            InlineKeyboardButton("❌ Batal", callback_data="tx_ignore"),
-        ],
+        ]
+    ]
+    
+    # Proactive feedback: If category is unknown or "Lain-lain", suggest quick edit
+    if not category or category == "Lain-lain":
+        buttons.append([
+            InlineKeyboardButton("🏷️ Pilih Kategori", callback_data="edit_category"),
+        ])
+        
+    buttons.append([
+        InlineKeyboardButton("❌ Batal", callback_data="tx_ignore"),
     ])
+    
+    return InlineKeyboardMarkup(buttons)
 
 def _format_tx(tx) -> str:
     """Formats a transaction object into a readable string."""
@@ -536,7 +545,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             _tx_preview_message(pending, feedback), 
             parse_mode="Markdown", 
-            reply_markup=_tx_preview_keyboard()
+            reply_markup=_tx_preview_keyboard(pending.get("category"))
         )
         
     except Exception as e:
@@ -970,7 +979,7 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
                  await update.message.reply_text(
                     _tx_preview_message(pending, feedback, persona), 
                     parse_mode="Markdown", 
-                    reply_markup=_tx_preview_keyboard()
+                    reply_markup=_tx_preview_keyboard(pending.get("category"))
                  )
                  return
 

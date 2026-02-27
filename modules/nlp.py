@@ -1,10 +1,13 @@
 import re
+import os
 import logging
 import gc
 import difflib
-from typing import Dict, Any, Tuple, Optional, List
+import time
+from typing import Dict, Any, Tuple, Optional, List, Sequence
 from config import GROQ_API_KEY
 from modules.amounts import parse_primary_amount_id
+from modules.transformer_nlp import TransformerNLPBackend, TransformerNLPConfig
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +16,8 @@ class NLPProcessor:
         # Initialize Groq
         self._client = None
         self.groq_enabled = bool(GROQ_API_KEY and GROQ_API_KEY.strip())
+        self.llm_sentiment_enabled = os.getenv("NLP_ENABLE_LLM_SENTIMENT", "false").lower() in ("1", "true", "yes", "on")
+        self.llm_category_enabled = os.getenv("NLP_ENABLE_LLM_CATEGORY", "false").lower() in ("1", "true", "yes", "on")
 
         # Slang & Abbreviation Mapping (Indonesian)
         self.slang_map = {
@@ -32,14 +37,17 @@ class NLPProcessor:
             "ga": "tidak", "gk": "tidak", "gak": "tidak",
             "ngopi": "kopi", "sarapan": "makan pagi", "lunch": "makan siang",
             "dinner": "makan malam", "gojek": "ojol", "grab": "ojol",
-            "gocar": "taksi", "grabcar": "taksi", "bluebird": "taksi"
+            "gocar": "taksi", "grabcar": "taksi", "bluebird": "taksi",
+            "bsy": "beli", "abis": "habis", "tadi": "", "td": ""
         }
 
         # Keywords for categorization - User-centric mapping
         self.category_keywords = {
             "Makanan": [
                 "makan", "resto", "warung", "food", "dinner", "lunch", "gofood", "grabfood", "shopeefood", 
-                "warteg", "padang", "ayam", "nasgor", "steak", "sate", "bakso", "mie", "soto", "bubur", "nasi"
+                "warteg", "padang", "ayam", "nasgor", "steak", "sate", "bakso", "mie", "soto", "bubur", "nasi",
+                "bebek", "ikan", "sayur", "buah", "roti", "bakmi", "pecel", "geprek", "penyet", "burger", "pizza",
+                "sushi", "ramen", "kfc", "mcd", "hokben", "solaria", "kopi", "cafe", "ngopi"
             ],
             "Minuman": [
                 "minum", "kopi", "cafe", "ngopi", "mixue", "starbucks", "haus", "kenangan", "chatime", "janji jiwa",
@@ -114,6 +122,42 @@ class NLPProcessor:
             "STOP_NOTIF": re.compile(r'\b(jangan|janganlah|stop|berhenti|henti|ga usah|gak usah|kurangi|kurangin|matiin|matikan).*(daily|digest|notif|notifikasi|pesan|laporan|sering|digestnya)\b', re.IGNORECASE),
             "ASK_FOR_NOTIF": re.compile(r'\b(kapan|jadwal|jam berapa|aktifin|nyalain|hidupin).*(daily|digest|notif|notifikasi)\b', re.IGNORECASE),
         }
+
+        # Transformer intent descriptions for multilingual zero-shot fallback.
+        self._intent_descriptions = {
+            "ADD_TRANSACTION": "mencatat transaksi pengeluaran atau pemasukan",
+            "SHARING_INFO": "berbagi informasi kondisi keuangan tanpa aksi pencatatan",
+            "CHECK_BUDGET": "meminta status budget atau limit",
+            "QUERY_SUMMARY": "meminta ringkasan laporan keuangan",
+            "SET_BUDGET": "mengatur budget kategori",
+            "SET_BUDGET_ALERT": "mengatur pengingat atau batas budget",
+            "SET_GAJI": "mengatur nominal gaji atau pendapatan bulanan",
+            "CORRECTION": "koreksi transaksi yang sudah disebut",
+            "SPLIT_BILL": "membagi total tagihan ke beberapa orang",
+            "BULK_TRANSACTION": "mencatat beberapa transaksi sekaligus",
+            "SET_MODE": "mengubah gaya asisten",
+            "SET_REMINDER": "mengubah pengaturan reminder atau notifikasi",
+            "UNDO": "membatalkan aksi terakhir",
+            "ROAST_WALLET": "meminta evaluasi gaya belanja secara tegas",
+            "EXPORT_DATA": "meminta ekspor data transaksi",
+            "WHAT_IF": "simulasi skenario keuangan",
+            "DOC_ANALYSIS": "meminta analisis dokumen keuangan",
+            "ELITE_ANALYSIS": "meminta analisis finansial mendalam",
+            "INVESTMENT_OPPS": "meminta peluang investasi",
+            "SMALL_TALK": "percakapan santai non-transaksi",
+            "GREETING": "sapaan pembuka",
+            "HELP": "permintaan bantuan fitur",
+            "UNKNOWN": "tidak jelas atau di luar cakupan",
+        }
+
+        self.transformer_backend = None
+        try:
+            backend = TransformerNLPBackend(TransformerNLPConfig())
+            if backend.is_ready:
+                self.transformer_backend = backend
+        except Exception as e:
+            logger.error(f"Transformer backend init failed: {e}")
+            self.transformer_backend = None
 
     @property
     def client(self):
@@ -228,8 +272,8 @@ class NLPProcessor:
             mood = "stressed"
             score = 0.2
             
-        # LLM refinement if available
-        if self.groq_enabled:
+        # LLM refinement is optional to keep production latency low.
+        if self.groq_enabled and self.llm_sentiment_enabled:
             try:
                 prompt = f"""
                 Analyze the financial sentiment of this message: "{text}"
@@ -305,8 +349,18 @@ class NLPProcessor:
         if regex_intent["confidence"] >= 0.85:
             regex_intent["sentiment"] = sentiment_data
             return regex_intent
+
+        # 4. Transformer Path: multilingual zero-shot with contextual understanding.
+        if self.transformer_backend and self.transformer_backend.is_ready:
+            transformer_intent = self.transformer_backend.classify_intent(
+                text=text,
+                intent_descriptions=self._intent_descriptions,
+            )
+            if transformer_intent and transformer_intent.get("confidence", 0.0) >= 0.72:
+                transformer_intent["sentiment"] = sentiment_data
+                return transformer_intent
             
-        # 4. Slow Path: LLM Fallback (Priority 3)
+        # 5. Slow Path: LLM Fallback (Priority 3)
         # Only if regex failed or low confidence AND LLM is enabled
         if self.groq_enabled:
             llm_intent = self._llm_classify_intent(text) # Pass original text for better context
@@ -314,12 +368,12 @@ class NLPProcessor:
                 llm_intent["sentiment"] = sentiment_data
                 return llm_intent
         
-        # 5. Small Talk Fallback (New)
+        # 6. Small Talk Fallback (New)
         small_talk_res = self.handle_small_talk(text)
         if small_talk_res:
             return {"intent": "SMALL_TALK", "response": small_talk_res, "confidence": 1.0, "sentiment": sentiment_data}
 
-        # 6. Fallback if everything fails
+        # 7. Fallback if everything fails
         if regex_intent["confidence"] > 0.0:
             regex_intent["sentiment"] = sentiment_data
             return regex_intent
@@ -553,6 +607,7 @@ class NLPProcessor:
             "STOP_NOTIF",
             "CANCEL",
             "ASK_FOR_NOTIF",
+            "EDIT_TRANSACTION",
         }
 
         # Non-transaction intents should not go through transaction validation.
@@ -619,10 +674,34 @@ class NLPProcessor:
                      llm_data["needs_disambiguation"] = is_ambiguous and llm_data.get("category") == "Lain-lain"
                  return llm_data
 
-        # 3. Heuristic Extraction (Standard)
+        # 3. Transformer entity extraction for multilingual and context-heavy utterances.
+        transformer_hint = None
+        if self.transformer_backend and self.transformer_backend.is_ready and (
+            amount <= 0 or is_ambiguous or len(text.split()) > 3
+        ):
+            transformer_hint = self.transformer_backend.extract_entities(
+                text,
+                categories=list(self.category_keywords.keys()),
+            )
+            if transformer_hint and transformer_hint.get("amount"):
+                amount = float(transformer_hint["amount"])
+
+        # 4. Heuristic Extraction (Standard)
         category, cat_conf = self._detect_category(text_norm)
         merchant = self.extract_merchant(text_norm)
         date = self._extract_date(text)
+
+        if transformer_hint:
+            hint_cat = transformer_hint.get("category")
+            hint_merchant = transformer_hint.get("merchant")
+            hint_conf = float(transformer_hint.get("confidence", 0.6))
+
+            if category == "Lain-lain" and hint_cat and hint_cat != "Lain-lain":
+                category = hint_cat
+                cat_conf = max(cat_conf, min(0.95, hint_conf))
+
+            if merchant == "Transaksi" and hint_merchant and hint_merchant != "Transaksi":
+                merchant = hint_merchant
 
         # If no amount, keep partial detail (merchant/category) for follow-up merge flow.
         if amount <= 0:
@@ -774,7 +853,7 @@ class NLPProcessor:
             return {"new_value": None, "valid": False, "reason": "Nominal tidak valid"}
             
         if field == "category":
-            category = self._detect_category(user_message)
+            category, _ = self._detect_category(user_message)
             if category != "Lain-lain":
                 return {"new_value": category, "valid": True, "reason": None}
             return {"new_value": None, "valid": False, "reason": "Kategori tidak dikenal"}
@@ -805,7 +884,16 @@ class NLPProcessor:
             "donasi": "Sosial",
             "obat": "Kesehatan",
             "vitamin": "Kesehatan",
-            "dokter": "Kesehatan"
+            "dokter": "Kesehatan",
+            "makan": "Makanan",
+            "nasi": "Makanan",
+            "ayam": "Makanan",
+            "bakso": "Makanan",
+            "mie": "Makanan",
+            "warung": "Makanan",
+            "warteg": "Makanan",
+            "padang": "Makanan",
+            "nasgor": "Makanan"
         }
         for kw, cat in overrides.items():
             if kw in text:
@@ -834,9 +922,18 @@ class NLPProcessor:
                 matches = difflib.get_close_matches(word, all_keywords, n=1, cutoff=0.8)
                 if matches:
                     return keyword_to_cat[matches[0]], 0.7
-        
-        # 4. LLM Deep Categorization Fallback
-        if self.groq_enabled:
+
+        # 4. Transformer semantic categorization fallback
+        if self.transformer_backend and self.transformer_backend.is_ready:
+            guess, tr_conf = self.transformer_backend.classify_category(
+                text,
+                list(self.category_keywords.keys()),
+            )
+            if guess != "Lain-lain":
+                return guess, tr_conf
+
+        # 5. LLM Deep Categorization Fallback
+        if self.groq_enabled and self.llm_category_enabled:
             guess, llm_conf = self._llm_guess_category(text)
             return guess, llm_conf
             
@@ -948,6 +1045,276 @@ class NLPProcessor:
         
         merchant = clean_text.title()
         return merchant if merchant else "Transaksi"
+
+    def classify_intent_with_context(
+        self,
+        text: str,
+        context_messages: Optional[Sequence[str]] = None,
+        state: str = "IDLE",
+    ) -> Dict[str, Any]:
+        """Context-aware intent classification using transformer attention when available."""
+        if self.transformer_backend and self.transformer_backend.is_ready:
+            sentiment = self.analyze_sentiment(text)
+            res = self.transformer_backend.classify_intent(
+                text=text,
+                intent_descriptions=self._intent_descriptions,
+                context_messages=context_messages,
+            )
+            if res and res.get("confidence", 0.0) >= 0.72:
+                res["sentiment"] = sentiment
+                return res
+        return self.hybrid_classify(text, state)
+
+    def extract_transaction_data_with_context(
+        self,
+        text: str,
+        context_messages: Optional[Sequence[str]] = None,
+        forced_type: str = None,
+    ) -> Dict[str, Any]:
+        """Context-aware transaction extraction for multi-turn conversations."""
+        data = self.extract_transaction_data_simple(text, forced_type=forced_type)
+        if not context_messages or not data.get("is_partial"):
+            return data
+
+        # Merge with short context history to recover omitted fields (e.g. amount on next turn).
+        composed_text = " ".join([m for m in context_messages[-2:] if m] + [text]).strip()
+        if not composed_text:
+            return data
+        enriched = self.extract_transaction_data_simple(composed_text, forced_type=forced_type)
+        for key in ["amount", "category", "merchant", "date", "type"]:
+            if (not data.get(key) or data.get(key) in ("Transaksi", "Lain-lain")) and enriched.get(key):
+                data[key] = enriched[key]
+        data["confidence"] = max(data.get("confidence", 0.0), enriched.get("confidence", 0.0))
+        data["is_partial"] = not (data.get("amount") and data.get("merchant") and data.get("merchant") != "Transaksi")
+        if not data["is_partial"]:
+            data.pop("error", None)
+        return data
+
+    @staticmethod
+    def _percentile(values: List[float], pct: float) -> float:
+        if not values:
+            return 0.0
+        ordered = sorted(values)
+        idx = int(round((pct / 100.0) * (len(ordered) - 1)))
+        idx = max(0, min(idx, len(ordered) - 1))
+        return float(ordered[idx])
+
+    @staticmethod
+    def _is_present(value: Any) -> bool:
+        return value is not None and value != "" and value != "Transaksi" and value != "Lain-lain"
+
+    @staticmethod
+    def _compute_classification_metrics_fallback(y_true: List[str], y_pred: List[str]) -> Dict[str, Any]:
+        labels = sorted(set(y_true) | set(y_pred))
+        label_to_idx = {label: idx for idx, label in enumerate(labels)}
+        matrix = [[0 for _ in labels] for _ in labels]
+
+        for t, p in zip(y_true, y_pred):
+            matrix[label_to_idx[t]][label_to_idx[p]] += 1
+
+        per_precision = []
+        per_recall = []
+        per_f1 = []
+        correct = 0
+        total = len(y_true)
+
+        for i, label in enumerate(labels):
+            tp = matrix[i][i]
+            fp = sum(row[i] for row in matrix) - tp
+            fn = sum(matrix[i]) - tp
+
+            precision = tp / max(tp + fp, 1)
+            recall = tp / max(tp + fn, 1)
+            f1 = 2 * precision * recall / max(precision + recall, 1e-9)
+            per_precision.append(precision)
+            per_recall.append(recall)
+            per_f1.append(f1)
+
+        for t, p in zip(y_true, y_pred):
+            if t == p:
+                correct += 1
+
+        return {
+            "labels": labels,
+            "confusion_matrix": matrix,
+            "accuracy": correct / max(total, 1),
+            "macro_precision": sum(per_precision) / max(len(per_precision), 1),
+            "macro_recall": sum(per_recall) / max(len(per_recall), 1),
+            "macro_f1": sum(per_f1) / max(len(per_f1), 1),
+        }
+
+    def evaluate_intent_benchmark(self, samples: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Evaluate intent classification quality with production-oriented metrics.
+        Expected sample format: {"text": "...", "intent": "ADD_TRANSACTION"}.
+        """
+        if not samples:
+            return {
+                "samples": 0,
+                "accuracy": 0.0,
+                "macro_precision": 0.0,
+                "macro_recall": 0.0,
+                "macro_f1": 0.0,
+                "latency_p50_ms": 0.0,
+                "latency_p95_ms": 0.0,
+                "confusion_matrix": [],
+                "labels": [],
+            }
+
+        y_true: List[str] = []
+        y_pred: List[str] = []
+        latencies: List[float] = []
+
+        for row in samples:
+            text = str(row.get("text", "")).strip()
+            expected = str(row.get("intent", "UNKNOWN"))
+            t0 = time.perf_counter()
+            pred = self.hybrid_classify(text)
+            latencies.append((time.perf_counter() - t0) * 1000.0)
+            y_true.append(expected)
+            y_pred.append(str(pred.get("intent", "UNKNOWN")))
+        try:
+            from sklearn.metrics import accuracy_score, confusion_matrix, precision_recall_fscore_support
+
+            labels = sorted(set(y_true) | set(y_pred))
+            macro_p, macro_r, macro_f1, _ = precision_recall_fscore_support(
+                y_true, y_pred, average="macro", zero_division=0
+            )
+            accuracy = float(accuracy_score(y_true, y_pred))
+            matrix = confusion_matrix(y_true, y_pred, labels=labels).tolist()
+        except Exception:
+            fallback = self._compute_classification_metrics_fallback(y_true, y_pred)
+            labels = fallback["labels"]
+            macro_p = fallback["macro_precision"]
+            macro_r = fallback["macro_recall"]
+            macro_f1 = fallback["macro_f1"]
+            accuracy = fallback["accuracy"]
+            matrix = fallback["confusion_matrix"]
+
+        return {
+            "samples": len(samples),
+            "accuracy": round(float(accuracy), 4),
+            "macro_precision": round(float(macro_p), 4),
+            "macro_recall": round(float(macro_r), 4),
+            "macro_f1": round(float(macro_f1), 4),
+            "latency_p50_ms": round(self._percentile(latencies, 50.0), 2),
+            "latency_p95_ms": round(self._percentile(latencies, 95.0), 2),
+            "confusion_matrix": matrix,
+            "labels": labels,
+        }
+
+    def evaluate_transaction_extraction(self, samples: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Evaluate transaction extraction quality.
+        Expected format: {"text": "...", "amount": 20000, "category": "...", "merchant": "..."}.
+        """
+        if not samples:
+            return {
+                "samples": 0,
+                "amount_mae": 0.0,
+                "category_accuracy": 0.0,
+                "merchant_accuracy": 0.0,
+                "field_precision": 0.0,
+                "field_recall": 0.0,
+                "field_f1": 0.0,
+            }
+
+        amount_errors: List[float] = []
+        category_total = 0
+        category_hits = 0
+        merchant_total = 0
+        merchant_hits = 0
+        tp = 0
+        fp = 0
+        fn = 0
+
+        for row in samples:
+            text = str(row.get("text", "")).strip()
+            expected = {
+                "amount": row.get("amount"),
+                "category": row.get("category"),
+                "merchant": row.get("merchant"),
+            }
+            pred = self.extract_transaction_data(text)
+
+            exp_amount = expected.get("amount")
+            pred_amount = pred.get("amount")
+            if exp_amount is not None:
+                if pred_amount is not None:
+                    amount_errors.append(abs(float(exp_amount) - float(pred_amount)))
+                else:
+                    amount_errors.append(abs(float(exp_amount)))
+
+            if expected.get("category") is not None:
+                category_total += 1
+                if str(pred.get("category")) == str(expected.get("category")):
+                    category_hits += 1
+
+            if expected.get("merchant") is not None:
+                merchant_total += 1
+                if str(pred.get("merchant", "")).strip().lower() == str(expected.get("merchant", "")).strip().lower():
+                    merchant_hits += 1
+
+            for field in ("amount", "category", "merchant"):
+                pred_present = self._is_present(pred.get(field))
+                exp_present = self._is_present(expected.get(field))
+                if pred_present and exp_present:
+                    tp += 1
+                elif pred_present and not exp_present:
+                    fp += 1
+                elif (not pred_present) and exp_present:
+                    fn += 1
+
+        precision = tp / max(tp + fp, 1)
+        recall = tp / max(tp + fn, 1)
+        f1 = 2 * precision * recall / max(precision + recall, 1e-9)
+
+        return {
+            "samples": len(samples),
+            "amount_mae": round(sum(amount_errors) / max(len(amount_errors), 1), 2),
+            "category_accuracy": round(category_hits / max(category_total, 1), 4),
+            "merchant_accuracy": round(merchant_hits / max(merchant_total, 1), 4),
+            "field_precision": round(precision, 4),
+            "field_recall": round(recall, 4),
+            "field_f1": round(f1, 4),
+        }
+
+    def benchmark_production_inference(self, texts: List[str], rounds: int = 1) -> Dict[str, Any]:
+        """Benchmark latency/throughput for production deployment checks."""
+        if not texts:
+            return {"samples": 0, "classify_p95_ms": 0.0, "extract_p95_ms": 0.0, "throughput_qps": 0.0}
+
+        classify_latencies: List[float] = []
+        extract_latencies: List[float] = []
+        started = time.perf_counter()
+        total_calls = 0
+
+        for _ in range(max(1, rounds)):
+            for text in texts:
+                t0 = time.perf_counter()
+                self.hybrid_classify(text)
+                classify_latencies.append((time.perf_counter() - t0) * 1000.0)
+                t1 = time.perf_counter()
+                self.extract_transaction_data(text)
+                extract_latencies.append((time.perf_counter() - t1) * 1000.0)
+                total_calls += 2
+
+        elapsed = max(time.perf_counter() - started, 1e-9)
+        result = {
+            "samples": len(texts) * max(1, rounds),
+            "classify_p50_ms": round(self._percentile(classify_latencies, 50.0), 2),
+            "classify_p95_ms": round(self._percentile(classify_latencies, 95.0), 2),
+            "extract_p50_ms": round(self._percentile(extract_latencies, 50.0), 2),
+            "extract_p95_ms": round(self._percentile(extract_latencies, 95.0), 2),
+            "throughput_qps": round(total_calls / elapsed, 2),
+        }
+        if self.transformer_backend and self.transformer_backend.is_ready:
+            result["transformer_intent"] = self.transformer_backend.benchmark_intent_latency(
+                texts=texts,
+                intent_descriptions=self._intent_descriptions,
+                rounds=rounds,
+            )
+        return result
 
     # Compatibility alias for classify_intent
     def classify_intent(self, text: str, state: str = "IDLE") -> Dict[str, Any]:
