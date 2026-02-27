@@ -153,7 +153,7 @@ async def what_if_simulator(update: Update, context: ContextTypes.DEFAULT_TYPE):
         Current Savings: Rp {savings:,.0f}
         
         Proposed Expense: Rp {amount:,.0f} for "{desc}"
-        
+            
         Task:
         1. Calculate projected cashflow if this expense happens.
         2. Give a risk rating (Safe/Risky/Dangerous).

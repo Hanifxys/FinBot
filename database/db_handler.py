@@ -306,10 +306,16 @@ class DBHandler:
 
     def get_monthly_wrapper(self, user_id, month, year):
         """Fetch the Spotify-style monthly wrapper if it exists."""
-        response = self._safe_execute(self.supabase.table(Tables.MONTHLY_WRAPPERS).select("*")\
-            .eq("user_id", user_id).eq("month", month).eq("year", year))
-        if response.data:
-            return response.data[0]
+        try:
+            response = self._safe_execute(self.supabase.table(Tables.MONTHLY_WRAPPERS).select("*")\
+                .eq("user_id", user_id).eq("month", month).eq("year", year))
+            if response.data:
+                return response.data[0]
+        except Exception as e:
+            if "PGRST205" in str(e):
+                logging.warning(f"Table {Tables.MONTHLY_WRAPPERS} not found. Feature may not be deployed.")
+            else:
+                logging.error(f"Error fetching monthly wrapper: {e}")
         return None
 
     def save_monthly_wrapper(self, user_id, month, year, content, status="pending"):
@@ -323,24 +329,38 @@ class DBHandler:
             "updated_at": datetime.now().isoformat()
         }
         
-        # Check if exists
-        existing = self.get_monthly_wrapper(user_id, month, year)
-        if existing:
-            response = self._safe_execute(self.supabase.table(Tables.MONTHLY_WRAPPERS).update(data).eq("id", existing['id']))
-        else:
-            data["created_at"] = datetime.now().isoformat()
-            response = self._safe_execute(self.supabase.table(Tables.MONTHLY_WRAPPERS).insert(data))
-        return response.data[0]
+        try:
+            # Check if exists
+            existing = self.get_monthly_wrapper(user_id, month, year)
+            if existing:
+                response = self._safe_execute(self.supabase.table(Tables.MONTHLY_WRAPPERS).update(data).eq("id", existing['id']))
+            else:
+                data["created_at"] = datetime.now().isoformat()
+                response = self._safe_execute(self.supabase.table(Tables.MONTHLY_WRAPPERS).insert(data))
+            return response.data[0]
+        except Exception as e:
+            if "PGRST205" in str(e):
+                logging.warning(f"Table {Tables.MONTHLY_WRAPPERS} not found. Cannot save wrapper.")
+            else:
+                logging.error(f"Error saving monthly wrapper: {e}")
+            return data # Return the data as a fallback
 
     def get_wrapper_stats(self, month, year):
         """Aggregate stats for the admin dashboard."""
-        response = self._safe_execute(self.supabase.table(Tables.MONTHLY_WRAPPERS).select("status")\
-            .eq("month", month).eq("year", year))
-        
-        stats = {"total": len(response.data), "sent": 0, "failed": 0, "pending": 0}
-        for r in response.data:
-            stats[r['status']] = stats.get(r['status'], 0) + 1
-        return stats
+        try:
+            response = self._safe_execute(self.supabase.table(Tables.MONTHLY_WRAPPERS).select("status")\
+                .eq("month", month).eq("year", year))
+            
+            stats = {"total": len(response.data), "sent": 0, "failed": 0, "pending": 0}
+            for r in response.data:
+                stats[r['status']] = stats.get(r['status'], 0) + 1
+            return stats
+        except Exception as e:
+            if "PGRST205" in str(e):
+                logging.warning(f"Table {Tables.MONTHLY_WRAPPERS} not found. Returning empty stats.")
+            else:
+                logging.error(f"Error getting wrapper stats: {e}")
+            return {"total": 0, "sent": 0, "failed": 0, "pending": 0}
 
     def get_user_saving_goals(self, user_id, active_only=True):
         query = self.supabase.table(Tables.SAVING_GOALS).select("*").eq("user_id", user_id)
