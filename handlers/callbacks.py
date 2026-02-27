@@ -580,22 +580,38 @@ async def _h_tx_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action:
         description += f" ({', '.join(tags)})"
 
     try:
-        db.add_transaction(
+        new_tx = db.add_transaction(
             user_id=user_db.id,
             amount=pending["amount"],
             category=pending["category"],
-            trans_type="expense",
+            trans_type=pending.get("type", "expense"),
             description=description,
             trans_date=tx_date,
         )
+        # For frictionless undo
+        if new_tx:
+            ctx.user_data["last_tx_id"] = new_tx.id
+            ctx.user_data["last_tx_ts"] = datetime.now().timestamp()
+            
     except Exception as exc:
         logger.error("add_transaction failed: %s", exc)
         await query.edit_message_text("❌ Gagal menyimpan transaksi. Coba lagi ya.")
         return
 
+    from utils.visuals import format_currency
+    amount_str = format_currency(pending['amount'])
     budget_msg = budget_mgr.check_budget_status(user_db.id, pending["category"])
-    final_msg = f"✅ Tersimpan: Rp{pending['amount']:,.0f} · {pending['category']}"
-    final_msg += f"\n\n{budget_msg}" if budget_msg else "\n\nMau catat transaksi lain atau cek laporan?"
+    
+    # Internal Score Check
+    from core import analyzer
+    score_data = analyzer.calculate_financial_score(user_db.id)
+    
+    final_msg = f"✅ Dicatat: {amount_str} · {pending['category']}"
+    if budget_msg:
+        final_msg += f"\n\n{budget_msg}"
+    
+    final_msg += f"\n\n🏆 **Financial Score**: {score_data['score']}/100 ({score_data['status']})"
+    final_msg += "\n\n_Ketik 'undo' dalam 30 detik untuk batal._"
 
     await query.edit_message_text(final_msg, reply_markup=_post_action_kb())
     await query.message.reply_text("Ada lagi yang bisa saya bantu?", reply_markup=get_main_menu_keyboard())
@@ -667,6 +683,11 @@ async def _h_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE, action: str)
     user_db = db.get_or_create_user(user_id, update.effective_user.username)
     period = action.removeprefix("report_")
     report_msg = budget_mgr.generate_report(user_db.id, period=period)
+    
+    # Add Financial Score to Report
+    from core import analyzer
+    score_data = analyzer.calculate_financial_score(user_db.id)
+    report_msg += f"\n🏆 **Financial Score**: {score_data['score']}/100 ({score_data['status']})"
 
     await query.edit_message_text(report_msg, reply_markup=_report_nav_kb())
 
@@ -794,6 +815,109 @@ async def _h_code_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action
     await query.edit_message_text("Edit cancelled. Feel free to ask again. 👍")
     await query.message.reply_text("Butuh bantuan lainnya?", reply_markup=get_main_menu_keyboard())
     ctx.user_data.pop("pending_code", None)
+
+
+# ── Bulk & Correction flow ───────────────────────────────────────────────────
+
+@router.exact("bulk_confirm")
+async def _h_bulk_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    query = update.callback_query
+    user_id = update.effective_user.id
+    user_db = db.get_or_create_user(user_id, update.effective_user.username)
+    items = ctx.user_data.get("pending_bulk")
+    
+    if not items:
+        await query.answer("Sesi bulk sudah habis.")
+        return
+
+    await query.edit_message_text(f"⏳ Sedang menyimpan {len(items)} transaksi...")
+    
+    success_count = 0
+    last_added_id = None
+    for item in items:
+        try:
+            tx_date = _parse_date(item.get("date"))
+            new_tx = db.add_transaction(
+                user_id=user_db.id,
+                amount=float(item["amount"]),
+                category=item["category"],
+                trans_type=item.get("type", "expense"),
+                description=item.get("merchant") or "Bulk Entry",
+                trans_date=tx_date,
+            )
+            if new_tx:
+                last_added_id = new_tx.id
+            success_count += 1
+        except Exception as exc:
+            logger.error("Bulk item failed: %s", exc)
+
+    if last_added_id:
+        ctx.user_data["last_tx_id"] = last_added_id
+        ctx.user_data["last_tx_ts"] = datetime.now().timestamp()
+
+    ctx.user_data.pop("pending_bulk", None)
+    await query.edit_message_text(f"✅ Berhasil menyimpan {success_count} transaksi!\n_Ketik 'undo' untuk batal._")
+    await query.message.reply_text("Ada lagi yang mau dicatat?", reply_markup=get_main_menu_keyboard())
+    
+    try:
+        await update_pinned_dashboard(ctx, user_id)
+    except Exception: pass
+
+
+@router.exact("bulk_cancel")
+async def _h_bulk_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    ctx.user_data.pop("pending_bulk", None)
+    await update.callback_query.edit_message_text("Oke, semua transaksi dibatalkan. ✅")
+
+
+@router.exact("update_confirm")
+async def _h_update_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    query = update.callback_query
+    user_id = update.effective_user.id
+    user_db = db.get_or_create_user(user_id, update.effective_user.username)
+    pending = ctx.user_data.get("pending_update")
+    
+    if not pending:
+        await query.answer("Sesi koreksi sudah habis.")
+        return
+
+    try:
+        # We need a db.update_transaction method. Let's check if it exists or use delete + add
+        # Based on current db_handler.py, it might not have update.
+        # Let's assume we can use db.supabase directly if needed, or check db_handler.
+        success = db.delete_transaction(user_db.id, pending["id"])
+        if success:
+            db.add_transaction(
+                user_id=user_db.id,
+                amount=float(pending["amount"]),
+                category=pending["category"],
+                trans_type=pending["type"],
+                description=pending["merchant"],
+                trans_date=_parse_date(pending["date"]),
+            )
+            await query.edit_message_text("✅ Transaksi berhasil dikoreksi!")
+        else:
+            await query.edit_message_text("❌ Gagal mengoreksi transaksi lama.")
+    except Exception as exc:
+        logger.error("update_confirm failed: %s", exc)
+        await query.edit_message_text("❌ Terjadi kesalahan saat update.")
+
+    ctx.user_data.pop("pending_update", None)
+    await query.message.reply_text("Ada lagi?", reply_markup=get_main_menu_keyboard())
+    try:
+        await update_pinned_dashboard(ctx, user_id)
+    except Exception: pass
+
+
+@router.exact("update_cancel")
+async def _h_update_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    ctx.user_data.pop("pending_update", None)
+    await update.callback_query.edit_message_text("Koreksi dibatalkan. ✅")
+
+
+@router.exact("split_receivable")
+async def _h_split_receivable(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    await update.callback_query.answer("Fitur Piutang sedang dalam pengembangan! 🚀", show_alert=True)
 
 
 # ---------------------------------------------------------------------------

@@ -99,6 +99,14 @@ class NLPProcessor:
             "set_budget_alert": re.compile(r'\b(ingat|inget|alert|warning|batas|notif|peringatan).*(budget|anggaran)\b', re.IGNORECASE),
             "set_budget": re.compile(r'\b(target|set|atur|ubah|ganti|tambah).*(budget|anggaran|limit)\b', re.IGNORECASE),
             "set_gaji": re.compile(r'\b(set|atur|ubah|ganti|masukkan).*(gaji|pemasukan|income|pendapatan)\b', re.IGNORECASE),
+            "split_bill": re.compile(r'\b(split|bagi|patungan|share).*(bill|total|orang|person)\b', re.IGNORECASE),
+            "correction": re.compile(r'\b(salah|ralat|bukan|maksudnya|eh)\b', re.IGNORECASE),
+            "undo": re.compile(r'\b(undo|batal|cancel|gak jadi|gakjadi|balikin)\b', re.IGNORECASE),
+            "executive_mode": re.compile(r'\b(executive|eksekutif|ringkas|tajam|bullet)\b', re.IGNORECASE),
+            "elite_analysis": re.compile(r'\b(elite|intel|market|risk|prediksi pasar|investasi|analisis mendalam)\b', re.IGNORECASE),
+            "investment_opps": re.compile(r'\b(peluang|opportunity|cuan|beli apa|investasi apa|rekomendasi)\b', re.IGNORECASE),
+            "doc_analysis": re.compile(r'\b(analisis file|bedah laporan|parsing|baca laporan)\b', re.IGNORECASE),
+            "bulk_transaction": re.compile(r'(\n|,|;|:)', re.IGNORECASE), # Heuristic for multiple items
         }
 
         # New: Command-like patterns for feedback and control
@@ -324,6 +332,39 @@ class NLPProcessor:
         if self._intents_map["set_budget"].search(text):
             return {"intent": "SET_BUDGET", "confidence": 0.95}
 
+        # Correction (eh salah, bukan 5rb tapi 50rb)
+        if self._intents_map["correction"].search(text) and self._extract_amount(text) > 0:
+            return {"intent": "CORRECTION", "confidence": 0.9}
+            
+        # Undo (undo, batal)
+        if self._intents_map["undo"].search(text) and len(text.split()) <= 3:
+            return {"intent": "UNDO", "confidence": 0.95}
+            
+        # Executive Mode (ringkas, tajam)
+        if self._intents_map["executive_mode"].search(text) and len(text.split()) <= 4:
+            return {"intent": "EXECUTIVE_MODE", "confidence": 0.9}
+            
+        # Elite Analysis (market, risk)
+        if self._intents_map["elite_analysis"].search(text):
+            return {"intent": "ELITE_ANALYSIS", "confidence": 0.95}
+            
+        # Investment Opportunities
+        if self._intents_map["investment_opps"].search(text):
+            return {"intent": "INVESTMENT_OPPS", "confidence": 0.9}
+            
+        # Document Analysis
+        if self._intents_map["doc_analysis"].search(text):
+            return {"intent": "DOC_ANALYSIS", "confidence": 0.9}
+
+        # Split Bill (makan bareng total 450rb bagi 3)
+        if self._intents_map["split_bill"].search(text) and self._extract_amount(text) > 0:
+            return {"intent": "SPLIT_BILL", "confidence": 0.9}
+
+        # Bulk entry check (multiple lines or separators)
+        if "\n" in text or (text.count(',') >= 2 and self._extract_amount(text) > 0):
+             # High probability of bulk entry
+             return {"intent": "BULK_TRANSACTION", "confidence": 0.8}
+
         # Natural Language Settings
         if any(kw in text for kw in ["mode", "ganti mode", "ubah mode"]):
             if any(kw in text for kw in ["coach", "galak", "tegas"]):
@@ -395,54 +436,221 @@ class NLPProcessor:
         finally:
             gc.collect()
 
+    async def analyze_financial_sentiment(self, text: str) -> Dict[str, Any]:
+        """
+        Sentiment analysis specialized for financial news and reports (ID/EN).
+        """
+        if not self.groq_enabled:
+            return {"sentiment": "neutral", "score": 0.5}
+
+        try:
+            prompt = f"""
+            Analyze the financial sentiment of this text. It could be in Indonesian or English.
+            Text: "{text}"
+            
+            Classify as: BULLISH, BEARISH, or NEUTRAL.
+            Provide a confidence score between 0.0 and 1.0.
+            Return JSON: {{"sentiment": "class", "score": float, "reason": "brief explanation"}}
+            """
+            chat_completion = self.client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model="llama-3.3-70b-versatile",
+                response_format={"type": "json_object"},
+                temperature=0.0
+            )
+            import json
+            return json.loads(chat_completion.choices[0].message.content)
+        except Exception as e:
+            logger.error(f"Financial sentiment analysis failed: {e}")
+            return {"sentiment": "neutral", "score": 0.5, "error": str(e)}
+
+    async def extract_financial_entities(self, text: str) -> List[Dict[str, Any]]:
+        """
+        Financial Named Entity Recognition (NER) for stocks, tickers, currencies, and institutions.
+        """
+        if not self.groq_enabled:
+            return []
+
+        try:
+            prompt = f"""
+            Extract financial entities from this text (Indonesian or English).
+            Text: "{text}"
+            
+            Identify:
+            - TICKER (e.g. BBCA, AAPL)
+            - INSTITUTION (e.g. Bank Mandiri, Goldman Sachs)
+            - CURRENCY (e.g. IDR, USD)
+            - FINANCIAL_INSTRUMENT (e.g. Obligasi, Reksadana, Stocks)
+            - AMOUNT (e.g. 5 Miliar, $100)
+            
+            Return JSON list: [{{"entity": "text", "type": "label", "context": "context"}}]
+            """
+            chat_completion = self.client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model="llama-3.3-70b-versatile",
+                response_format={"type": "json_object"},
+                temperature=0.0
+            )
+            import json
+            res = json.loads(chat_completion.choices[0].message.content)
+            return res.get("entities", [])
+        except Exception as e:
+            logger.error(f"Financial NER failed: {e}")
+            return []
+
     def extract_transaction_data(self, text: str) -> Dict[str, Any]:
         """
         Extracts structured financial transaction data.
         Returns JSON-like dict.
         """
         # 0. Check for implicit type from classification
-        classification = self._regex_classify(text)
+        classification = self.classify_intent(text)
         forced_type = classification.get("type")
+        intent = classification.get("intent")
 
-        # 1. Try LLM Extraction for complex sentences if enabled
-        if self.groq_enabled and len(text.split()) > 4:
+        # 1. Handle Bulk Transactions
+        if intent == "BULK_TRANSACTION":
+            return {
+                "intent": "BULK_TRANSACTION",
+                "items": self.extract_bulk_transactions(text),
+                "confidence": 0.95
+            }
+
+        # 2. Handle Split Bill
+        if intent == "SPLIT_BILL":
+            return self.extract_split_bill(text)
+
+        # 3. Handle Correction
+        if intent == "CORRECTION":
+            data = self.extract_transaction_data_simple(text)
+            data["intent"] = "CORRECTION"
+            return data
+
+        # 4. Standard Extraction
+        return self.extract_transaction_data_simple(text, forced_type)
+
+    def extract_transaction_data_simple(self, text: str, forced_type: str = None) -> Dict[str, Any]:
+        """Standard single transaction extraction logic with granular confidence."""
+        # Ambiguity Check (Intent Disambiguation Layer)
+        ambiguous_keywords = ["transfer", "bayar", "kirim", "masuk"]
+        is_ambiguous = any(kw in text.lower() for kw in ambiguous_keywords) and "intent" not in text # intent is internal flag
+
+        # Try LLM Extraction for complex sentences
+        if self.groq_enabled and (len(text.split()) > 4 or is_ambiguous):
              llm_data = self._llm_extract_entities(text)
              if llm_data and llm_data.get("amount"):
                  if forced_type:
                      llm_data["type"] = forced_type
+                 llm_data["date"] = self._extract_date(text)
+                 # Adjust confidence for ambiguous terms
+                 if is_ambiguous and llm_data.get("confidence", 0.9) > 0.7:
+                     llm_data["needs_disambiguation"] = True
+                     llm_data["confidence"] = 0.65
                  return llm_data
 
-        # 2. Fallback to Regex/Heuristic (Standard)
+        # Fallback to Regex/Heuristic (Standard)
         text_norm = self.normalize_text(text)
         amount = self._extract_amount(text_norm)
-        category = self._detect_category(text_norm)
+        category, cat_conf = self._detect_category(text_norm)
         merchant = self.extract_merchant(text_norm)
-        
-        # Mapping categories
-        category_map = {
-            "Makanan": "Makanan", "Minuman": "Minuman", "Jajanan": "Jajanan",
-            "Transportasi": "Transportasi", "Belanja": "Belanja", "Tagihan": "Tagihan",
-            "Kesehatan": "Kesehatan", "Lifestyle": "Lifestyle", "Sosial": "Sosial",
-            "Pendidikan": "Pendidikan", "Maintenance": "Maintenance", "Investasi": "Investasi",
-            "Gaji": "Gaji", "Lain-lain": "Lain-lain"
-        }
-        mapped_cat = category_map.get(category, "Lain-lain")
+        date = self._extract_date(text)
         
         # Determine type
         if forced_type:
             type_ = forced_type
         else:
-            type_ = "income" if mapped_cat == "Gaji" else "expense"
+            type_ = "income" if category == "Gaji" else "expense"
         
-        from datetime import datetime
+        # Base confidence
+        conf = cat_conf
+        if amount > 0:
+            conf = min(0.95, conf + 0.1) # Boost if amount exists
+        else:
+            conf = 0.4 # Low if no amount (partial entry)
+
         return {
             "amount": amount if amount > 0 else None,
             "type": type_ if amount > 0 else None,
-            "category": mapped_cat if amount > 0 else None,
+            "category": category if amount > 0 else None,
             "merchant": merchant if merchant != "Transaksi" else None,
-            "date": datetime.now().strftime("%Y-%m-%d"),
-            "confidence": 0.9 if amount > 0 else 0.0
+            "date": date,
+            "confidence": conf,
+            "is_partial": amount <= 0 or merchant == "Transaksi",
+            "needs_disambiguation": is_ambiguous and conf < 0.8
         }
+
+    def extract_split_bill(self, text: str) -> Dict[str, Any]:
+        """Extracts split bill data: total, people count, and per-person share."""
+        text_norm = self.normalize_text(text)
+        total_amount = self._extract_amount(text_norm)
+        
+        # Extract number of people
+        people_match = re.search(r'(\d+)\s*(?:orang|person|people|org)', text_norm)
+        num_people = int(people_match.group(1)) if people_match else 1
+        
+        if num_people <= 0: num_people = 1
+        
+        per_person = total_amount / num_people
+        category = self._detect_category(text_norm)
+        merchant = self.extract_merchant(text_norm)
+        date = self._extract_date(text)
+
+        return {
+            "intent": "SPLIT_BILL",
+            "total_amount": total_amount,
+            "num_people": num_people,
+            "per_person": per_person,
+            "category": category,
+            "merchant": merchant,
+            "date": date,
+            "confidence": 0.95
+        }
+
+    def extract_bulk_transactions(self, text: str) -> List[Dict[str, Any]]:
+        """Uses LLM to parse multiple transactions from one message."""
+        if not self.groq_enabled:
+            # Basic fallback: split by newline and parse each
+            results = []
+            for line in text.split('\n'):
+                if line.strip():
+                    data = self.extract_transaction_data_simple(line)
+                    if data.get("amount"):
+                        results.append(data)
+            return results
+
+        try:
+            prompt = f"""
+            Extract all transactions from this message and return as a JSON list.
+            Message: "{text}"
+            
+            JSON structure for each item:
+            {{
+                "amount": float,
+                "category": string (Makanan, Minuman, Jajanan, Transportasi, Belanja, Tagihan, Lain-lain),
+                "merchant": string,
+                "type": "expense" or "income",
+                "date": "YYYY-MM-DD" (Today is {self._extract_date("")})
+            }}
+            Return ONLY the JSON list.
+            """
+            chat_completion = self.client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model="llama-3.3-70b-versatile",
+                response_format={"type": "json_object"},
+                temperature=0.0
+            )
+            import json
+            res = json.loads(chat_completion.choices[0].message.content)
+            # Handle different JSON structures from LLM
+            if isinstance(res, dict) and "transactions" in res:
+                return res["transactions"]
+            if isinstance(res, dict) and "items" in res:
+                return res["items"]
+            if isinstance(res, list):
+                return res
+            return [res] if isinstance(res, dict) and res.get("amount") else []
+        except Exception:
+            return []
 
     def _llm_extract_entities(self, text: str) -> Optional[Dict[str, Any]]:
         """Uses LLM to extract NER (Amount, Category, Merchant) from complex text."""
@@ -500,24 +708,46 @@ class NLPProcessor:
             
         return {"new_value": None, "valid": False, "reason": "Field tidak valid"}
 
-    def _detect_category(self, text: str) -> str:
-        """Smarter category detection with improved keyword matching using pre-compiled regex and fuzzy match"""
+    def _detect_category(self, text: str) -> Tuple[str, float]:
+        """Smarter category detection with improved keyword matching and confidence scoring"""
         if not text:
-            return "Lain-lain"
+            return "Lain-lain", 0.0
             
         text = text.lower()
         
-        # 1. Exact Regex Match
+        # 1. Specific Keyword Override (Decision Intelligence)
+        # Even if "beli" is present, "bensin" must be Transportasi
+        overrides = {
+            "bensin": "Transportasi",
+            "pertalite": "Transportasi",
+            "pertamax": "Transportasi",
+            "parkir": "Transportasi",
+            "ojol": "Transportasi",
+            "listrik": "Tagihan",
+            "wifi": "Tagihan",
+            "token": "Tagihan",
+            "pulsa": "Tagihan",
+            "sedekah": "Sosial",
+            "zakat": "Sosial",
+            "donasi": "Sosial",
+            "obat": "Kesehatan",
+            "vitamin": "Kesehatan",
+            "dokter": "Kesehatan"
+        }
+        for kw, cat in overrides.items():
+            if kw in text:
+                return cat, 0.98
+
+        # 2. Exact Regex Match (Highest Confidence)
         for category, pattern in self._compiled_keywords.items():
             if pattern.search(text):
-                return category
+                return category, 0.95
         
-        # 2. Heuristic: if text contains "beli" or "bayar" but no category found
+        # 3. Heuristic: if text contains "beli" or "bayar" but no category found
         if any(kw in text for kw in ["beli", "bayar", "pesan", "checkout"]):
-            return "Belanja"
+            return "Belanja", 0.75
 
         # 3. Fuzzy Match for Typos (e.g. "mkan" -> "makan")
-        # Flatten all keywords
         all_keywords = []
         keyword_to_cat = {}
         for cat, kws in self.category_keywords.items():
@@ -530,9 +760,80 @@ class NLPProcessor:
             if len(word) > 3: # Skip short words
                 matches = difflib.get_close_matches(word, all_keywords, n=1, cutoff=0.8)
                 if matches:
-                    return keyword_to_cat[matches[0]]
+                    return keyword_to_cat[matches[0]], 0.7
+        
+        # 4. LLM Deep Categorization Fallback
+        if self.groq_enabled:
+            guess, llm_conf = self._llm_guess_category(text)
+            return guess, llm_conf
             
-        return "Lain-lain"
+        return "Lain-lain", 0.3
+
+    def _llm_guess_category(self, text: str) -> Tuple[str, float]:
+        """Uses LLM to guess category with confidence scoring"""
+        try:
+            merchant = self.extract_merchant(text)
+            prompt = f"""
+            Guess the financial category for this merchant: "{merchant}" 
+            Choose ONLY ONE from: Makanan, Minuman, Jajanan, Transportasi, Belanja, Tagihan, Kesehatan, Lifestyle, Sosial, Pendidikan, Maintenance, Investasi, Gaji.
+            Context: {text}
+            Return JSON: {{"category": "name", "confidence": 0.0-1.0}}
+            """
+            chat_completion = self.client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model="llama-3.1-8b-instant",
+                response_format={"type": "json_object"},
+                temperature=0.0
+            )
+            import json
+            res = json.loads(chat_completion.choices[0].message.content)
+            guess = res.get("category", "Lain-lain")
+            conf = float(res.get("confidence", 0.6))
+            if guess in self.category_keywords:
+                return guess, conf
+        except Exception:
+            pass
+        return "Lain-lain", 0.5
+
+    def _extract_date(self, text: str) -> str:
+        """Extracts date from text, handling relative time expressions."""
+        from datetime import datetime, timedelta
+        now = datetime.now()
+        text = text.lower()
+        
+        # Relative dates
+        if "kemarin" in text:
+            target = now - timedelta(days=1)
+            return target.strftime("%Y-%m-%d")
+        if "lusa" in text:
+            target = now + timedelta(days=2)
+            return target.strftime("%Y-%m-%d")
+        if "tadi" in text or "barusan" in text or "tadi pagi" in text or "tadi siang" in text:
+            return now.strftime("%Y-%m-%d")
+        if "minggu lalu" in text:
+            target = now - timedelta(weeks=1)
+            return target.strftime("%Y-%m-%d")
+            
+        # Regex for "tanggal 15" or "tgl 15"
+        tgl_match = re.search(r'(?:tanggal|tgl)\s*(\d{1,2})', text)
+        if tgl_match:
+            day = int(tgl_match.group(1))
+            try:
+                # Assume current month, if day > current day, maybe it's last month? 
+                # Keep it simple for now: current month
+                target = now.replace(day=day)
+                return target.strftime("%Y-%m-%d")
+            except ValueError:
+                pass
+
+        # Regex for "2 hari lalu"
+        ago_match = re.search(r'(\d+)\s*hari\s*lalu', text)
+        if ago_match:
+            days = int(ago_match.group(1))
+            target = now - timedelta(days=days)
+            return target.strftime("%Y-%m-%d")
+
+        return now.strftime("%Y-%m-%d")
 
     def _extract_amount(self, text: str) -> float:
         val = parse_primary_amount_id(text)

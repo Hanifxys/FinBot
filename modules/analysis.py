@@ -62,73 +62,157 @@ class ExpenseAnalyzer:
             logger.error(f"Error detecting recurring patterns: {e}")
             return []
 
-    def get_instant_feedback(self, user_id, category, merchant, amount):
+    def get_predictive_context(self, user_id, category, amount):
         """
-        Provides real-time feedback context for a new transaction.
-        e.g., "3rd coffee this week!"
+        Predicts merchant and time based on historical patterns for a category/amount.
+        Returns: {'merchant': str, 'time_label': str, 'confidence': float}
         """
         try:
-            # 1. Check frequency in last 7 days
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=7)
+            # Query last 100 transactions for this user
+            transactions = self.db.get_sliding_window_transactions(user_id, days=180)
+            if not transactions:
+                return None
             
-            # Optimally, we should have a DB query for this range, but reusing sliding window for now
-            transactions = self.db.get_sliding_window_transactions(user_id, days=7)
+            # Filter by category and similar amount (±20%)
+            similar = [t for t in transactions if t.category == category and 
+                       t.type == 'expense' and
+                       (amount * 0.8 <= t.amount <= amount * 1.2)]
             
-            similar_tx = []
-            category_total = 0
+            if not similar:
+                # Fallback to category only if amount match fails
+                similar = [t for t in transactions if t.category == category and t.type == 'expense']
             
-            clean_merchant = (merchant or "").lower().strip()
-            
-            for t in transactions:
-                if t.type == 'expense':
-                    t_desc = (t.description or "").lower().strip()
-                    
-                    # Merchant match
-                    if clean_merchant and clean_merchant in t_desc:
-                        similar_tx.append(t)
-                    
-                    # Category match
-                    if t.category == category:
-                        category_total += t.amount
-
-            count = len(similar_tx) + 1 # Including current one
-            total_spent = sum(t.amount for t in similar_tx) + amount
-            
-            feedback = ""
-            
-            # Heuristic Rules
-            if count >= 3:
-                feedback += f"🚨 **Frequent Spend Alert**: Ini pembelian ke-{count} di '{merchant}' minggu ini (Total: Rp{total_spent:,.0f}). "
-            
-            if category_total > 500000 and category == "Makanan":
-                 feedback += f"🍔 **Foodie Alert**: Budget makan minggu ini udah tembus Rp{category_total:,.0f} lho. "
-                 
-            # 2. Check category budget status (Linear Drift)
-            now = datetime.now()
-            days_in_month = 30
-            day_of_month = now.day
-            expected_pct = (day_of_month / days_in_month) * 100
-            
-            budgets = self.db.get_user_budgets(user_id)
-            target_budget = next((b for b in budgets if b.category == category), None)
-            
-            if target_budget and target_budget.limit_amount > 0:
-                current_pct = (target_budget.current_usage / target_budget.limit_amount) * 100
-                new_pct = ((target_budget.current_usage + amount) / target_budget.limit_amount) * 100
+            if not similar:
+                return None
                 
-                if new_pct > 100:
-                    feedback += f"🚨 **OVER BUDGET!** Transaksi ini bakal bikin budget {category} jebol ({new_pct:.1f}%). "
-                elif new_pct > expected_pct + 15:
-                    feedback += f"⚠️ **Budget Drift**: Kecepatan belanjamu di {category} ({new_pct:.1f}%) jauh melampaui waktu bulan ini ({expected_pct:.1f}%). "
-                elif new_pct > 80:
-                    feedback += f"🟡 **Hampir Limit**: Budget {category} sudah terpakai {new_pct:.1f}%. Sisa tinggal sedikit! "
+            df = pd.DataFrame([{
+                'merchant': (t.description or "").split('(')[0].strip(),
+                'hour': t.date.hour
+            } for t in similar])
+            
+            # Find most frequent merchant
+            top_merchant = df['merchant'].mode().iloc[0] if not df['merchant'].empty else None
+            merchant_count = (df['merchant'] == top_merchant).sum()
+            merchant_conf = merchant_count / len(df)
+            
+            # Find time pattern
+            avg_hour = df['hour'].mean()
+            if 5 <= avg_hour <= 11: time_label = "pagi"
+            elif 12 <= avg_hour <= 15: time_label = "siang"
+            elif 16 <= avg_hour <= 19: time_label = "sore"
+            else: time_label = "malam"
+            
+            return {
+                'merchant': top_merchant if merchant_conf > 0.5 else None,
+                'time_label': time_label,
+                'confidence': merchant_conf
+            }
+        except Exception as e:
+            logger.error(f"Error in predictive context: {e}")
+            return None
 
-            return feedback
+    def get_financial_dna(self, user_id):
+        """
+        Builds a Personal Financial DNA profile for the user.
+        """
+        try:
+            now = datetime.now()
+            transactions = self.db.get_sliding_window_transactions(user_id, days=60)
+            if not transactions:
+                return {}
+                
+            df = pd.DataFrame([{
+                'amount': t.amount,
+                'date': t.date,
+                'day': t.date.strftime('%A'),
+                'is_weekend': t.date.weekday() >= 5,
+                'day_of_month': t.date.day,
+                'hour': t.date.hour,
+                'type': t.type
+            } for t in transactions])
+            
+            expenses = df[df['type'] == 'expense']
+            if expenses.empty:
+                return {}
+                
+            # 1. Spending Tempo (Boros awal bulan?)
+            early_month = expenses[expenses['day_of_month'] <= 10]['amount'].sum()
+            late_month = expenses[expenses['day_of_month'] > 20]['amount'].sum()
+            tempo = "boros_awal" if early_month > late_month * 1.5 else "stabil"
+            
+            # 2. Weekend Spike
+            weekend_avg = expenses[expenses['is_weekend']]['amount'].mean()
+            weekday_avg = expenses[~expenses['is_weekend']]['amount'].mean()
+            weekend_spike = weekend_avg > weekday_avg * 1.3
+            
+            # 3. Emotional Spender (Late night + Impulse categories)
+            impulse_cats = ["Jajanan", "Lifestyle", "Belanja"]
+            night_impulse = expenses[(expenses['hour'] >= 21) & (expenses['category'].isin(impulse_cats))]
+            is_emotional = len(night_impulse) > len(expenses) * 0.1
+            
+            return {
+                "tempo": tempo,
+                "weekend_spike": weekend_spike,
+                "emotional_spender": is_emotional,
+                "top_day": expenses.groupby('day')['amount'].sum().idxmax()
+            }
+        except Exception:
+            return {}
+
+    def get_instant_feedback(self, user_id, category, merchant, amount):
+        """
+        Provides real-time behavioural feedback for a new transaction.
+        e.g., "This is your largest purchase this month!"
+        """
+        try:
+            now = datetime.now()
+            month_tx = self.db.get_monthly_report(user_id, now.month, now.year)
+            month_expenses = [t for t in month_tx if t.type == 'expense']
+            
+            feedback = []
+            
+            # 1. Largest Purchase Detection
+            if month_expenses:
+                max_tx = max(t.amount for t in month_expenses)
+                if amount > max_tx:
+                    feedback.append(f"🏆 **Pembelian Terbesar**: Ini pengeluaran terbesar kamu di bulan {now.strftime('%B')}!")
+            
+            # 2. Frequency in 7 Days
+            week_tx = self.db.get_sliding_window_transactions(user_id, days=7)
+            similar_count = len([t for t in week_tx if t.category == category]) + 1
+            if similar_count >= 3:
+                feedback.append(f"🔄 **Pola Terulang**: Sudah {similar_count}x belanja {category} minggu ini.")
+            
+            # 3. Discretionary Remaining (Budget context)
+            budgets = self.db.get_user_budgets(user_id)
+            # Essential categories (example)
+            essential_cats = ["Tagihan", "Pendidikan", "Kesehatan", "Maintenance"]
+            
+            total_limit = sum(b.limit_amount for b in budgets)
+            essential_usage = sum(b.current_usage for b in budgets if b.category in essential_cats)
+            total_usage = sum(b.current_usage for b in budgets)
+            
+            if total_limit > 0:
+                discretionary_limit = total_limit - sum(b.limit_amount for b in budgets if b.category in essential_cats)
+                non_essential_usage = total_usage - essential_usage
+                remaining_discretionary = discretionary_limit - non_essential_usage
+                
+                if discretionary_limit > 0:
+                    pct_left = (remaining_discretionary / discretionary_limit) * 100
+                    if pct_left < 20:
+                        feedback.append(f"⚠️ **Waspada**: Sisa uang 'senang-senang' kamu tinggal {max(0, pct_left):.0f}% untuk bulan ini.")
+            
+            # 4. Personality Adjustment Context
+            # Determine "stress level" for persona engine
+            stress_level = "low"
+            if any("🚨" in f or "⚠️" in f for f in feedback):
+                stress_level = "high"
+            
+            return "\n".join(feedback), stress_level
             
         except Exception as e:
-            logger.error(f"Error getting instant feedback: {e}")
-            return ""
+            logger.error(f"Error in instant feedback: {e}")
+            return "", "low"
 
     def analyze_patterns(self, user_id):
         """
@@ -285,19 +369,199 @@ class ExpenseAnalyzer:
         Engine Prediksi: Memproyeksikan saldo akhir bulan berdasarkan kecepatan belanja saat ini.
         """
         now = datetime.now()
-        days_in_month = 30 # Simple approximation
-        days_passed = now.day
-        days_remaining = days_in_month - days_passed
+        days_in_month = 30 
+        days_passed = max(1, now.day)
+        days_remaining = max(0, days_in_month - days_passed)
         
-        # 1. Get spending this month
+        # 1. Get financial data
         transactions = self.db.get_monthly_report(user_id, now.month, now.year)
         total_expense = sum(t.amount for t in transactions if t.type == 'expense')
+        income_data = self.db.get_latest_income(user_id)
+        total_income = float(income_data.amount) if income_data else 0
         
-        if total_expense == 0 or days_passed == 0:
-            return "Data belum cukup untuk membuat prediksi."
+        if total_income == 0:
+            return None # Can't forecast without income base
 
         # 2. Calculate Burn Rate (Pengeluaran per hari)
         burn_rate = total_expense / days_passed
+        estimated_future_expense = burn_rate * days_remaining
+        
+        estimated_final_balance = total_income - (total_expense + estimated_future_expense)
+        
+        # 3. Micro-copy elegant response
+        from utils.visuals import format_currency
+        balance_str = format_currency(estimated_final_balance)
+        
+        if estimated_final_balance < 0:
+            return f"⚠️ **Forecast**: Dengan pola belanja sekarang, estimasi saldo akhir bulanmu bisa minus {balance_str}. Perlu rem dikit?"
+        else:
+            return f"📈 **Forecast**: Estimasi saldo akhir bulanmu di angka {balance_str}. Tetap stabil ya!"
+
+    def get_executive_summary(self, user_id):
+        """
+        Executive Layer Mode: Concise, sharp, data-driven 5-bullet summary.
+        """
+        try:
+            now = datetime.now()
+            transactions = self.db.get_monthly_report(user_id, now.month, now.year)
+            if not transactions:
+                return "Belum ada data eksekutif untuk bulan ini."
+
+            df = pd.DataFrame([{
+                'amount': t.amount,
+                'category': t.category,
+                'type': t.type
+            } for t in transactions])
+
+            expenses = df[df['type'] == 'expense']
+            incomes = df[df['type'] == 'income']
+            
+            total_spend = expenses['amount'].sum()
+            total_income = incomes['amount'].sum()
+            
+            from utils.visuals import format_currency
+            
+            # 1. Total Spend
+            bullet_1 = f"• **Total Spend**: {format_currency(total_spend)}"
+            
+            # 2. Top Category
+            if not expenses.empty:
+                top_cat = expenses.groupby('category')['amount'].sum().idxmax()
+                bullet_2 = f"• **Top Category**: {top_cat}"
+            else:
+                bullet_2 = "• **Top Category**: N/A"
+
+            # 3. Deviation (vs last month avg)
+            # Simplified: deviation is spend vs income ratio
+            ratio = (total_spend / total_income * 100) if total_income > 0 else 0
+            bullet_3 = f"• **Deviation**: Spend is {ratio:.1f}% of income"
+
+            # 4. Risk Level
+            risk = "Low"
+            if ratio > 80: risk = "High"
+            elif ratio > 50: risk = "Medium"
+            bullet_4 = f"• **Risk Level**: {risk}"
+
+            # 5. Action Suggestion
+            if risk == "High":
+                action = "Cut non-essential spending immediately."
+            elif ratio > 30:
+                action = "Monitor lifestyle expenses."
+            else:
+                action = "Healthy status. Consider increasing investments."
+            bullet_5 = f"• **Action**: {action}"
+
+            return (
+                "👔 **Executive Summary**\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                f"{bullet_1}\n"
+                f"{bullet_2}\n"
+                f"{bullet_3}\n"
+                f"{bullet_4}\n"
+                f"{bullet_5}\n"
+                "━━━━━━━━━━━━━━━━━━━━"
+            )
+        except Exception as e:
+            logger.error(f"Error generating executive summary: {e}")
+            return "Gagal menghasilkan ringkasan eksekutif."
+
+    def get_wealth_narrative(self, user_id):
+        """
+        Long-Term Wealth Narrative: Growth story over 6 months.
+        """
+        try:
+            now = datetime.now()
+            # Simplified: aggregate savings over last 6 months
+            history = []
+            for i in range(6):
+                month_date = now - timedelta(days=30 * i)
+                txs = self.db.get_monthly_report(user_id, month_date.month, month_date.year)
+                if txs:
+                    income = sum(t.amount for t in txs if t.type == 'income')
+                    expense = sum(t.amount for t in txs if t.type == 'expense')
+                    history.append(income - expense)
+            
+            if len(history) < 2:
+                return "Butuh data lebih dari 1 bulan untuk melihat narasi pertumbuhanmu."
+                
+            # Calculate growth rate
+            history.reverse() # Oldest to newest
+            first_savings = history[0]
+            last_savings = history[-1]
+            
+            if first_savings > 0:
+                growth = ((last_savings - first_savings) / first_savings) * 100
+            else:
+                growth = 0
+                
+            from utils.visuals import format_currency
+            
+            if growth > 0:
+                return f"📈 **Wealth Progress**: Dalam 6 bulan terakhir, tabungan kamu naik konsisten. Growth **{growth:.1f}%**. Kamu sedang membangun masa depan yang solid!"
+            elif growth < 0:
+                return f"📉 **Wealth Note**: Ada penurunan tren tabungan sebesar **{abs(growth):.1f}%** dalam 6 bulan terakhir. Mari kita evaluasi alokasi budgetmu."
+            else:
+                return "🔄 **Wealth Status**: Tabunganmu cenderung stabil. Mau coba strategi investasi baru untuk memicu pertumbuhan?"
+                
+        except Exception as e:
+            logger.error(f"Error generating wealth narrative: {e}")
+            return ""
+
+    def calculate_financial_score(self, user_id):
+        """
+        Internal Financial Health Score: 0-100.
+        Based on Discipline, Consistency, and Budget Adherence.
+        """
+        try:
+            now = datetime.now()
+            transactions = self.db.get_monthly_report(user_id, now.month, now.year)
+            if not transactions: return 70 # Default base
+            
+            # 1. Budget Adherence (40 pts)
+            budgets = self.db.get_user_budgets(user_id)
+            if not budgets:
+                adherence_score = 30 # Mid score if no budget set
+            else:
+                over_budget_count = len([b for b in budgets if b.current_usage > b.limit_amount])
+                adherence_score = max(0, 40 - (over_budget_count * 10))
+            
+            # 2. Spending Consistency (30 pts)
+            # Higher score if daily spending is stable vs massive spikes
+            df = pd.DataFrame([{'amount': t.amount, 'day': t.date.day} for t in transactions if t.type == 'expense'])
+            if df.empty:
+                consistency_score = 30
+            else:
+                daily_sums = df.groupby('day')['amount'].sum()
+                cv = daily_sums.std() / daily_sums.mean() if daily_sums.mean() > 0 else 0
+                consistency_score = max(0, 30 - (cv * 10))
+                
+            # 3. Savings Rate (30 pts)
+            income_data = self.db.get_latest_income(user_id)
+            total_income = float(income_data.amount) if income_data else 0
+            total_expense = df['amount'].sum() if not df.empty else 0
+            
+            if total_income > 0:
+                savings_rate = (total_income - total_expense) / total_income
+                savings_score = min(30, max(0, savings_rate * 100))
+            else:
+                savings_score = 15 # Neutral
+                
+            total_score = int(adherence_score + consistency_score + savings_score)
+            status = "stabil" if total_score > 70 else "perlu perhatian"
+            if total_score > 85: status = "sangat baik"
+            
+            return {
+                "score": total_score,
+                "status": status,
+                "breakdown": {
+                    "adherence": int(adherence_score),
+                    "consistency": int(consistency_score),
+                    "savings": int(savings_score)
+                }
+            }
+        except Exception as e:
+            logger.error(f"Error calculating financial score: {e}")
+            return {"score": 70, "status": "stabil"}
         projected_expense = total_expense + (burn_rate * days_remaining)
         
         # 3. Compare with Income

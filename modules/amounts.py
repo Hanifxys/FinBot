@@ -50,11 +50,17 @@ class MoneyParseResult:
 def _clean(text: str) -> str:
     t = (text or "").lower()
     t = t.replace("rp", " ").replace("idr", " ")
+    # Fix common typos like 'o' instead of '0' in numeric context
+    t = re.sub(r"(\d)[oO](\d)", r"\1 0 \2", t) # '1o0' -> '1 0 0'
+    t = re.sub(r"(\d)[oO]\b", r"\1 0", t)      # '2o' -> '20'
+    t = re.sub(r"\b[oO](\d)", r"0 \1", t)      # 'o5' -> '0 5'
     t = re.sub(r"[^\w\s.,-]", " ", t)
     return re.sub(r"\s+", " ", t).strip()
 
 
 def _parse_number(num: str) -> float:
+    # Handle 'o' typos if they survived clean (case where it's just 'o')
+    num = num.lower().replace('o', '0')
     if "." in num and "," not in num:
         num = num.replace(".", "")
     else:
@@ -76,12 +82,18 @@ def _extract_numeric_segments(text: str) -> List[float]:
     i = 0
     while i < len(matches):
         m = matches[i]
-        base = _parse_number(m.group(1))
+        base_str = m.group(1)
         unit = m.group(2)
+        base = _parse_number(base_str)
 
         value = base
         if unit:
             value *= _MULTIPLIER[unit]
+        else:
+            # Naked numbers logic: if 10 <= base <= 999 and it's likely a thousand shorthand
+            # Avoid single digits like '3' in 'bagi 3 orang'
+            if 10 <= base <= 999 and not any(w in text.lower() for w in ["bagi", "orang", "person"]):
+                value *= 1000
 
         # kombinasi 2 juta 500 ribu
         if unit in ("jt", "juta") and i + 1 < len(matches):

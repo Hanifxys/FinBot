@@ -156,3 +156,66 @@ class VisualReporter:
             logger.error(f"Error generating projection: {e}")
             return None
 
+    def generate_risk_profile_chart(self, risk_data: dict):
+        """
+        Generates a gauge-like chart for investment risk assessment.
+        """
+        try:
+            score = risk_data.get("sharpe_ratio", 0)
+            profile = risk_data.get("risk_profile", "Moderate")
+            
+            plt.figure(figsize=(6, 4))
+            plt.style.use('dark_background')
+            
+            # Simple bar chart as a proxy for risk level
+            levels = ["Low", "Moderate", "High"]
+            colors = ["#2ecc71", "#f1c40f", "#e74c3c"]
+            current_idx = levels.index(profile) if profile in levels else 1
+            
+            plt.bar(levels, [1, 1, 1], color="#34495e", alpha=0.3)
+            plt.bar(levels[current_idx], [1], color=colors[current_idx])
+            
+            plt.title(f"Risk Profile: {profile}\nSharpe Ratio: {score}", color="white")
+            plt.gca().get_yaxis().set_visible(False)
+            
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', transparent=True)
+            buf.seek(0)
+            plt.close()
+            return buf
+        except Exception as e:
+            logger.error(f"Risk chart error: {e}")
+            return None
+
+    def generate_market_trend_viz(self, trend_data: dict):
+        """
+        Generates a visualization for market trends.
+        """
+        try:
+            tickers = list(trend_data.keys())
+            confidences = [trend_data[t]["confidence"] for t in tickers]
+            trends = [trend_data[t]["trend"] for t in tickers]
+            colors = ["#2ecc71" if t == "BULLISH" else "#e74c3c" for t in trends]
+            
+            plt.figure(figsize=(10, 5))
+            plt.style.use('dark_background')
+            
+            bars = plt.bar(tickers, confidences, color=colors)
+            plt.ylim(0, 1.0)
+            plt.ylabel("Confidence Score")
+            plt.title("Market Trend Forecast (Bullish/Bearish)")
+            
+            # Add labels
+            for bar, trend in zip(bars, trends):
+                plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02, 
+                         trend, ha='center', color='white', fontweight='bold')
+            
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', transparent=True)
+            buf.seek(0)
+            plt.close()
+            return buf
+        except Exception as e:
+            logger.error(f"Market trend viz error: {e}")
+            return None
+

@@ -13,54 +13,71 @@ class BudgetManager:
 
     def check_budget_status(self, user_id, category=None):
         """
-        Returns a minimalist message about the budget status.
-        If category is provided, checks specific category.
-        If None, checks global budget (Income - Expenses).
+        Returns a minimalist message about the budget status with polished formatting.
         """
+        from utils.visuals import format_currency
         now = datetime.now()
         
         if category:
-            # Category-specific check
             budgets = self.db.get_user_budgets(user_id)
             target_budget = next((b for b in budgets if b.category == category), None)
             
-            if not target_budget:
-                return "" 
+            if not target_budget: return "" 
                 
             remaining = target_budget.limit_amount - target_budget.current_usage
             percent = (target_budget.current_usage / target_budget.limit_amount) * 100 if target_budget.limit_amount > 0 else 0
             
-            msg = f"Sisa budget {category}: Rp {remaining:,.0f}"
+            msg = f"Sisa budget {category}: **{format_currency(remaining)}**"
             
             warn_th = getattr(target_budget, 'warn_threshold', 0.8) * 100
             limit_th = getattr(target_budget, 'limit_threshold', 1.0) * 100
             
             if percent >= limit_th:
-                msg = f"🔴 LIMIT! Budget {category} sudah 100% terpakai.\nSisa: Rp 0"
+                msg = f"🔴 **LIMIT!** Budget {category} sudah 100% terpakai."
             elif percent >= warn_th:
-                msg = f"⚠️ WARNING! Budget {category} sudah {percent:.0f}% terpakai.\nSisa: Rp {remaining:,.0f}"
+                msg = f"⚠️ **WARNING!** Budget {category} sudah {percent:.0f}% terpakai.\nSisa: **{format_currency(remaining)}**"
                 
             return msg
         else:
-            # Global Budget Check (Income based)
-            # Fetch income for current month
-            # Note: We need a way to get monthly income from DB. Assuming get_monthly_income exists or sum income txs.
-            # For robustness, we calculate total income transactions this month.
             txs = self.db.get_monthly_report(user_id, now.month, now.year)
-            if not txs:
-                return "Belum ada data keuangan bulan ini."
+            if not txs: return "Belum ada data keuangan bulan ini."
                 
             total_income = sum(t.amount for t in txs if t.type == 'income')
             total_expense = sum(t.amount for t in txs if t.type == 'expense')
-            
             remaining = total_income - total_expense
             
             return (
-                f"💰 **Status Keuangan Bulan Ini**\n"
-                f"Pemasukan: Rp {total_income:,.0f}\n"
-                f"Pengeluaran: Rp {total_expense:,.0f}\n"
-                f"Sisa Uang: Rp {remaining:,.0f}"
+                f"💰 **Status Keuangan**\n"
+                f"• Pemasukan: {format_currency(total_income)}\n"
+                f"• Pengeluaran: {format_currency(total_expense)}\n"
+                f"• Sisa Uang: **{format_currency(remaining)}**"
             )
+
+    def get_decision_framing(self, user_id, category, amount):
+        """
+        Actionable framing: "Safe for X days if daily avg is Y"
+        """
+        try:
+            now = datetime.now()
+            days_in_month = 30
+            days_left = max(1, days_in_month - now.day)
+            
+            budgets = self.db.get_user_budgets(user_id)
+            target = next((b for b in budgets if b.category == category), None)
+            
+            if not target or target.limit_amount <= 0:
+                return ""
+                
+            remaining = target.limit_amount - (target.current_usage + amount)
+            if remaining <= 0:
+                return "🚨 **Limit Habis**: Budget ini sudah terlampaui. Hati-hati!"
+            
+            daily_allowance = remaining / days_left
+            from utils.visuals import format_currency
+            
+            return f"💡 **Analisis**: Sisa **{format_currency(remaining)}** cukup untuk **{days_left} hari** ke depan jika rata-rata pengeluaran harianmu **{format_currency(daily_allowance)}**."
+        except Exception:
+            return ""
 
     def generate_yearly_summary(self, user_id, year: int):
         transactions = self.db.get_yearly_report(user_id, year)
@@ -101,9 +118,9 @@ class BudgetManager:
 
     def generate_report(self, user_id, period='monthly'):
         """
-        Generates a summary report of transactions.
-        Supports 'monthly', '7days', and '30days' (sliding windows).
+        Generates a summary report of transactions with polished formatting.
         """
+        from utils.visuals import format_currency
         now = datetime.now()
         
         if period == '7days':
@@ -127,21 +144,21 @@ class BudgetManager:
         
         summary = df.groupby(['type', 'category'])['amount'].sum().reset_index()
         
-        report_text = f"📊 {title}\n\n"
+        report_text = f"📊 **{title}**\n\n"
         
         incomes = summary[summary['type'] == 'income']
         if not incomes.empty:
-            report_text += "💰 Pemasukan:\n"
+            report_text += "💰 **Pemasukan**:\n"
             for _, row in incomes.iterrows():
-                report_text += f"- {row['category']}: Rp {row['amount']:,.0f}\n"
-            report_text += f"Total: Rp {incomes['amount'].sum():,.0f}\n\n"
+                report_text += f"• {row['category']}: {format_currency(row['amount'])}\n"
+            report_text += f"Total: **{format_currency(incomes['amount'].sum())}**\n\n"
             
         expenses = summary[summary['type'] == 'expense']
         if not expenses.empty:
-            report_text += "💸 Pengeluaran:\n"
+            report_text += "💸 **Pengeluaran**:\n"
             for _, row in expenses.iterrows():
-                report_text += f"- {row['category']}: Rp {row['amount']:,.0f}\n"
-            report_text += f"Total: Rp {expenses['amount'].sum():,.0f}\n"
+                report_text += f"• {row['category']}: {format_currency(row['amount'])}\n"
+            report_text += f"Total: **{format_currency(expenses['amount'].sum())}**\n"
             
         return report_text
 

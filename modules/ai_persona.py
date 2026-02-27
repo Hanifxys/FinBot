@@ -38,9 +38,20 @@ class PersonaManager:
         )
         self.personas = {}  # In-memory cache, ideally backed by DB/Redis
 
-    def get_persona(self, user_id: int) -> Persona:
-        """Retrieve persona for a user (or default)."""
-        return self.personas.get(user_id, self.default_persona)
+    def get_persona(self, user_id: int, stress_level: str = "low") -> Persona:
+        """Retrieve persona for a user, adapted to their financial stress level."""
+        base = self.personas.get(user_id, self.default_persona)
+        
+        if stress_level == "high":
+            # Adapt tone to be more serious/strict if financial status is critical
+            return Persona(
+                name=f"{base.name} (Alert Mode)",
+                tone="Strict, Warning-focused, Direct",
+                expertise=base.expertise,
+                traits=base.traits + ["Urgent", "Direct", "Cautious"],
+                language=base.language
+            )
+        return base
 
     def set_persona(self, user_id: int, mode: str):
         """

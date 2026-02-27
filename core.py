@@ -13,6 +13,10 @@ from modules.websocket_server import WebSocketServer
 from modules.gamification import GamificationEngine
 from modules.oom_engine import OOMEngine
 from modules.ai_persona import PersonaManager
+from modules.financial_intelligence import FinancialIntelligenceEngine
+from modules.multimodal_engine import MultiModalEngine
+from modules.market_data import MarketDataConnector
+from modules.document_processor import DocumentProcessor
 
 # Initialize Shared instances properly
 db = DBHandler()
@@ -27,6 +31,10 @@ visual_reporter = VisualReporter()
 gamify = GamificationEngine()
 oom_engine = OOMEngine(db, premium_ai)
 persona_mgr = PersonaManager()
+fin_intel = FinancialIntelligenceEngine(db)
+multimodal_ai = MultiModalEngine()
+market_data = MarketDataConnector(api_key=os.getenv("ALPHA_VANTAGE_KEY"))
+doc_processor = DocumentProcessor()
 
 # Global WebSocket Server Instance
 ws_server = WebSocketServer(port=int(os.getenv("WS_PORT", 8001)))

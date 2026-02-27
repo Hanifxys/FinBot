@@ -67,9 +67,51 @@ class DocumentProcessor:
             
         return "Unsupported file format for deep analysis."
 
-    def summarize_content(self, text: str, model_client, model_name: str) -> str:
+    async def parse_financial_document(self, text: str, model_client: Any) -> dict:
         """
-        Summarize extracted content using AI.
+        Deep parsing of financial text (Balance Sheets, Income Statements).
+        Returns structured JSON of financial metrics.
         """
-        # This will be called by PremiumAIEngine
-        pass
+        try:
+            prompt = f"""
+            Analyze the following financial text and extract key performance indicators (KPIs).
+            The document could be in Indonesian or English.
+            
+            Extract:
+            - Revenue / Total Pemasukan
+            - Net Income / Laba Bersih
+            - Total Assets / Total Aset
+            - Total Liabilities / Total Liabilitas
+            - Cash on Hand
+            - Operating Margin
+            - Ticker (if any)
+            - Period (Year/Quarter)
+            
+            Text Content:
+            {text[:5000]}
+            
+            Return JSON format:
+            {{
+                "metadata": {{"ticker": "str", "period": "str", "currency": "str"}},
+                "metrics": {{
+                    "revenue": float,
+                    "net_income": float,
+                    "total_assets": float,
+                    "total_liabilities": float,
+                    "cash": float
+                }},
+                "ratios": {{"operating_margin": float, "debt_to_equity": float}},
+                "summary": "brief executive summary"
+            }}
+            """
+            chat_completion = model_client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model="llama-3.3-70b-versatile",
+                response_format={"type": "json_object"},
+                temperature=0.0
+            )
+            import json
+            return json.loads(chat_completion.choices[0].message.content)
+        except Exception as e:
+            logger.error(f"Financial document parsing failed: {e}")
+            return {"error": str(e)}

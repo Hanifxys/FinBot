@@ -19,7 +19,7 @@ from telegram import (
 from telegram.ext import ContextTypes
 
 # Core Modules
-from core import db, premium_ai, ws_server, nlp, ocr, budget_mgr, analyzer
+from core import db, premium_ai, ws_server, nlp, ocr, budget_mgr, analyzer, persona_mgr, fin_intel, multimodal_ai, doc_processor, market_data
 from config import CATEGORIES
 
 # Handlers & Utils
@@ -85,45 +85,38 @@ def _format_tx(tx) -> str:
     
     ttype = getattr(tx, "type", "")
     icon = "🔻" if ttype == "expense" else "🔹"
-    amount = getattr(tx, "amount", 0)
+    from utils.visuals import format_currency
+    amount_str = format_currency(getattr(tx, "amount", 0))
     category = getattr(tx, "category", "-")
     tx_id = getattr(tx, "id", "?")
     
-    return f"{icon} `#{tx_id}` | {date_str} | {category} | **Rp{amount:,.0f}**\n_{desc}_"
+    return f"{icon} `#{tx_id}` | {date_str} | {category} | **{amount_str}**\n_{desc}_"
 
-def _tx_preview_message(pending: dict, feedback: str = "", sentiment: dict = None) -> str:
-    """Formats a pending transaction preview message with optional feedback and sentiment."""
-    amount = pending.get("amount", 0) or 0
+def _tx_preview_message(pending: dict, feedback: str = "", persona: Any = None) -> str:
+    """Formats a premium pending transaction preview message with behavioural insights."""
+    from utils.visuals import format_currency
+    amount_str = format_currency(pending.get("amount", 0) or 0)
     category = pending.get("category") or "Lain-lain"
     merchant = pending.get("merchant") or pending.get("description") or "Transaksi"
-    payment = pending.get("payment_method") or "-"
     date = pending.get("date") or datetime.now().strftime("%d-%m-%Y")
-    ttype = pending.get("type", "expense")
     
-    icon = "💰" if ttype == "income" else "💸"
-    title = "Konfirmasi Pemasukan" if ttype == "income" else "Konfirmasi Pengeluaran"
+    # Premium Persona Tone
+    persona_name = persona.name if persona else "FinBot"
     
-    # Sentiment-based greeting/tone
-    mood_emoji = ""
-    if sentiment:
-        mood = sentiment.get("mood", "neutral")
-        mood_map = {
-            "happy": "😊", "stressed": "😟", "angry": "😠", 
-            "hopeful": "🤞", "frustrated": "😫", "neutral": ""
-        }
-        mood_emoji = mood_map.get(mood, "")
-
     msg = (
-        f"{icon} **{title}** {mood_emoji}\n\n"
-        f"• **Nominal**: Rp{amount:,.0f}\n"
-        f"• **Kategori**: {category}\n"
-        f"• **Deskripsi**: {merchant}\n"
-        f"• **Tanggal**: {date}\n"
+        f"💳 **{persona_name} Preview**\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"💰 **Nominal**: {amount_str}\n"
+        f"🏷️ **Kategori**: {category}\n"
+        f"🏢 **Merchant**: {merchant}\n"
+        f"📅 **Waktu**: {date}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
     )
     
     if feedback:
-        msg += f"\n💡 **Analisis**: {feedback}"
+        msg += f"\n💡 **Behavioural Insights**:\n{feedback}\n"
         
+    msg += "\n*Konfirmasi untuk simpan transaksi ini?*"
     return msg
 
 # --- Logic Helpers ---
@@ -580,6 +573,81 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except OSError:
                 pass
 
+async def _handle_disambiguation(update: Update, context: ContextTypes.DEFAULT_TYPE, data: Dict[str, Any]):
+    """Asks for clarification on ambiguous intents like 'transfer'."""
+    amount = data.get("amount")
+    
+    msg = (
+        f"🔍 **Konfirmasi Transaksi**\n\n"
+        f"Kamu baru saja menyebutkan: **Rp{amount:,.0f}**\n"
+        "Ini masuk ke kategori mana ya?"
+    )
+    
+    # Store data for callback
+    context.user_data["pending_tx"] = {
+        "amount": amount,
+        "merchant": data.get("merchant") or "Transfer/Bayar",
+        "date": data.get("date"),
+        "type": "expense" # Default
+    }
+    
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("💸 Belanja", callback_data="set_cat_Belanja"),
+            InlineKeyboardButton("🤝 Sosial", callback_data="set_cat_Sosial")
+        ],
+        [
+            InlineKeyboardButton("📈 Investasi", callback_data="set_cat_Investasi"),
+            InlineKeyboardButton("💰 Pemasukan", callback_data="set_cat_Gaji")
+        ],
+        [InlineKeyboardButton("❌ Abaikan", callback_data="tx_ignore")]
+    ])
+    
+    await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=keyboard)
+
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Processes uploaded documents for financial intelligence."""
+    doc = update.message.document
+    file_name = doc.file_name
+    mime_type = doc.mime_type
+    
+    await update.message.reply_text(f"⏳ **Analyzing financial document: {file_name}...**", parse_mode='Markdown')
+    
+    try:
+        file = await context.bot.get_file(doc.file_id)
+        file_bytes = await file.download_as_bytearray()
+        
+        # 1. Process Raw Text
+        raw_text = await doc_processor.process_file(bytes(file_bytes), file_name, mime_type)
+        
+        # 2. Financial Parsing
+        parsed_data = await doc_processor.parse_financial_document(raw_text, premium_ai.client)
+        
+        if "error" in parsed_data:
+            await update.message.reply_text(f"Gagal membedah laporan: {parsed_data['error']}")
+            return
+            
+        # 3. Format Response
+        meta = parsed_data.get("metadata", {})
+        metrics = parsed_data.get("metrics", {})
+        
+        msg = (
+            f"📄 **Financial Analysis: {meta.get('ticker', 'Unknown')}**\n"
+            f"📅 Period: {meta.get('period', '-')}\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"💰 Revenue: {metrics.get('revenue', 0):,.0f}\n"
+            f"📉 Net Income: {metrics.get('net_income', 0):,.0f}\n"
+            f"🏦 Total Assets: {metrics.get('total_assets', 0):,.0f}\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"💡 **Summary**: {parsed_data.get('summary', 'No summary available.')}"
+        )
+        
+        await update.message.reply_text(msg, parse_mode='Markdown')
+        
+    except Exception as e:
+        logger.error(f"Document analysis failed: {e}")
+        await update.message.reply_text("Terjadi kesalahan saat memproses dokumen.")
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Main entry point for text messages."""
     text = update.message.text
@@ -596,28 +664,51 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
     
     try:
         user_db = db.get_or_create_user(user_id, update.effective_user.username)
-    except Exception as e:
-        logger.error(f"Failed to ensure user exists: {e}")
-        await update.message.reply_text("Maaf, ada masalah koneksi database saat mendaftarkan akunmu. Coba lagi ya!")
-        return
-
-    try:
-        # 1. NLP Hybrid Classification
-        # Use state to give context (e.g. if waiting for edit)
-        current_state = context.user_data.get("state", "IDLE")
         
-        # New: Use Hybrid Classify instead of just regex
-        classification = nlp.hybrid_classify(text, state=current_state)
-        intent = classification.get("intent")
-        confidence = classification.get("confidence", 0.0)
+        # --- Context Memory Layer (Short-term Brain) ---
+        context_buffer = context.user_data.get("context_buffer", {})
+        last_ts = context_buffer.get("ts", 0)
+        current_ts = datetime.now().timestamp()
+        
+        # If last message was < 5 minutes ago, try to merge context
+        is_follow_up = (current_ts - last_ts) < 300 
+        
+        extracted = nlp.extract_transaction_data(text)
+        
+        # --- Predictive Completion ---
+        if extracted.get("amount") and extracted.get("category") and extracted.get("merchant") == "Transaksi":
+            prediction = analyzer.get_predictive_context(user_id, extracted["category"], extracted["amount"])
+            if prediction and prediction.get("merchant"):
+                extracted["merchant"] = prediction["merchant"]
+                extracted["confidence"] = max(extracted["confidence"], 0.8)
+                # Could also add "time_label" hint to the message
+        
+        if is_follow_up and extracted.get("is_partial"):
+            # Merge logic: if this message is partial (e.g. "di mixue"), merge with previous data
+            prev_data = context_buffer.get("data", {})
+            if prev_data:
+                # Merge fields: current message values overwrite previous ones if they exist
+                for key in ["amount", "category", "merchant", "date", "type"]:
+                    if extracted.get(key):
+                        prev_data[key] = extracted[key]
+                extracted = prev_data
+                extracted["confidence"] = min(0.95, extracted.get("confidence", 0.6) + 0.1) # Boost confidence on merge
+                extracted["is_partial"] = not (extracted.get("amount") and extracted.get("merchant") != "Transaksi")
+        
+        # Save current state to context buffer
+        context.user_data["context_buffer"] = {
+            "ts": current_ts,
+            "data": extracted
+        }
 
-        # 2. Dispatch Based on Intent
+        intent = extracted.get("intent")
+        
+        # --- Intent Routing (Fixed) ---
         if intent == "STOP_NOTIF":
              await update.message.reply_text("Siap! Aku bakal kurangi frekuensi daily digest kamu. Pengaturan notifikasi bisa kamu atur lebih detail di `/settings` ya.")
              return
 
         if intent == "CANCEL":
-             # This is handled inside _handle_pending_states usually, but explicit intent is safer
              context.user_data.pop("state", None)
              context.user_data.pop("pending_tx", None)
              await update.message.reply_text("Oke, dibatalkan ya.")
@@ -643,12 +734,12 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
             return
 
         if intent == "SET_MODE":
-            context.args = [classification.get("value")]
+            context.args = [extracted.get("value")]
             await set_persona_command(update, context)
             return
             
         if intent == "SET_REMINDER":
-            context.args = [classification.get("value")]
+            context.args = [extracted.get("value")]
             await reminder_settings(update, context)
             return
 
@@ -667,13 +758,39 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
             if amount > 0:
                 context.args = [str(int(amount))]
                 await set_gaji(update, context)
+                # New: Cashflow Forecast after salary input
+                forecast = await analyzer.get_predictive_forecast(user_id)
+                if forecast:
+                    await update.message.reply_text(forecast, parse_mode='Markdown')
             else:
                 await update.message.reply_text("Gajinya berapa? Contoh: 'set gaji 10jt'")
             return
 
+        if intent == "UNDO":
+            await _handle_undo(update, context, user_db)
+            return
+
+        if intent == "EXECUTIVE_MODE":
+            summary = analyzer.get_executive_summary(user_id)
+            wealth = analyzer.get_wealth_narrative(user_id)
+            await update.message.reply_text(f"{summary}\n\n{wealth}", parse_mode='Markdown')
+            return
+            
+        if intent == "ELITE_ANALYSIS":
+            await _handle_elite_analysis(update, context)
+            return
+            
+        if intent == "INVESTMENT_OPPS":
+            await _handle_investment_opps(update, context)
+            return
+            
+        if intent == "DOC_ANALYSIS":
+            await update.message.reply_text("Silakan kirim file (PDF/TXT) atau foto laporan keuangan yang ingin dianalisis.")
+            return
+
         if intent == "SET_BUDGET":
             amount = nlp._extract_amount(text)
-            category = nlp._detect_category(text)
+            category, _ = nlp._detect_category(text)
             if amount > 0 and category != "Lain-lain":
                 context.args = [category, str(int(amount))]
                 await set_budget(update, context)
@@ -684,7 +801,7 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
             return
 
         if intent == "SET_BUDGET_ALERT":
-            category = nlp._detect_category(text)
+            category, _ = nlp._detect_category(text)
             import re
             pcts = re.findall(r'(\d+)%', text)
             if not pcts:
@@ -698,9 +815,27 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
                 await update.message.reply_text("Contoh: 'ingetin budget makan kalo udah 80%'")
             return
 
+        # --- Disambiguation Layer ---
+        if extracted.get("needs_disambiguation") and extracted.get("amount"):
+            await _handle_disambiguation(update, context, extracted)
+            return
+
+        # --- More Intent Routing ---
         if intent == "QUERY_SUMMARY" or intent == "get_report": 
              await summary_command(update, context)
              return
+
+        if intent == "CORRECTION":
+            await _handle_correction(update, context, user_db, text)
+            return
+
+        if intent == "SPLIT_BILL":
+            await _handle_split_bill(update, context, user_db, text)
+            return
+
+        if intent == "BULK_TRANSACTION":
+            await _handle_bulk_transaction(update, context, user_db, text)
+            return
 
         if intent == "SHARING_INFO":
             await _handle_sharing_info(update, context, user_db, text, user_name)
@@ -722,38 +857,66 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
         # 4. Check for Transaction (ADD_TRANSACTION)
         if intent == "ADD_TRANSACTION":
              # Use the new extraction logic
-             tx_data = nlp.extract_transaction_data(text)
+             tx_data = extracted # Use the already extracted/merged data
              if tx_data.get("amount"):
-                 # Wrap into structure expected by _handle_record_intent or handle it directly
-                 # Let's reuse _handle_record_intent logic but construct a mock premium response
-                 # to keep code DRY, or just inline the logic.
-                 
                  # Prepare Pending Transaction
                  pending = {
                     "amount": float(tx_data["amount"]),
                     "category": tx_data["category"] or "Lain-lain",
                     "merchant": tx_data["merchant"] or "Transaksi",
-                    "date": datetime.now().strftime("%d-%m-%Y"),
-                    "payment_method": None,
+                    "date": tx_data.get("date") or datetime.now().strftime("%d-%m-%Y"),
+                    "type": tx_data.get("type", "expense")
                  }
                  
-                 # Contextual Insight
-                 feedback = ""
-                 try:
-                    feedback = analyzer.get_instant_feedback(
-                        user_id, pending["category"], pending["merchant"], pending["amount"]
-                    )
-                 except Exception: pass
+                 # Contextual Insight & Stress Level
+                 feedback, stress_level = analyzer.get_instant_feedback(
+                    user_id, pending["category"], pending["merchant"], pending["amount"]
+                 )
                  
-                 # Force type if detected from classification earlier
-                 if tx_data.get("type"):
-                    pending["type"] = tx_data["type"]
+                 # Decision Framing (New Premium Feature)
+                 framing = budget_mgr.get_decision_framing(user_id, pending["category"], pending["amount"])
+                 if framing:
+                     feedback = framing + "\n" + feedback
+                 
+                 # Financial DNA Insight
+                 dna = analyzer.get_financial_dna(user_id)
+                 if dna.get("tempo") == "boros_awal" and datetime.now().day <= 10:
+                     feedback += "\n💡 **Financial DNA**: Kamu cenderung boros di awal bulan. Mau atur limit?"
+                 
+                 # Adaptive Persona
+                 persona = persona_mgr.get_persona(user_id, stress_level)
+                 
+                 # --- Zero-Friction Auto-Commit ---
+                 # If confidence is very high (>0.92) and not a critical alert, auto-save to reduce friction
+                 if tx_data.get("confidence", 0) > 0.92 and stress_level == "low":
+                     try:
+                         new_tx = db.add_transaction(
+                             user_id=user_db.id,
+                             amount=pending["amount"],
+                             category=pending["category"],
+                             trans_type=pending["type"],
+                             description=pending["merchant"],
+                             trans_date=datetime.now()
+                         )
+                         if new_tx:
+                             context.user_data["last_tx_id"] = new_tx.id
+                             context.user_data["last_tx_ts"] = datetime.now().timestamp()
+                             from utils.visuals import format_currency
+                             await update.message.reply_text(
+                                 f"✅ **Auto-Logged**: {format_currency(pending['amount'])} untuk {pending['category']}.\n"
+                                 f"{framing}\n\n"
+                                 f"_Ketik 'undo' untuk batal._",
+                                 parse_mode="Markdown"
+                             )
+                             return
+                     except Exception:
+                         pass # Fallback to preview if auto-commit fails
 
                  context.user_data["pending_tx"] = pending
                  context.user_data.pop("state", None)
                  
                  await update.message.reply_text(
-                    _tx_preview_message(pending, feedback, sentiment=classification.get("sentiment")), 
+                    _tx_preview_message(pending, feedback, persona), 
                     parse_mode="Markdown", 
                     reply_markup=_tx_preview_keyboard()
                  )
@@ -779,6 +942,230 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
         logger.error(f"Critical error in handle_message for {user_id}: {e}", exc_info=True)
         error_msg = "Waduh, ada kendala teknis nih. 🛠️\nTim kami sudah diberitahu. Coba lagi sebentar lagi ya!"
         await update.message.reply_text(error_msg)
+
+async def _handle_undo(update: Update, context: ContextTypes.DEFAULT_TYPE, user_db):
+    """Handles frictionless undo within a 10-second window."""
+    last_tx_ts = context.user_data.get("last_tx_ts", 0)
+    current_ts = datetime.now().timestamp()
+    
+    if (current_ts - last_tx_ts) > 30: # Allow 30s for undo (slightly more than 10s for network delay)
+        await update.message.reply_text("Sesi undo sudah berakhir. Pakai `batal transaksi terakhir` ya.")
+        return
+        
+    last_tx_id = context.user_data.get("last_tx_id")
+    if not last_tx_id:
+        await update.message.reply_text("Tidak ada transaksi yang bisa dibatalkan.")
+        return
+        
+    success = db.delete_transaction(user_db.id, last_tx_id)
+    if success:
+        context.user_data.pop("last_tx_id", None)
+        await update.message.reply_text(f"✅ Transaksi `#{last_tx_id}` berhasil dibatalkan. Saldo dipulihkan.")
+    else:
+        await update.message.reply_text("Gagal membatalkan transaksi. Coba hapus manual via `/history`.")
+
+async def _handle_elite_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Deep AI Financial Intelligence Analysis."""
+    user_id = update.effective_user.id
+    await update.message.reply_text("🚀 **Initiating Elite Financial Intelligence Engine...**", parse_mode='Markdown')
+    
+    try:
+        # 1. Market Trend Prediction
+        # For demo, predict popular Indonesian tickers
+        tickers = ["BBCA", "TLKM", "ASII", "GOTO"]
+        market_data = await fin_intel.predict_market_trends(tickers)
+        
+        # 2. Risk Assessment
+        # Assume a simple demo portfolio
+        portfolio = {"BBCA": 0.4, "TLKM": 0.3, "Gold": 0.3}
+        risk_data = await fin_intel.assess_investment_risk(portfolio)
+        
+        # 3. Sentiment Analysis of last user message
+        sentiment = await nlp.analyze_financial_sentiment(update.message.text)
+        
+        # 4. Ensemble Anomalies
+        anomalies = await fin_intel.detect_anomalies_ensemble(user_id)
+        
+        # 5. Visualizations
+        trend_viz = visual_reporter.generate_market_trend_viz(market_data)
+        risk_viz = visual_reporter.generate_risk_profile_chart(risk_data)
+        
+        # Prepare Report
+        msg = (
+            "🧠 **Elite Financial Intelligence Report**\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "📈 **Market Forecast**:\n"
+        )
+        for t, d in market_data.items():
+            icon = "🟢" if d['trend'] == "BULLISH" else "🔴"
+            msg += f"• {t}: {icon} {d['trend']} (Conf: {d['confidence']})\n"
+            
+        msg += (
+            f"\n🛡️ **Risk Profile**: {risk_data['risk_profile']}\n"
+            f"• VaR (95%): {risk_data['value_at_risk_95']}%\n"
+            f"• Sharpe Ratio: {risk_data['sharpe_ratio']}\n"
+            f"• Rec: {risk_data['recommendation']}\n"
+            f"\n📊 **Market Sentiment**: {sentiment['sentiment']} ({sentiment['score']})\n"
+            f"• Reason: {sentiment['reason']}\n"
+        )
+        
+        if anomalies:
+            msg += f"\n🚨 **Anomalies Detected**: {len(anomalies)} suspicious transactions found."
+        
+        await update.message.reply_text(msg, parse_mode='Markdown')
+        
+        # Send charts
+        if trend_viz:
+            await update.message.reply_photo(trend_viz, caption="Market Trend Visualization")
+        if risk_viz:
+            await update.message.reply_photo(risk_viz, caption="Portfolio Risk Assessment")
+            
+    except Exception as e:
+        logger.error(f"Elite analysis failed: {e}")
+        await update.message.reply_text("Elite engine encountered an error. Please try again later.")
+
+async def _handle_investment_opps(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Suggests investment opportunities based on health and market."""
+    user_id = update.effective_user.id
+    await update.message.reply_text("🔍 **Scanning for investment opportunities...**", parse_mode='Markdown')
+    
+    try:
+        opps_data = await fin_intel.find_investment_opportunities(user_id)
+        
+        msg = (
+            "💰 **Investment Opportunity Scan**\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"📈 **Strategy**: {opps_data['strategy']}\n"
+            f"🏥 **Health Context**: {opps_data['health_context']}\n\n"
+            "🌟 **Recommendations**:\n"
+        )
+        
+        for op in opps_data['opportunities']:
+            msg += f"• **{op['asset']}**: {op['reason']} (Conf: {op['confidence']})\n"
+            
+        msg += "\n⚠️ *Metodologi: Berdasarkan analisis portofolio historis dan tren pasar real-time.*"
+        
+        await update.message.reply_text(msg, parse_mode='Markdown')
+    except Exception as e:
+        logger.error(f"Investment opps handler failed: {e}")
+        await update.message.reply_text("Failed to scan opportunities. Please try again.")
+
+async def _handle_bulk_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE, user_db, text: str):
+    """Handles multiple transactions in one message."""
+    await update.message.reply_text("📦 **Mendeteksi beberapa transaksi sekaligus...**", parse_mode='Markdown')
+    
+    tx_items = nlp.extract_bulk_transactions(text)
+    if not tx_items:
+        await update.message.reply_text("Maaf, aku gagal memecah transaksi itu. Coba kirim satu-satu ya!")
+        return
+
+    from utils.visuals import format_currency
+    msg = f"✅ **Berhasil mengekstrak {len(tx_items)} transaksi:**\n\n"
+    total_bulk = 0
+    for i, item in enumerate(tx_items, 1):
+        amount = float(item.get('amount', 0))
+        cat = item.get('category', 'Lain-lain')
+        merc = item.get('merchant', 'Transaksi')
+        total_bulk += amount
+        msg += f"{i}. {cat} | **{format_currency(amount)}** | _{merc}_\n"
+    
+    msg += f"\n💰 **Total**: {format_currency(total_bulk)}\n\nKonfirmasi untuk simpan semua?"
+    
+    # Store in session for confirmation
+    context.user_data["pending_bulk"] = tx_items
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Simpan Semua", callback_data="bulk_confirm")],
+        [InlineKeyboardButton("❌ Batal", callback_data="bulk_cancel")]
+    ])
+    
+    await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=keyboard)
+
+async def _handle_split_bill(update: Update, context: ContextTypes.DEFAULT_TYPE, user_db, text: str):
+    """Handles split bill assistant."""
+    data = nlp.extract_split_bill(text)
+    if not data or not data.get("total_amount"):
+        await update.message.reply_text("Nominalnya berapa? Contoh: 'makan 450rb bagi 3'")
+        return
+
+    from utils.visuals import format_currency
+    total = data["total_amount"]
+    people = data["num_people"]
+    per_person = data["per_person"]
+    
+    msg = (
+        "👥 **Split Bill Assistant**\n\n"
+        f"• **Total Tagihan**: {format_currency(total)}\n"
+        f"• **Jumlah Orang**: {people} orang\n"
+        f"• **Patungan/Orang**: **{format_currency(per_person)}**\n\n"
+        f"Mau aku catat sebagai pengeluaran kamu ({format_currency(per_person)}) atau catat total ({format_currency(total)}) dengan piutang?"
+    )
+    
+    # Prepare pending tx for the user's share
+    pending = {
+        "amount": float(per_person),
+        "category": data.get("category", "Sosial"),
+        "merchant": f"Split Bill: {data.get('merchant', 'Makan Bareng')}",
+        "date": data.get("date"),
+        "type": "expense",
+        "original_total": total,
+        "people_count": people
+    }
+    
+    context.user_data["pending_tx"] = pending
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"✅ Catat Rp{per_person:,.0f}", callback_data="tx_confirm")],
+        [InlineKeyboardButton("📝 Catat Full + Piutang (Soon)", callback_data="split_receivable")],
+        [InlineKeyboardButton("❌ Batal", callback_data="tx_ignore")]
+    ])
+    
+    await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=keyboard)
+
+async def _handle_correction(update: Update, context: ContextTypes.DEFAULT_TYPE, user_db, text: str):
+    """Handles contextual correction of the last transaction."""
+    txs = db.get_transactions_history(user_db.id, limit=1)
+    if not txs:
+        await update.message.reply_text("Belum ada transaksi yang bisa dikoreksi.")
+        return
+    
+    last_tx = txs[0]
+    new_data = nlp.extract_transaction_data_simple(text)
+    
+    if not new_data.get("amount") and not new_data.get("category") and not new_data.get("merchant"):
+        await update.message.reply_text("Maksudnya gimana? Contoh: 'ralat tadi maksudnya 50rb'")
+        return
+
+    # Update only fields that are provided
+    updated_tx = {
+        "amount": new_data.get("amount") or last_tx.amount,
+        "category": new_data.get("category") or last_tx.category,
+        "merchant": new_data.get("merchant") or last_tx.description, # merchant maps to description in DB
+        "date": new_data.get("date") or last_tx.date.strftime("%Y-%m-%d"),
+        "type": last_tx.type,
+        "id": last_tx.id
+    }
+    
+    from utils.visuals import format_currency
+    msg = (
+        "✏️ **Koreksi Transaksi Terakhir**\n\n"
+        "**LAMA:**\n"
+        f"{_format_tx(last_tx)}\n\n"
+        "**BARU:**\n"
+        f"• Nominal: {format_currency(updated_tx['amount'])}\n"
+        f"• Kategori: {updated_tx['category']}\n"
+        f"• Deskripsi: {updated_tx['merchant']}\n\n"
+        "Konfirmasi perubahan?"
+    )
+    
+    context.user_data["pending_update"] = updated_tx
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Ya, Update", callback_data="update_confirm")],
+        [InlineKeyboardButton("❌ Batal", callback_data="update_cancel")]
+    ])
+    
+    await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=keyboard)
 
 async def _handle_sharing_info(update: Update, context: ContextTypes.DEFAULT_TYPE, user_db, text: str, user_name: str):
     """Handles informational statements (non-transactional)."""
