@@ -17,6 +17,7 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Optional
 
 import uvicorn
@@ -190,6 +191,51 @@ class BudgetAlert(BaseModel):
     limit_threshold: float = Field(..., gt=0, le=1)  # Fixed: lte→le
 
 
+class BroadcastButton(BaseModel):
+    text: str = Field(..., min_length=1, max_length=32)
+    url: Optional[str] = Field(default=None, max_length=2048)
+
+
+class BroadcastQuickReply(BaseModel):
+    text: str = Field(..., min_length=1, max_length=32)
+
+
+class BroadcastMedia(BaseModel):
+    image_url: Optional[str] = Field(default=None, max_length=2048)
+    video_url: Optional[str] = Field(default=None, max_length=2048)
+
+
+class BroadcastAudienceFilter(BaseModel):
+    active_only: bool = True
+    roles: list[str] = Field(default_factory=list)
+    username_contains: Optional[str] = Field(default=None, max_length=64)
+    include_telegram_ids: list[int] = Field(default_factory=list)
+    exclude_telegram_ids: list[int] = Field(default_factory=list)
+    created_after: Optional[str] = None
+    created_before: Optional[str] = None
+
+
+class BroadcastRequest(BaseModel):
+    message: str = Field("", max_length=4096)
+    template_id: Optional[str] = Field(default=None, max_length=64)
+    variables: dict[str, str] = Field(default_factory=dict)
+    channels: list[str] = Field(default_factory=lambda: ["telegram"])
+    audience: BroadcastAudienceFilter = Field(default_factory=BroadcastAudienceFilter)
+    schedule_at: Optional[str] = None
+    priority: str = Field(default="normal", max_length=16)
+    media: Optional[BroadcastMedia] = None
+    buttons: list[BroadcastButton] = Field(default_factory=list)
+    quick_replies: list[BroadcastQuickReply] = Field(default_factory=list)
+
+
+class BroadcastPreviewRequest(BaseModel):
+    message: str = Field("", max_length=4096)
+    template_id: Optional[str] = Field(default=None, max_length=64)
+    variables: dict[str, str] = Field(default_factory=dict)
+    channel: str = Field(default="telegram", max_length=16)
+    sample_user: dict = Field(default_factory=dict)
+
+
 # ---------------------------------------------------------------------------
 # App factory (enables testing with custom deps)
 # ---------------------------------------------------------------------------
@@ -220,6 +266,9 @@ def create_app(deps: AppDependencies) -> FastAPI:
 
 
 def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
+    broadcast_history: list[dict] = []
+    scheduled_broadcasts: dict[str, dict] = {}
+
     # -----------------------------------------------------------------------
     # Health
     # -----------------------------------------------------------------------
@@ -483,45 +532,299 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
             "models": model_list
         }
 
-    @app.post("/admin/broadcast", tags=["admin"])
-    async def admin_broadcast(
-        payload: dict[str, str],
-        request: Request,
-        user_id: int = Depends(get_current_user),
-    ):
+    def _safe_parse_dt(s: Optional[str]) -> Optional[datetime]:
+        if not s:
+            return None
+        try:
+            return datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    def _render_message(text: str, variables: dict[str, str]) -> str:
+        out = text or ""
+        for k, v in (variables or {}).items():
+            key = f"{{{{{k}}}}}"
+            out = out.replace(key, str(v))
+        return out
+
+    def _filter_recipients(all_users: list, flt: BroadcastAudienceFilter) -> list:
+        roles = {r.strip().lower() for r in (flt.roles or []) if r and r.strip()}
+        username_contains = (flt.username_contains or "").strip().lower()
+        include_ids = set(int(x) for x in (flt.include_telegram_ids or []) if str(x).isdigit())
+        exclude_ids = set(int(x) for x in (flt.exclude_telegram_ids or []) if str(x).isdigit())
+        created_after = _safe_parse_dt(flt.created_after)
+        created_before = _safe_parse_dt(flt.created_before)
+
+        out = []
+        for u in all_users:
+            tid = int(getattr(u, "telegram_id", 0) or 0)
+            if include_ids and tid not in include_ids:
+                continue
+            if tid in exclude_ids:
+                continue
+            if flt.active_only and not bool(getattr(u, "is_active", True)):
+                continue
+            role = (getattr(u, "role", "user") or "user").strip().lower()
+            if roles and role not in roles:
+                continue
+            uname = (getattr(u, "username", "") or "").strip().lower()
+            if username_contains and username_contains not in uname:
+                continue
+            created_at_raw = getattr(u, "created_at", None)
+            created_at = _safe_parse_dt(created_at_raw) if isinstance(created_at_raw, str) else None
+            if created_after and created_at and created_at < created_after:
+                continue
+            if created_before and created_at and created_at > created_before:
+                continue
+            out.append(u)
+        return out
+
+    @app.get("/admin/broadcast/templates", tags=["admin"])
+    def admin_broadcast_templates(user_id: int = Depends(get_current_user)):
         if not deps.db.has_permission(user_id, "broadcast"):
             raise HTTPException(status_code=403, detail="Insufficient permissions")
+        return [
+            {
+                "id": "promo_flash_sale",
+                "category": "Promosi",
+                "name": "Flash Sale",
+                "variables": ["name", "promo", "end_date"],
+                "body": "Halo {{name}}! 🎉\n\n{{promo}}\n\nBerlaku sampai {{end_date}}.\nKlik untuk cek detail ya.",
+            },
+            {
+                "id": "announcement_maintenance",
+                "category": "Pengumuman",
+                "name": "Maintenance",
+                "variables": ["date", "start_time", "end_time"],
+                "body": "📢 Pengumuman:\n\nAkan ada maintenance pada {{date}} pukul {{start_time}}–{{end_time}}.\nMohon maaf atas ketidaknyamanannya.",
+            },
+            {
+                "id": "product_update",
+                "category": "Update Produk",
+                "name": "Rilis Fitur Baru",
+                "variables": ["feature", "cta"],
+                "body": "✨ Update terbaru:\n\nKami baru saja merilis {{feature}}.\n{{cta}}",
+            },
+            {
+                "id": "billing_reminder",
+                "category": "Reminder",
+                "name": "Pengingat Tagihan",
+                "variables": ["name", "amount", "due_date"],
+                "body": "Hai {{name}}, ini pengingat tagihan sebesar {{amount}}.\nJatuh tempo: {{due_date}}.",
+            },
+        ]
 
-        message = payload.get("message")
-        if not message:
-            raise HTTPException(status_code=400, detail="Message empty")
+    @app.post("/admin/broadcast/preview", tags=["admin"])
+    def admin_broadcast_preview(payload: BroadcastPreviewRequest, user_id: int = Depends(get_current_user)):
+        if not deps.db.has_permission(user_id, "broadcast"):
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        sample = payload.sample_user or {}
+        builtins = {
+            "name": sample.get("username") or sample.get("name") or "Customer",
+            "telegram_id": str(sample.get("telegram_id") or ""),
+            "role": str(sample.get("role") or "user"),
+            "date": datetime.now(timezone.utc).astimezone().strftime("%d-%m-%Y"),
+        }
+        vars_final = {**builtins, **(payload.variables or {})}
+        rendered = _render_message(payload.message or "", vars_final)
+        return {"channel": payload.channel, "rendered": rendered, "variables": vars_final}
 
+    @app.post("/admin/broadcast/estimate", tags=["admin"])
+    def admin_broadcast_estimate(payload: BroadcastAudienceFilter, user_id: int = Depends(get_current_user)):
+        if not deps.db.has_permission(user_id, "broadcast"):
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        users = deps.db.get_all_users()
+        recipients = _filter_recipients(users, payload)
+        return {"estimated_recipients": len(recipients)}
+
+    @app.get("/admin/broadcast/history", tags=["admin"])
+    def admin_broadcast_history(user_id: int = Depends(get_current_user)):
+        if not deps.db.has_permission(user_id, "broadcast"):
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        return list(reversed(broadcast_history[-100:]))
+
+    @app.get("/admin/broadcast/scheduled", tags=["admin"])
+    def admin_broadcast_scheduled(user_id: int = Depends(get_current_user)):
+        if not deps.db.has_permission(user_id, "broadcast"):
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        items = []
+        for job_id, data in scheduled_broadcasts.items():
+            items.append({k: v for k, v in data.items() if k != "_timer"})
+        items.sort(key=lambda x: x.get("schedule_at") or "")
+        return items
+
+    @app.delete("/admin/broadcast/scheduled/{job_id}", tags=["admin"])
+    def admin_broadcast_cancel(job_id: str, user_id: int = Depends(get_current_user)):
+        if not deps.db.has_permission(user_id, "broadcast"):
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        job = scheduled_broadcasts.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        t = job.get("_timer")
+        if t:
+            try:
+                t.cancel()
+            except Exception:
+                pass
+        scheduled_broadcasts.pop(job_id, None)
+        return {"status": "ok"}
+
+    async def _send_telegram_broadcast(
+        recipients: list,
+        message: str,
+        media: Optional[BroadcastMedia],
+        buttons: list[BroadcastButton],
+    ) -> tuple[int, int]:
         if not deps.bot:
             raise HTTPException(status_code=503, detail="Bot service not initialised")
 
-        users = deps.db.get_all_users()
-        count = 0
-        for u in users:
+        reply_markup = None
+        if buttons:
             try:
-                await deps.bot.send_message(
-                    chat_id=u.telegram_id,
-                    text=f"📢 **BROADCAST**\n\n{message}",
-                    parse_mode="Markdown",
-                )
-                count += 1
+                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+                rows = []
+                for b in buttons:
+                    if b.url:
+                        rows.append([InlineKeyboardButton(text=b.text, url=b.url)])
+                reply_markup = InlineKeyboardMarkup(rows) if rows else None
             except Exception:
-                pass
+                reply_markup = None
+
+        ok = 0
+        fail = 0
+        for u in recipients:
+            try:
+                tid = int(getattr(u, "telegram_id", 0) or 0)
+                if media and media.image_url:
+                    await deps.bot.send_photo(chat_id=tid, photo=media.image_url, caption=message, parse_mode="Markdown", reply_markup=reply_markup)
+                elif media and media.video_url:
+                    await deps.bot.send_video(chat_id=tid, video=media.video_url, caption=message, parse_mode="Markdown", reply_markup=reply_markup)
+                else:
+                    await deps.bot.send_message(chat_id=tid, text=message, parse_mode="Markdown", reply_markup=reply_markup)
+                ok += 1
+            except Exception:
+                fail += 1
+        return ok, fail
+
+    @app.post("/admin/broadcast", tags=["admin"])
+    async def admin_broadcast(payload: BroadcastRequest, request: Request, user_id: int = Depends(get_current_user)):
+        if not deps.db.has_permission(user_id, "broadcast"):
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+        channels = [c.strip().lower() for c in (payload.channels or ["telegram"]) if c and c.strip()]
+        channels = list(dict.fromkeys(channels))
+        unsupported = [c for c in channels if c not in {"telegram"}]
+        if unsupported:
+            raise HTTPException(status_code=501, detail=f"Unsupported channel(s): {', '.join(unsupported)}")
+
+        all_users = deps.db.get_all_users()
+        recipients = _filter_recipients(all_users, payload.audience)
+        if not recipients:
+            raise HTTPException(status_code=400, detail="No recipients matched filter")
+
+        schedule_dt = _safe_parse_dt(payload.schedule_at)
+        schedule_dt = schedule_dt if schedule_dt and schedule_dt.tzinfo else (schedule_dt.replace(tzinfo=timezone.utc) if schedule_dt else None)
+        now = datetime.now(timezone.utc)
+        if schedule_dt and schedule_dt > now:
+            job_id = hashlib.sha256(f"{user_id}:{payload.schedule_at}:{time.time()}".encode()).hexdigest()[:16]
+            scheduled_broadcasts[job_id] = {
+                "id": job_id,
+                "status": "scheduled",
+                "created_at": now.isoformat(),
+                "schedule_at": schedule_dt.isoformat(),
+                "audience": payload.audience.dict(),
+                "channels": channels,
+                "priority": payload.priority,
+                "template_id": payload.template_id,
+            }
+
+            async def _job_runner():
+                sample_vars = {
+                    "date": datetime.now(timezone.utc).astimezone().strftime("%d-%m-%Y"),
+                }
+                ok, fail = await _send_telegram_broadcast(
+                    recipients,
+                    _render_message(payload.message, {**sample_vars, **(payload.variables or {})}),
+                    payload.media,
+                    payload.buttons,
+                )
+                broadcast_history.append(
+                    {
+                        "id": job_id,
+                        "status": "completed" if fail == 0 else "partial",
+                        "created_at": now.isoformat(),
+                        "scheduled_at": schedule_dt.isoformat(),
+                        "sent_to": ok,
+                        "failed_to": fail,
+                        "channels": channels,
+                        "priority": payload.priority,
+                        "template_id": payload.template_id,
+                    }
+                )
+                scheduled_broadcasts.pop(job_id, None)
+                deps.db.log_admin_action(
+                    admin_id=user_id,
+                    target_id=0,
+                    action="broadcast_scheduled_send",
+                    action_type="communication",
+                    new_value=f"To {ok} users",
+                    reason=(payload.message or "")[:50] + "...",
+                    ip_address=request.client.host,
+                )
+
+            def _timer_fire():
+                try:
+                    import asyncio
+
+                    asyncio.run(_job_runner())
+                except Exception:
+                    pass
+
+            delay = max(0.0, (schedule_dt - now).total_seconds())
+            t = threading.Timer(delay, _timer_fire)
+            scheduled_broadcasts[job_id]["_timer"] = t
+            t.daemon = True
+            t.start()
+
+            deps.db.log_admin_action(
+                admin_id=user_id,
+                target_id=0,
+                action="broadcast_schedule",
+                action_type="communication",
+                new_value=f"At {schedule_dt.isoformat()}",
+                reason=(payload.message or "")[:50] + "...",
+                ip_address=request.client.host,
+            )
+            return {"status": "scheduled", "job_id": job_id, "estimated_recipients": len(recipients)}
+
+        builtins = {"date": datetime.now(timezone.utc).astimezone().strftime("%d-%m-%Y")}
+        rendered = _render_message(payload.message, {**builtins, **(payload.variables or {})})
+        ok, fail = await _send_telegram_broadcast(recipients, f"📢 **BROADCAST**\n\n{rendered}", payload.media, payload.buttons)
 
         deps.db.log_admin_action(
             admin_id=user_id,
             target_id=0,
             action="broadcast",
             action_type="communication",
-            new_value=f"To {count} users",
-            reason=message[:50] + "...",
-            ip_address=request.client.host
+            new_value=f"To {ok} users",
+            reason=(payload.message or "")[:50] + "...",
+            ip_address=request.client.host,
         )
-        return {"status": "ok", "sent_to": count}
+        item_id = hashlib.sha256(f"{user_id}:{time.time()}".encode()).hexdigest()[:12]
+        broadcast_history.append(
+            {
+                "id": item_id,
+                "status": "completed" if fail == 0 else "partial",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "sent_to": ok,
+                "failed_to": fail,
+                "channels": channels,
+                "priority": payload.priority,
+                "template_id": payload.template_id,
+            }
+        )
+        return {"status": "ok", "sent_to": ok, "failed_to": fail, "audience_size": len(recipients)}
 
     @app.post("/admin/message/{target_id}", tags=["admin"])
     async def admin_private_message(

@@ -785,115 +785,300 @@
                         <transition name="slide" mode="out-in">
                         <div v-if="currentView === 'admin_broadcast'" class="space-y-8" key="admin_broadcast">
                             <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                                <!-- Broadcast Composer -->
                                 <div class="lg:col-span-2 space-y-6">
                                     <div class="glass-panel p-8 rounded-2xl border border-white/5 relative overflow-hidden">
                                         <div class="absolute top-0 right-0 p-6 opacity-10">
                                             <i class="fas fa-paper-plane text-6xl text-brand-500"></i>
                                         </div>
-                                        
+
                                         <div class="flex items-center gap-4 mb-8">
                                             <div class="w-12 h-12 rounded-xl bg-brand-500/10 flex items-center justify-center text-brand-500 text-xl shadow-lg shadow-brand-500/10">
                                                 <i class="fas fa-bullhorn"></i>
                                             </div>
-                                            <div>
-                                                <h3 class="text-lg font-bold text-white tracking-tight">Enterprise Broadcast Engine</h3>
-                                                <p class="text-xs text-slate-500">Dispatch priority messages across the entire Telegram network.</p>
+                                            <div class="min-w-0">
+                                                <h3 class="text-lg font-bold text-white tracking-tight">Broadcast Studio</h3>
+                                                <p class="text-xs text-slate-500">Template, personalisasi, preview multi-platform, segmentasi, dan jadwal kirim.</p>
                                             </div>
                                         </div>
-                                        
-                                        <div class="space-y-6">
-                                            <!-- Target Selection -->
-                                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                                <div class="space-y-2">
-                                                    <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Target Audience</label>
-                                                    <select class="w-full bg-dark-900 border border-dark-700 rounded-xl px-4 py-3 text-sm text-slate-200 outline-none focus:ring-1 focus:ring-brand-500 transition-all">
-                                                        <option value="all">ALL ACTIVE USERS ({{ adminStats.total_users }})</option>
-                                                        <option value="premium">PREMIUM MEMBERS ONLY</option>
-                                                        <option value="inactive">INACTIVE USERS (>30 DAYS)</option>
-                                                        <option value="test">INTERNAL TEST ACCOUNTS</option>
+
+                                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                            <div class="md:col-span-2 space-y-2">
+                                                <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Template Pesan</label>
+                                                <div class="flex gap-3">
+                                                    <select v-model="broadcastForm.templateId" class="flex-1 bg-dark-900 border border-dark-700 rounded-xl px-4 py-3 text-sm text-slate-200 outline-none focus:ring-1 focus:ring-brand-500 transition-all">
+                                                        <option value="">Custom message</option>
+                                                        <option v-for="t in broadcastTemplates" :key="t.id" :value="t.id">{{ t.category }} — {{ t.name }}</option>
                                                     </select>
-                                                </div>
-                                                <div class="space-y-2">
-                                                    <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Priority Level</label>
-                                                    <select class="w-full bg-dark-900 border border-dark-700 rounded-xl px-4 py-3 text-sm text-slate-200 outline-none focus:ring-1 focus:ring-brand-500 transition-all">
-                                                        <option value="normal">NORMAL - STANDARD QUEUE</option>
-                                                        <option value="high">HIGH - BYPASS RATE LIMITS</option>
-                                                        <option value="emergency">EMERGENCY - INSTANT PUSH</option>
-                                                    </select>
+                                                    <button @click="applyBroadcastTemplate" :disabled="!broadcastForm.templateId" class="px-4 py-3 rounded-xl bg-dark-800 hover:bg-dark-700 text-slate-200 border border-white/5 transition-all font-bold text-xs disabled:opacity-40 disabled:cursor-not-allowed">
+                                                        Apply
+                                                    </button>
                                                 </div>
                                             </div>
-
                                             <div class="space-y-2">
-                                                <div class="flex justify-between items-center px-1">
-                                                    <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Message Content (Markdown)</label>
-                                                    <span class="text-[10px] font-mono text-slate-600">{{ broadcastMessage.length }} / 4096</span>
-                                                </div>
-                                                <textarea v-model="broadcastMessage" rows="8" placeholder="Type your system announcement here..." class="w-full bg-dark-900 border border-dark-700 rounded-xl p-4 text-sm text-slate-200 outline-none focus:ring-1 focus:ring-brand-500 transition-all font-sans leading-relaxed"></textarea>
+                                                <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Priority</label>
+                                                <select v-model="broadcastForm.priority" class="w-full bg-dark-900 border border-dark-700 rounded-xl px-4 py-3 text-sm text-slate-200 outline-none focus:ring-1 focus:ring-brand-500 transition-all">
+                                                    <option value="normal">Normal</option>
+                                                    <option value="high">High</option>
+                                                    <option value="emergency">Emergency</option>
+                                                </select>
                                             </div>
-                                            
-                                            <div class="flex items-center gap-4 p-4 bg-amber-500/5 border border-amber-500/10 rounded-xl">
-                                                <div class="w-8 h-8 rounded-lg bg-amber-500/10 flex items-center justify-center text-amber-500 shrink-0">
-                                                    <i class="fas fa-shield-alt text-xs"></i>
+                                        </div>
+
+                                        <div class="mt-6 glass-panel p-5 rounded-2xl border border-white/5">
+                                            <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                                                <div class="min-w-0">
+                                                    <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Segmentasi Audience</p>
+                                                    <p class="text-xs text-slate-400 mt-1">Estimasi target: <span class="text-white font-mono">{{ broadcastAudienceEstimate }}</span></p>
                                                 </div>
-                                                <p class="text-[10px] text-slate-400 leading-relaxed">
-                                                    <strong class="text-amber-500/80">SAFETY PROTOCOL:</strong> Large broadcasts are throttled to 30 msg/sec to prevent Telegram API bans. Est. completion: <span class="text-white font-mono">~2 minutes</span>.
-                                                </p>
+                                                <div class="flex items-center gap-3">
+                                                    <label class="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-dark-900/50 border border-white/5 text-xs text-slate-300">
+                                                        <input type="checkbox" v-model="broadcastForm.audience.activeOnly" class="accent-brand-500">
+                                                        Active only
+                                                    </label>
+                                                    <button @click="refreshBroadcastAudienceEstimate" class="px-3 py-2 rounded-xl bg-dark-900/50 border border-white/5 text-slate-400 hover:text-brand-400 hover:border-white/10 transition-all text-xs font-bold">
+                                                        Re-check
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-5">
+                                                <div class="space-y-2">
+                                                    <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Role</label>
+                                                    <div class="flex flex-wrap gap-2">
+                                                        <button v-for="r in broadcastRoleOptions" :key="r" @click="toggleBroadcastRole(r)" :class="['px-3 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest border transition-all', broadcastForm.audience.roles.includes(r) ? 'bg-brand-600 text-white border-brand-500/30' : 'bg-dark-900 text-slate-400 border-white/5 hover:border-white/10 hover:text-slate-200']">
+                                                            {{ r }}
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                <div class="space-y-2">
+                                                    <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Username contains</label>
+                                                    <input v-model="broadcastForm.audience.usernameContains" type="text" placeholder="contoh: hanif" class="w-full bg-dark-900 border border-dark-700 rounded-xl px-4 py-3 text-sm text-slate-200 outline-none focus:ring-1 focus:ring-brand-500 transition-all">
+                                                </div>
+                                                <div class="space-y-2">
+                                                    <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Include IDs</label>
+                                                    <input v-model="broadcastForm.audience.includeIds" type="text" placeholder="1512347775, 123..." class="w-full bg-dark-900 border border-dark-700 rounded-xl px-4 py-3 text-sm text-slate-200 outline-none focus:ring-1 focus:ring-brand-500 transition-all">
+                                                    <p class="text-[10px] text-slate-600 px-1">Pisahkan dengan koma. Kosong = semua.</p>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div class="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            <div class="space-y-2">
+                                                <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Channel</label>
+                                                <div class="grid grid-cols-2 gap-3">
+                                                    <label class="flex items-center gap-2 px-3 py-2 rounded-xl bg-dark-900/50 border border-white/5 text-xs text-slate-300">
+                                                        <input type="checkbox" v-model="broadcastForm.channels.telegram" class="accent-brand-500">
+                                                        Telegram
+                                                    </label>
+                                                    <label class="flex items-center gap-2 px-3 py-2 rounded-xl bg-dark-900/50 border border-white/5 text-xs text-slate-500 opacity-60 cursor-not-allowed">
+                                                        <input type="checkbox" disabled class="accent-brand-500">
+                                                        WhatsApp
+                                                    </label>
+                                                    <label class="flex items-center gap-2 px-3 py-2 rounded-xl bg-dark-900/50 border border-white/5 text-xs text-slate-500 opacity-60 cursor-not-allowed">
+                                                        <input type="checkbox" disabled class="accent-brand-500">
+                                                        Email
+                                                    </label>
+                                                    <label class="flex items-center gap-2 px-3 py-2 rounded-xl bg-dark-900/50 border border-white/5 text-xs text-slate-500 opacity-60 cursor-not-allowed">
+                                                        <input type="checkbox" disabled class="accent-brand-500">
+                                                        SMS
+                                                    </label>
+                                                </div>
+                                            </div>
+                                            <div class="space-y-2">
+                                                <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Jadwal Pengiriman</label>
+                                                <div class="flex items-center gap-3">
+                                                    <label class="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-dark-900/50 border border-white/5 text-xs text-slate-300">
+                                                        <input type="checkbox" v-model="broadcastForm.schedule.enabled" class="accent-brand-500">
+                                                        Schedule
+                                                    </label>
+                                                    <input v-model="broadcastForm.schedule.at" type="datetime-local" :disabled="!broadcastForm.schedule.enabled" class="flex-1 bg-dark-900 border border-dark-700 rounded-xl px-4 py-2.5 text-xs text-slate-200 outline-none focus:ring-1 focus:ring-brand-500 transition-all disabled:opacity-50 disabled:cursor-not-allowed">
+                                                </div>
+                                                <p class="text-[10px] text-slate-600 px-1">Timezone mengikuti device browser.</p>
+                                            </div>
+                                        </div>
+
+                                        <div class="mt-6 space-y-2">
+                                            <div class="flex justify-between items-center px-1">
+                                                <label class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Message Content (Markdown)</label>
+                                                <span class="text-[10px] font-mono text-slate-600">{{ broadcastForm.message.length }} / 4096</span>
+                                            </div>
+                                            <textarea v-model="broadcastForm.message" rows="9" placeholder="Tulis pesan broadcast di sini..." class="w-full bg-dark-900 border border-dark-700 rounded-xl p-4 text-sm text-slate-200 outline-none focus:ring-1 focus:ring-brand-500 transition-all font-sans leading-relaxed"></textarea>
+                                            <div class="flex flex-wrap gap-2 pt-2">
+                                                <button v-for="v in broadcastVariableChips" :key="v" @click="insertBroadcastVariable(v)" class="px-2.5 py-1.5 rounded-lg bg-dark-800 hover:bg-dark-700 text-slate-300 text-[10px] font-bold uppercase tracking-widest border border-white/5 transition-all">
+                                                    {{ v }}
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        <div class="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            <div class="glass-panel p-5 rounded-2xl border border-white/5">
+                                                <div class="flex items-center justify-between mb-4">
+                                                    <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Personalisasi Variabel</p>
+                                                    <button @click="resetBroadcastVariables" class="text-[10px] font-bold text-slate-500 hover:text-white uppercase tracking-widest transition-colors">Reset</button>
+                                                </div>
+                                                <div class="space-y-3">
+                                                    <div v-for="k in broadcastVariableKeys" :key="k" class="flex items-center gap-3">
+                                                        <div class="w-24 shrink-0 text-[10px] font-mono text-slate-500">{{ k }}</div>
+                                                        <input v-model="broadcastForm.variables[k]" type="text" :placeholder="`value untuk ${k}`" class="flex-1 bg-dark-900 border border-dark-700 rounded-xl px-3 py-2 text-xs text-slate-200 outline-none focus:ring-1 focus:ring-brand-500 transition-all">
+                                                    </div>
+                                                </div>
                                             </div>
 
-                                            <div class="flex gap-4">
-                                                <button @click="sendBroadcast" :disabled="!broadcastMessage || isSending" class="flex-1 py-4 bg-brand-600 hover:bg-brand-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-xl shadow-lg shadow-brand-600/20 transition-all flex items-center justify-center gap-3 group">
-                                                    <i v-if="isSending" class="fas fa-circle-notch fa-spin"></i>
-                                                    <i v-else class="fas fa-paper-plane text-xs group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform"></i>
-                                                    <span>EXECUTE BROADCAST</span>
-                                                </button>
-                                                <button class="px-6 py-4 bg-dark-800 hover:bg-dark-700 text-slate-300 font-bold rounded-xl border border-white/5 transition-all">
-                                                    <i class="fas fa-eye mr-2"></i> PREVIEW
-                                                </button>
+                                            <div class="glass-panel p-5 rounded-2xl border border-white/5">
+                                                <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-4">Media & CTA</p>
+                                                <div class="space-y-4">
+                                                    <div class="space-y-2">
+                                                        <label class="text-[10px] font-bold text-slate-600 uppercase tracking-widest ml-1">Image URL</label>
+                                                        <input v-model="broadcastForm.media.imageUrl" type="url" placeholder="https://..." class="w-full bg-dark-900 border border-dark-700 rounded-xl px-4 py-3 text-sm text-slate-200 outline-none focus:ring-1 focus:ring-brand-500 transition-all">
+                                                    </div>
+                                                    <div class="space-y-2">
+                                                        <label class="text-[10px] font-bold text-slate-600 uppercase tracking-widest ml-1">Video URL</label>
+                                                        <input v-model="broadcastForm.media.videoUrl" type="url" placeholder="https://..." class="w-full bg-dark-900 border border-dark-700 rounded-xl px-4 py-3 text-sm text-slate-200 outline-none focus:ring-1 focus:ring-brand-500 transition-all">
+                                                    </div>
+                                                    <div class="space-y-3">
+                                                        <div class="flex items-center justify-between">
+                                                            <p class="text-[10px] font-bold text-slate-600 uppercase tracking-widest">Buttons (CTA)</p>
+                                                            <button @click="addBroadcastButton" class="text-[10px] font-bold text-brand-400 hover:text-white uppercase tracking-widest transition-colors">Add</button>
+                                                        </div>
+                                                        <div v-if="broadcastForm.buttons.length === 0" class="text-[10px] text-slate-600 font-mono">Belum ada tombol.</div>
+                                                        <div v-for="(b, idx) in broadcastForm.buttons" :key="idx" class="grid grid-cols-1 md:grid-cols-7 gap-3">
+                                                            <input v-model="b.text" type="text" placeholder="Text" class="md:col-span-2 bg-dark-900 border border-dark-700 rounded-xl px-3 py-2 text-xs text-slate-200 outline-none focus:ring-1 focus:ring-brand-500 transition-all">
+                                                            <input v-model="b.url" type="url" placeholder="https://link" class="md:col-span-4 bg-dark-900 border border-dark-700 rounded-xl px-3 py-2 text-xs text-slate-200 outline-none focus:ring-1 focus:ring-brand-500 transition-all">
+                                                            <button @click="removeBroadcastButton(idx)" class="md:col-span-1 px-3 py-2 rounded-xl bg-danger-500/10 text-danger-500 border border-danger-500/20 hover:bg-danger-500/20 transition-all text-xs font-bold">X</button>
+                                                        </div>
+                                                    </div>
+                                                </div>
                                             </div>
+                                        </div>
+
+                                        <div class="mt-6 flex items-center gap-4 p-4 bg-amber-500/5 border border-amber-500/10 rounded-xl">
+                                            <div class="w-8 h-8 rounded-lg bg-amber-500/10 flex items-center justify-center text-amber-500 shrink-0">
+                                                <i class="fas fa-shield-alt text-xs"></i>
+                                            </div>
+                                            <p class="text-[10px] text-slate-400 leading-relaxed">
+                                                <strong class="text-amber-500/80">SAFETY:</strong> Broadcast besar bisa lambat karena rate limit Telegram.
+                                            </p>
+                                        </div>
+
+                                        <div class="mt-6 flex flex-col md:flex-row gap-4">
+                                            <button @click="sendBroadcast" :disabled="!broadcastForm.message || isSending || !broadcastForm.channels.telegram" class="flex-1 py-4 bg-brand-600 hover:bg-brand-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-xl shadow-lg shadow-brand-600/20 transition-all flex items-center justify-center gap-3 group">
+                                                <i v-if="isSending" class="fas fa-circle-notch fa-spin"></i>
+                                                <i v-else class="fas fa-paper-plane text-xs group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform"></i>
+                                                <span>{{ broadcastForm.schedule.enabled ? 'SCHEDULE BROADCAST' : 'SEND BROADCAST' }}</span>
+                                            </button>
+                                            <button @click="toggleBroadcastPreview" class="px-6 py-4 bg-dark-800 hover:bg-dark-700 text-slate-300 font-bold rounded-xl border border-white/5 transition-all flex items-center justify-center gap-2">
+                                                <i class="fas fa-eye"></i> {{ showBroadcastPreview ? 'HIDE PREVIEW' : 'SHOW PREVIEW' }}
+                                            </button>
                                         </div>
                                     </div>
                                 </div>
 
-                                <!-- Broadcast Stats & History -->
                                 <div class="space-y-6">
+                                    <transition name="fade">
+                                    <div v-if="showBroadcastPreview" class="glass-panel p-6 rounded-2xl border border-white/5">
+                                        <div class="flex items-center justify-between mb-4">
+                                            <h3 class="text-xs font-bold text-white uppercase tracking-widest">Live Preview</h3>
+                                            <div class="flex items-center gap-2">
+                                                <button v-for="p in broadcastPreviewPlatforms" :key="p" @click="broadcastForm.preview.platform = p" :class="['px-2.5 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-widest border transition-all', broadcastForm.preview.platform === p ? 'bg-brand-600 text-white border-brand-500/30' : 'bg-dark-900 text-slate-400 border-white/5 hover:border-white/10']">
+                                                    {{ p }}
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div class="flex items-center justify-between gap-3 mb-4">
+                                            <div class="flex items-center gap-2">
+                                                <button @click="broadcastForm.preview.device = 'mobile'" :class="['px-3 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest border transition-all', broadcastForm.preview.device === 'mobile' ? 'bg-white/5 text-white border-white/10' : 'bg-dark-900 text-slate-500 border-white/5']">Mobile</button>
+                                                <button @click="broadcastForm.preview.device = 'desktop'" :class="['px-3 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest border transition-all', broadcastForm.preview.device === 'desktop' ? 'bg-white/5 text-white border-white/10' : 'bg-dark-900 text-slate-500 border-white/5']">Desktop</button>
+                                            </div>
+                                            <div class="text-[10px] text-slate-500 font-mono">Sample: {{ broadcastPreviewUser.username }}</div>
+                                        </div>
+                                        <div class="flex justify-center">
+                                            <div :class="broadcastForm.preview.device === 'mobile' ? 'w-[280px]' : 'w-full'">
+                                                <div class="rounded-2xl border border-white/10 bg-dark-900/60 overflow-hidden">
+                                                    <div class="px-4 py-3 border-b border-white/5 bg-white/2 flex items-center justify-between">
+                                                        <span class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{{ broadcastForm.preview.platform }}</span>
+                                                        <span class="text-[10px] text-slate-600 font-mono">{{ formatDateShort(new Date().toISOString()) }}</span>
+                                                    </div>
+                                                    <div class="p-4">
+                                                        <div class="rounded-2xl bg-white/3 border border-white/5 p-4">
+                                                            <div class="text-[12px] text-slate-200 whitespace-pre-wrap leading-relaxed" v-html="broadcastPreviewHtml"></div>
+                                                            <div v-if="broadcastForm.media.imageUrl" class="mt-4 rounded-xl overflow-hidden border border-white/5 bg-dark-800">
+                                                                <img :src="broadcastForm.media.imageUrl" class="w-full h-auto" alt="preview image">
+                                                            </div>
+                                                            <div v-if="broadcastForm.media.videoUrl" class="mt-4 rounded-xl overflow-hidden border border-white/5 bg-dark-800 p-3">
+                                                                <p class="text-[10px] text-slate-500 font-mono truncate">{{ broadcastForm.media.videoUrl }}</p>
+                                                            </div>
+                                                            <div v-if="broadcastForm.buttons.length" class="mt-4 grid grid-cols-1 gap-2">
+                                                                <a v-for="(b, idx) in broadcastForm.buttons" :key="idx" :href="b.url || '#'" target="_blank" rel="noreferrer" class="w-full px-3 py-2 rounded-xl bg-brand-600/20 border border-brand-500/20 text-brand-300 text-xs font-bold text-center hover:bg-brand-600/30 transition-all">
+                                                                    {{ b.text || 'CTA' }}
+                                                                </a>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    </transition>
+
                                     <div class="glass-panel p-6 rounded-2xl border border-white/5">
-                                        <h3 class="text-xs font-bold text-white uppercase tracking-widest mb-6">Delivery Analytics</h3>
-                                        <div class="space-y-6">
-                                            <div class="flex justify-between items-end">
-                                                <div>
-                                                    <p class="text-[10px] text-slate-500 font-bold uppercase">Avg Reach Rate</p>
-                                                    <p class="text-xl font-bold text-white mt-1">94.8%</p>
-                                                </div>
-                                                <div class="text-right">
-                                                    <p class="text-[10px] text-slate-500 font-bold uppercase">Avg Response</p>
-                                                    <p class="text-xl font-bold text-brand-400 mt-1">12.2%</p>
-                                                </div>
+                                        <h3 class="text-xs font-bold text-white uppercase tracking-widest mb-6">Analytics</h3>
+                                        <div class="grid grid-cols-2 gap-4">
+                                            <div class="p-4 rounded-2xl bg-white/2 border border-white/5">
+                                                <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Sent</p>
+                                                <p class="text-xl font-bold text-white mt-1 font-mono">{{ broadcastAnalytics.sent }}</p>
                                             </div>
+                                            <div class="p-4 rounded-2xl bg-white/2 border border-white/5">
+                                                <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Failed</p>
+                                                <p class="text-xl font-bold text-danger-400 mt-1 font-mono">{{ broadcastAnalytics.failed }}</p>
+                                            </div>
+                                        </div>
+                                        <div class="mt-5">
+                                            <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Success Rate</p>
                                             <div class="h-2 w-full bg-dark-800 rounded-full overflow-hidden">
-                                                <div class="h-full bg-brand-500" style="width: 94.8%"></div>
+                                                <div class="h-full bg-success-500" :style="{width: broadcastAnalytics.successRate + '%'}"></div>
                                             </div>
+                                            <p class="text-[10px] text-slate-600 font-mono mt-2">{{ broadcastAnalytics.successRate.toFixed(1) }}%</p>
                                         </div>
                                     </div>
 
                                     <div class="glass-panel p-6 rounded-2xl border border-white/5 flex-1">
-                                        <h3 class="text-xs font-bold text-white uppercase tracking-widest mb-6">Recent History</h3>
-                                        <div class="space-y-4">
-                                            <div v-for="item in broadcastHistory" :key="item.id" class="p-3 rounded-xl bg-white/2 border border-white/5 hover:border-white/10 transition-colors">
-                                                <div class="flex justify-between items-start mb-2">
-                                                    <span class="text-[10px] font-bold text-slate-400">#BRD-{{ item.id }}</span>
-                                                    <span class="text-[9px] font-mono text-slate-600">{{ formatDateShort(item.date) }}</span>
-                                                </div>
-                                                <p class="text-[11px] text-slate-300 line-clamp-2 leading-relaxed mb-3">
-                                                    {{ item.message }}
-                                                </p>
-                                                <div class="flex justify-between items-center">
-                                                    <span class="text-[9px] font-bold text-success-500 bg-success-500/5 px-1.5 py-0.5 rounded">{{ item.status }}</span>
-                                                    <span class="text-[10px] font-mono text-slate-500"><i class="fas fa-users mr-1"></i> {{ item.reach }}</span>
+                                        <div class="flex items-center justify-between mb-6">
+                                            <h3 class="text-xs font-bold text-white uppercase tracking-widest">History</h3>
+                                            <button @click="fetchBroadcastHistory" class="p-2 text-slate-500 hover:text-brand-400 transition-colors">
+                                                <i class="fas fa-sync-alt" :class="{'animate-spin': isLoading}"></i>
+                                            </button>
+                                        </div>
+                                        <div v-if="broadcastScheduled.length" class="mb-4 p-4 rounded-2xl bg-white/2 border border-white/5">
+                                            <div class="flex items-center justify-between">
+                                                <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Scheduled Queue</p>
+                                                <button @click="fetchBroadcastScheduled" class="text-[10px] font-bold text-slate-500 hover:text-white uppercase tracking-widest transition-colors">Refresh</button>
+                                            </div>
+                                            <div class="mt-3 space-y-2">
+                                                <div v-for="job in broadcastScheduled.slice(0, 6)" :key="job.id" class="flex items-center justify-between gap-3 p-3 rounded-xl bg-dark-900 border border-white/5">
+                                                    <div class="min-w-0">
+                                                        <p class="text-[10px] font-mono text-slate-300 truncate">#{{ job.id }}</p>
+                                                        <p class="text-[10px] text-slate-600 font-mono mt-1 truncate">{{ job.schedule_at }}</p>
+                                                    </div>
+                                                    <button @click="cancelBroadcastScheduled(job.id)" class="px-3 py-2 rounded-xl bg-danger-500/10 text-danger-500 border border-danger-500/20 hover:bg-danger-500/20 transition-all text-[10px] font-bold uppercase tracking-widest">
+                                                        Cancel
+                                                    </button>
                                                 </div>
                                             </div>
                                         </div>
-                                        <button class="w-full mt-6 py-2 text-[10px] font-bold text-slate-500 hover:text-white uppercase tracking-widest transition-colors">View All History</button>
+                                        <div class="space-y-3 max-h-[360px] overflow-y-auto custom-scrollbar pr-1">
+                                            <div v-if="broadcastHistory.length === 0" class="text-[10px] text-slate-600 font-mono py-10 text-center">Belum ada history.</div>
+                                            <div v-for="item in broadcastHistory.slice(0, 12)" :key="item.id" class="p-3 rounded-xl bg-white/2 border border-white/5 hover:border-white/10 transition-colors">
+                                                <div class="flex justify-between items-start">
+                                                    <span class="text-[10px] font-bold text-slate-400">#{{ item.id }}</span>
+                                                    <span class="text-[9px] font-mono text-slate-600">{{ formatDateShort(item.created_at || item.date) }}</span>
+                                                </div>
+                                                <div class="mt-2 flex items-center justify-between">
+                                                    <span :class="['text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-widest', item.status === 'scheduled' ? 'bg-amber-500/10 text-amber-400' : (item.status === 'partial' ? 'bg-amber-500/10 text-amber-400' : 'bg-success-500/10 text-success-500')]">
+                                                        {{ (item.status || 'ok').toString().toUpperCase() }}
+                                                    </span>
+                                                    <span class="text-[10px] font-mono text-slate-500"><i class="fas fa-users mr-1"></i> {{ item.sent_to || item.reach || 0 }}</span>
+                                                </div>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -1363,10 +1548,12 @@
                     { id: 1, timestamp: new Date().toISOString(), admin_id: 'SYSTEM', action: 'BOOT', action_type: 'system', reason: 'Server started successfully', ip_address: '127.0.0.1' },
                     { id: 2, timestamp: new Date().toISOString(), admin_id: '1512347775', action: 'LOGIN', action_type: 'auth', reason: 'Superadmin session initiated', ip_address: '127.0.0.1' }
                 ]);
-                const broadcastHistory = ref([
-                    { id: 101, date: new Date().toISOString(), message: "System maintenance completed. All AI features are now back online.", reach: 1420, status: 'COMPLETED' },
-                    { id: 102, date: new Date(Date.now() - 86400000).toISOString(), message: "New feature: Export your transactions to PDF directly from the bot!", reach: 1380, status: 'COMPLETED' }
-                ]);
+                const broadcastHistory = ref([]);
+                const broadcastScheduled = ref([]);
+                const broadcastTemplates = ref([]);
+                const showBroadcastPreview = ref(true);
+                const broadcastAudienceEstimateRemote = ref(null);
+
                 const userSearch = ref('');
                 const flaggedTransactions = ref([]);
                 const suspiciousUsers = ref([]);
@@ -1384,7 +1571,23 @@
                 const health = ref({ status: 'loading', components: { database: '...', redis: '...', websocket: '...', ai_engine: '...' } });
                 
                 const isSending = ref(false);
-                const broadcastMessage = ref('');
+                const broadcastForm = ref({
+                    templateId: '',
+                    priority: 'normal',
+                    message: '',
+                    variables: {},
+                    channels: { telegram: true },
+                    media: { imageUrl: '', videoUrl: '' },
+                    buttons: [],
+                    audience: {
+                        activeOnly: true,
+                        roles: [],
+                        usernameContains: '',
+                        includeIds: '',
+                    },
+                    schedule: { enabled: false, at: '' },
+                    preview: { platform: 'telegram', device: 'mobile' }
+                });
                 const pmModal = ref({ show: false, user: {}, message: '' });
                 const userDrawer = ref({ show: false, user: {} });
 
@@ -1399,6 +1602,113 @@
                 const isAdmin = computed(() => ['superadmin', 'admin', 'moderator', 'finance', 'support'].includes(normalizedRole.value));
                 const isSuperadmin = computed(() => normalizedRole.value === 'superadmin');
                 const flaggedCount = computed(() => flaggedTransactions.value.length);
+                const broadcastRoleOptions = ['user', 'support', 'finance', 'moderator', 'admin', 'superadmin'];
+                const broadcastPreviewPlatforms = ['telegram', 'whatsapp', 'email', 'sms'];
+
+                const broadcastSelectedTemplate = computed(() => {
+                    if (!broadcastForm.value.templateId) return null;
+                    return broadcastTemplates.value.find(t => t.id === broadcastForm.value.templateId) || null;
+                });
+
+                const broadcastPreviewUser = computed(() => {
+                    const u = (users.value && users.value[0]) ? users.value[0] : null;
+                    return {
+                        telegram_id: userId.value || (u ? u.telegram_id : ''),
+                        username: (u && u.username) ? u.username : 'Customer',
+                        role: normalizedRole.value || 'user'
+                    };
+                });
+
+                const escapeHtml = (s) => (s ?? '').toString()
+                    .replaceAll('&', '&amp;')
+                    .replaceAll('<', '&lt;')
+                    .replaceAll('>', '&gt;')
+                    .replaceAll('"', '&quot;')
+                    .replaceAll("'", '&#039;');
+
+                const renderVariables = (text, vars) => {
+                    let out = (text ?? '').toString();
+                    const entries = Object.entries(vars || {});
+                    for (const [k, v] of entries) {
+                        out = out.replaceAll(`{{${k}}}`, (v ?? '').toString());
+                    }
+                    return out;
+                };
+
+                const markdownToHtml = (text) => {
+                    const safe = escapeHtml(text);
+                    const withBold = safe.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+                    const withItalic = withBold.replace(/\*(.+?)\*/g, '<em>$1</em>');
+                    const withCode = withItalic.replace(/`(.+?)`/g, '<code style="background:rgba(255,255,255,0.06);padding:2px 6px;border-radius:8px;font-size:11px">$1</code>');
+                    return withCode.replace(/\n/g, '<br>');
+                };
+
+                const broadcastVariableKeys = computed(() => {
+                    const base = ['name', 'date', 'promo', 'end_date', 'start_time', 'end_time', 'feature', 'cta', 'amount', 'due_date'];
+                    const t = broadcastSelectedTemplate.value;
+                    const vars = Array.isArray(t?.variables) ? t.variables : [];
+                    const all = [...base, ...vars].filter(Boolean);
+                    return Array.from(new Set(all));
+                });
+
+                const broadcastVariableChips = computed(() => {
+                    const base = ['name', 'date', 'telegram_id', 'role'];
+                    const keys = broadcastVariableKeys.value;
+                    return Array.from(new Set([...base, ...keys]));
+                });
+
+                const broadcastPreviewHtml = computed(() => {
+                    const vars = { name: broadcastPreviewUser.value.username, telegram_id: broadcastPreviewUser.value.telegram_id, role: broadcastPreviewUser.value.role, date: formatDateShort(new Date().toISOString()), ...(broadcastForm.value.variables || {}) };
+                    const rendered = renderVariables(broadcastForm.value.message || '', vars);
+                    if (broadcastForm.value.preview.platform === 'email') {
+                        const subject = escapeHtml((broadcastSelectedTemplate.value?.name || 'Broadcast'));
+                        return `<div style="font-weight:800;font-size:12px;margin-bottom:8px">${subject}</div>${markdownToHtml(rendered)}`;
+                    }
+                    if (broadcastForm.value.preview.platform === 'sms') {
+                        const short = rendered.length > 300 ? (rendered.slice(0, 300) + '...') : rendered;
+                        return markdownToHtml(short);
+                    }
+                    return markdownToHtml(rendered);
+                });
+
+                const parseIdList = (s) => {
+                    if (!s) return [];
+                    return s.split(',')
+                        .map(x => x.trim())
+                        .filter(Boolean)
+                        .map(x => Number(x))
+                        .filter(n => Number.isFinite(n) && n > 0);
+                };
+
+                const broadcastAudienceEstimateLocal = computed(() => {
+                    const flt = broadcastForm.value.audience || {};
+                    const roles = new Set((flt.roles || []).map(r => (r || '').toString().toLowerCase()).filter(Boolean));
+                    const userContains = (flt.usernameContains || '').toString().toLowerCase().trim();
+                    const includeIds = new Set(parseIdList(flt.includeIds));
+                    let count = 0;
+                    for (const u of users.value || []) {
+                        if (flt.activeOnly && !u.is_active) continue;
+                        if (roles.size && !roles.has(((u.role || 'user').toString().toLowerCase()))) continue;
+                        if (userContains && !((u.username || '').toString().toLowerCase().includes(userContains))) continue;
+                        if (includeIds.size && !includeIds.has(Number(u.telegram_id))) continue;
+                        count += 1;
+                    }
+                    if (includeIds.size && count === 0) return 0;
+                    return count || 0;
+                });
+
+                const broadcastAudienceEstimate = computed(() => broadcastAudienceEstimateRemote.value ?? broadcastAudienceEstimateLocal.value);
+
+                const broadcastAnalytics = computed(() => {
+                    let sent = 0;
+                    let failed = 0;
+                    for (const h of broadcastHistory.value || []) {
+                        sent += Number(h.sent_to || h.reach || 0) || 0;
+                        failed += Number(h.failed_to || 0) || 0;
+                    }
+                    const denom = Math.max(1, sent + failed);
+                    return { sent, failed, successRate: (sent / denom) * 100 };
+                });
 
                 const applyStoredTheme = () => {
                     const root = document.documentElement;
@@ -1548,6 +1858,107 @@
                     return config;
                 });
 
+                const fetchBroadcastTemplates = async () => {
+                    try {
+                        const res = await api.get('/admin/broadcast/templates');
+                        broadcastTemplates.value = Array.isArray(res.data) ? res.data : [];
+                    } catch (e) {
+                        broadcastTemplates.value = [
+                            { id: 'promo_flash_sale', category: 'Promosi', name: 'Flash Sale', variables: ['name', 'promo', 'end_date'], body: "Halo {{name}}!\n\n{{promo}}\n\nBerlaku sampai {{end_date}}." },
+                            { id: 'announcement_maintenance', category: 'Pengumuman', name: 'Maintenance', variables: ['date', 'start_time', 'end_time'], body: "📢 Pengumuman:\n\nMaintenance {{date}} pukul {{start_time}}–{{end_time}}." },
+                            { id: 'product_update', category: 'Update Produk', name: 'Rilis Fitur Baru', variables: ['feature', 'cta'], body: "✨ Update terbaru:\n\nKami merilis {{feature}}.\n{{cta}}" }
+                        ];
+                    }
+                };
+
+                const fetchBroadcastHistory = async () => {
+                    try {
+                        const res = await api.get('/admin/broadcast/history');
+                        broadcastHistory.value = Array.isArray(res.data) ? res.data : [];
+                    } catch (e) {
+                        broadcastHistory.value = broadcastHistory.value || [];
+                    }
+                };
+
+                const fetchBroadcastScheduled = async () => {
+                    try {
+                        const res = await api.get('/admin/broadcast/scheduled');
+                        broadcastScheduled.value = Array.isArray(res.data) ? res.data : [];
+                    } catch (e) {
+                        broadcastScheduled.value = broadcastScheduled.value || [];
+                    }
+                };
+
+                const cancelBroadcastScheduled = async (jobId) => {
+                    if (!jobId) return;
+                    try {
+                        await api.delete(`/admin/broadcast/scheduled/${jobId}`);
+                        showToast(`Scheduled job ${jobId} dibatalkan`, "success");
+                        await fetchBroadcastScheduled();
+                    } catch (e) {
+                        showToast("Gagal membatalkan jadwal", "error");
+                    }
+                };
+
+                const refreshBroadcastAudienceEstimate = async () => {
+                    broadcastAudienceEstimateRemote.value = null;
+                    try {
+                        const payload = {
+                            active_only: !!broadcastForm.value.audience.activeOnly,
+                            roles: (broadcastForm.value.audience.roles || []).map(r => (r || '').toString()),
+                            username_contains: (broadcastForm.value.audience.usernameContains || '').toString() || null,
+                            include_telegram_ids: parseIdList(broadcastForm.value.audience.includeIds || ''),
+                            exclude_telegram_ids: []
+                        };
+                        const res = await api.post('/admin/broadcast/estimate', payload);
+                        if (typeof res.data?.estimated_recipients === 'number') broadcastAudienceEstimateRemote.value = res.data.estimated_recipients;
+                    } catch (e) {
+                        broadcastAudienceEstimateRemote.value = null;
+                    }
+                };
+
+                const toggleBroadcastRole = (role) => {
+                    const r = (role || '').toString();
+                    const list = broadcastForm.value.audience.roles || [];
+                    if (list.includes(r)) broadcastForm.value.audience.roles = list.filter(x => x !== r);
+                    else broadcastForm.value.audience.roles = [...list, r];
+                };
+
+                const insertBroadcastVariable = (key) => {
+                    const k = (key || '').toString();
+                    if (!k) return;
+                    const tail = broadcastForm.value.message && !broadcastForm.value.message.endsWith(' ') ? ' ' : '';
+                    broadcastForm.value.message = (broadcastForm.value.message || '') + tail + `{{${k}}}`;
+                };
+
+                const resetBroadcastVariables = () => {
+                    broadcastForm.value.variables = {};
+                };
+
+                const addBroadcastButton = () => {
+                    broadcastForm.value.buttons = [...(broadcastForm.value.buttons || []), { text: '', url: '' }];
+                };
+
+                const removeBroadcastButton = (idx) => {
+                    broadcastForm.value.buttons = (broadcastForm.value.buttons || []).filter((_, i) => i !== idx);
+                };
+
+                const applyBroadcastTemplate = () => {
+                    const t = broadcastSelectedTemplate.value;
+                    if (!t) return;
+                    const body = t.body || '';
+                    broadcastForm.value.message = body;
+                    const nextVars = { ...(broadcastForm.value.variables || {}) };
+                    for (const k of (t.variables || [])) {
+                        if (nextVars[k] === undefined) nextVars[k] = '';
+                    }
+                    broadcastForm.value.variables = nextVars;
+                };
+
+                const toggleBroadcastPreview = () => {
+                    showBroadcastPreview.value = !showBroadcastPreview.value;
+                };
+
                 const login = async () => {
                     const cleanToken = token.value.trim();
                     if (!cleanToken) return;
@@ -1568,7 +1979,7 @@
                             await fetchData();
                             startPolling();
                             if (isSuperadmin.value) {
-                                await Promise.allSettled([fetchUsers(), fetchAdminStats(), fetchAIStats(), fetchModerationData(), fetchLogs()]);
+                                await Promise.allSettled([fetchUsers(), fetchAdminStats(), fetchAIStats(), fetchModerationData(), fetchLogs(), fetchBroadcastTemplates(), fetchBroadcastHistory(), fetchBroadcastScheduled()]);
                                 if (managementMenuItems.value.some(i => i.id === 'admin_logs') && adminLogs.value.length === 0) showToast("Audit Trail kosong atau belum bisa dimuat", "error");
                                 if (managementMenuItems.value.some(i => i.id === 'admin_users') && users.value.length === 0) showToast("User Directory kosong atau belum bisa dimuat", "error");
                             }
@@ -1735,13 +2146,71 @@
                 };
 
                 const sendBroadcast = async () => {
-                    if (!broadcastMessage.value) return;
+                    const msg = (broadcastForm.value.message || '').trim();
+                    if (!msg) return;
+                    if (broadcastForm.value.schedule.enabled && !broadcastForm.value.schedule.at) {
+                        showToast("Jadwal belum diisi", "error");
+                        return;
+                    }
+                    if (!broadcastForm.value.channels.telegram) {
+                        showToast("Channel Telegram wajib aktif untuk pengiriman saat ini", "error");
+                        return;
+                    }
                     isSending.value = true;
                     try {
-                        const res = await api.post('/admin/broadcast', { message: broadcastMessage.value });
-                        showToast(`Broadcast initiated to ${res.data.sent_to} users!`, "success");
-                        broadcastMessage.value = '';
-                    } catch (e) { showToast("Broadcast operation failed", "error"); }
+                        const variables = {};
+                        for (const [k, v] of Object.entries(broadcastForm.value.variables || {})) {
+                            if (v === undefined || v === null) continue;
+                            const s = v.toString();
+                            if (!s.trim()) continue;
+                            variables[k] = s;
+                        }
+
+                        const media = {
+                            image_url: (broadcastForm.value.media.imageUrl || '').trim() || null,
+                            video_url: (broadcastForm.value.media.videoUrl || '').trim() || null,
+                        };
+                        if (!media.image_url) delete media.image_url;
+                        if (!media.video_url) delete media.video_url;
+
+                        const buttons = (broadcastForm.value.buttons || [])
+                            .map(b => ({ text: (b.text || '').trim(), url: (b.url || '').trim() }))
+                            .filter(b => b.text && b.url);
+
+                        const scheduleAt = broadcastForm.value.schedule.enabled
+                            ? new Date(broadcastForm.value.schedule.at).toISOString()
+                            : null;
+
+                        const payload = {
+                            message: msg,
+                            template_id: broadcastForm.value.templateId || null,
+                            variables,
+                            channels: ['telegram'],
+                            priority: broadcastForm.value.priority || 'normal',
+                            schedule_at: scheduleAt,
+                            audience: {
+                                active_only: !!broadcastForm.value.audience.activeOnly,
+                                roles: (broadcastForm.value.audience.roles || []).map(r => (r || '').toString()),
+                                username_contains: (broadcastForm.value.audience.usernameContains || '').toString() || null,
+                                include_telegram_ids: parseIdList(broadcastForm.value.audience.includeIds || ''),
+                                exclude_telegram_ids: []
+                            },
+                            buttons,
+                        };
+                        if (Object.keys(media).length) payload.media = media;
+
+                        const res = await api.post('/admin/broadcast', payload);
+                        if (res.data?.status === 'scheduled') {
+                            showToast(`Broadcast dijadwalkan (job ${res.data.job_id})`, "success");
+                            await fetchBroadcastScheduled();
+                        } else {
+                            showToast(`Broadcast terkirim: ${res.data.sent_to || 0} berhasil, ${res.data.failed_to || 0} gagal`, "success");
+                            broadcastForm.value.message = '';
+                        }
+                        await fetchBroadcastHistory();
+                    } catch (e) {
+                        showToast("Broadcast operation failed", "error");
+                    }
                     finally { isSending.value = false; }
                 };
 
@@ -1824,6 +2293,13 @@
                         if (isAdmin.value) fetchAIStats();
                     } else if (newView === 'admin_health') {
                         if (isAdmin.value) fetchHealth();
+                    } else if (newView === 'admin_broadcast') {
+                        if (isSuperadmin.value) {
+                            fetchBroadcastTemplates();
+                            fetchBroadcastHistory();
+                            fetchBroadcastScheduled();
+                            refreshBroadcastAudienceEstimate();
+                        }
                     } else if (newView === 'admin_moderation') {
                         if (isSuperadmin.value) fetchModerationData();
                     } else if (newView === 'admin_logs') {
@@ -1934,10 +2410,10 @@
                 return {
                     token, isAuthenticated, isLoading, error, userId, userRole, currentView, mobileMenuOpen,
                     menuItems, managementMenuItems, isAdmin, isSuperadmin, currentTitle, currentDate, kpiCards, transactions, hasData,
-                    users, userSearch, filteredUsers, adminStats, aiStats, adminLogs, broadcastHistory, isSending, broadcastMessage, pmModal, userDrawer, toasts, health,
+                    users, userSearch, filteredUsers, adminStats, aiStats, adminLogs, broadcastHistory, broadcastScheduled, broadcastTemplates, broadcastForm, showBroadcastPreview, broadcastAudienceEstimate, broadcastAnalytics, broadcastRoleOptions, broadcastPreviewPlatforms, broadcastPreviewUser, broadcastVariableKeys, broadcastVariableChips, broadcastPreviewHtml, isSending, pmModal, userDrawer, toasts, health,
                     flaggedTransactions, suspiciousUsers, disputes, modSettings, modActiveTab, modTabs, flaggedCount,
                     isDarkTheme, normalizedRole, profileMenuOpen, profileMenuRoot, profileAvatarUrl,
-                    login, logout, fetchData, fetchHealth, setView, toggleTheme, updateUserRole, toggleUserStatus, sendBroadcast, fetchLogs, fetchAdminStats, fetchAIStats, openPrivateMessage, sendPrivateMessage, openUserDrawer, removeToast,
+                    login, logout, fetchData, fetchHealth, setView, toggleTheme, updateUserRole, toggleUserStatus, sendBroadcast, fetchLogs, fetchAdminStats, fetchAIStats, fetchBroadcastTemplates, fetchBroadcastHistory, fetchBroadcastScheduled, cancelBroadcastScheduled, refreshBroadcastAudienceEstimate, toggleBroadcastRole, applyBroadcastTemplate, insertBroadcastVariable, resetBroadcastVariables, addBroadcastButton, removeBroadcastButton, toggleBroadcastPreview, openPrivateMessage, sendPrivateMessage, openUserDrawer, removeToast,
                     toggleProfileMenu, onProfileAction,
                     fetchModerationData, saveModSettings, resolveFlag,
                     getRoleClass, formatCurrency, formatCompact, formatDate, formatDateShort, formatDateRelative, getCategoryIcon

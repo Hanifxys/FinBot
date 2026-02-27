@@ -2,14 +2,27 @@ import os
 import tempfile
 from unittest.mock import MagicMock
 from fastapi.testclient import TestClient
-from modules.monitor import app, init_dependencies
+from modules.monitor import app, init_dependencies, set_bot_instance
 
 class MockDB:
     def __init__(self):
-        self.users = {12345: type("User", (object,), {"id": 1, "telegram_id": 12345, "username": "u"})}
+        self.users = {
+            12345: type("User", (object,), {"id": 1, "telegram_id": 12345, "username": "u", "role": "moderator", "is_active": True}),
+            99999: type("User", (object,), {"id": 2, "telegram_id": 99999, "username": "inactive", "role": "user", "is_active": False}),
+        }
         self._txs = []
     def get_user(self, telegram_id):
         return self.users.get(telegram_id)
+    def get_all_users(self):
+        return list(self.users.values())
+    def has_permission(self, telegram_id, permission):
+        return True
+    def is_admin(self, telegram_id):
+        return True
+    def is_superadmin(self, telegram_id):
+        return True
+    def log_admin_action(self, **kwargs):
+        return True
     def get_transactions_history(self, user_id, limit=50):
         return [type("Tx", (object,), t) for t in self._txs][-limit:]
     def add_transaction(self, user_id, amount, category, description, trans_type, date=None):
@@ -47,6 +60,15 @@ class MockWS:
 def setup_module(module):
     os.environ["WEB_JWT_SECRET"] = "secret"
     init_dependencies(MockDB(), MockPremiumAI(), MockWS(), auth_secret="secret")
+    bot = MagicMock()
+    bot.send_message = MagicMock()
+    bot.send_photo = MagicMock()
+    bot.send_video = MagicMock()
+    async def _ok(*args, **kwargs): return True
+    bot.send_message.side_effect = _ok
+    bot.send_photo.side_effect = _ok
+    bot.send_video.side_effect = _ok
+    set_bot_instance(bot)
 
 def test_auth_and_transactions_flow():
     client = TestClient(app)
@@ -80,3 +102,44 @@ def test_auth_and_transactions_flow():
     # Export
     e = client.get("/export", headers=headers)
     assert e.status_code == 200
+
+def test_admin_broadcast_templates_and_send():
+    client = TestClient(app)
+    resp = client.post("/auth/issue", params={"telegram_id": 12345})
+    token = resp.json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    t = client.get("/admin/broadcast/templates", headers=headers)
+    assert t.status_code == 200
+    assert isinstance(t.json(), list)
+    assert len(t.json()) >= 1
+
+    est = client.post("/admin/broadcast/estimate", json={"active_only": True}, headers=headers)
+    assert est.status_code == 200
+    assert est.json()["estimated_recipients"] == 1
+
+    r = client.post("/admin/broadcast", json={"message": "Halo {{name}}", "variables": {"name": "Test"}}, headers=headers)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] in ["ok", "partial"]
+    assert body["sent_to"] >= 1
+
+def test_admin_broadcast_schedule_and_cancel():
+    client = TestClient(app)
+    resp = client.post("/auth/issue", params={"telegram_id": 12345})
+    token = resp.json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    future = "2999-01-01T00:00:00Z"
+    r = client.post("/admin/broadcast", json={"message": "Scheduled", "schedule_at": future}, headers=headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["status"] == "scheduled"
+    job_id = data["job_id"]
+
+    q = client.get("/admin/broadcast/scheduled", headers=headers)
+    assert q.status_code == 200
+    assert any(item["id"] == job_id for item in q.json())
+
+    c = client.delete(f"/admin/broadcast/scheduled/{job_id}", headers=headers)
+    assert c.status_code == 200
