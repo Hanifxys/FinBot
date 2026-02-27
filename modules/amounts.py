@@ -49,7 +49,7 @@ class MoneyParseResult:
 
 def _clean(text: str) -> str:
     t = (text or "").lower()
-    t = t.replace("rp", " ").replace("idr", " ")
+    t = re.sub(r"\b(?:rp|idr)\b", " ", t)
     t = re.sub(r"[^\w\s.,-]", " ", t)
     return re.sub(r"\s+", " ", t).strip()
 

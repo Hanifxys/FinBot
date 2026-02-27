@@ -1,4 +1,4 @@
-from modules.amounts import parse_primary_amount_id
+from modules.amounts import parse_amount_id, parse_primary_amount_id
 
 
 def test_parse_amount_id_k_suffix():
@@ -20,3 +20,10 @@ def test_parse_amount_id_slang():
 
 def test_parse_amount_id_kembalian_diff():
     assert parse_primary_amount_id("bayar 10k kembalian goceng") == 5000.0
+
+
+def test_parse_amount_id_transfer_intent_not_corrupted_by_rp_cleanup():
+    result = parse_amount_id("transfer 10k")
+    assert result is not None
+    assert result.intent == "payment"
+    assert result.primary == 10000.0
