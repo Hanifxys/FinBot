@@ -530,6 +530,35 @@ class NLPProcessor:
         forced_type = classification.get("type")
         intent = classification.get("intent")
 
+        passthrough_intents = {
+            "ROAST_WALLET",
+            "EXPORT_DATA",
+            "WHAT_IF",
+            "SET_MODE",
+            "SET_REMINDER",
+            "CHECK_BUDGET",
+            "SET_GAJI",
+            "UNDO",
+            "EXECUTIVE_MODE",
+            "ELITE_ANALYSIS",
+            "INVESTMENT_OPPS",
+            "DOC_ANALYSIS",
+            "SET_BUDGET",
+            "SET_BUDGET_ALERT",
+            "QUERY_SUMMARY",
+            "SHARING_INFO",
+            "GREETING",
+            "SMALL_TALK",
+            "HELP",
+            "STOP_NOTIF",
+            "CANCEL",
+            "ASK_FOR_NOTIF",
+        }
+
+        # Non-transaction intents should not go through transaction validation.
+        if intent in passthrough_intents:
+            return classification
+
         # 1. Handle Bulk Transactions
         if intent == "BULK_TRANSACTION":
             return {
@@ -544,12 +573,14 @@ class NLPProcessor:
 
         # 3. Handle Correction
         if intent == "CORRECTION":
-            data = self.extract_transaction_data_simple(text)
+            data = self.extract_transaction_data_simple(text, forced_type)
             data["intent"] = "CORRECTION"
             return data
 
         # 4. Standard Extraction
-        return self.extract_transaction_data_simple(text, forced_type)
+        data = self.extract_transaction_data_simple(text, forced_type)
+        data["intent"] = intent or "ADD_TRANSACTION"
+        return data
 
     def extract_transaction_data_simple(self, text: str, forced_type: str = None) -> Dict[str, Any]:
         """Standard single transaction extraction logic with granular confidence and validation."""
@@ -557,43 +588,59 @@ class NLPProcessor:
         ambiguous_keywords = ["transfer", "bayar", "kirim", "masuk", "bayarin"]
         is_ambiguous = any(kw in text.lower() for kw in ambiguous_keywords)
 
-        # 1. Validation: Basic parameters check
+        # 1. Initial parsing
         text_norm = self.normalize_text(text)
         amount = self._extract_amount(text_norm)
-        
-        # If no amount, return early with partial status
-        if amount <= 0:
-            return {
-                "amount": None,
-                "confidence": 0.3,
-                "is_partial": True,
-                "error": "Nominal tidak ditemukan. Contoh: 'kopi 25rb'"
-            }
 
-        # 2. Advanced Extraction (LLM or Heuristic)
+        # 2. Advanced Extraction first for complex/ambiguous inputs.
+        # Keep this before strict validation so LLM can rescue hard cases.
         if self.groq_enabled and (len(text.split()) > 4 or is_ambiguous):
              llm_data = self._llm_extract_entities(text)
              if llm_data and llm_data.get("amount"):
                  # Post-extraction validation & transformation
                  llm_data["type"] = forced_type or llm_data.get("type", "expense")
                  llm_data["date"] = self._extract_date(text)
-                 
+                 llm_data["merchant"] = llm_data.get("merchant") or self.extract_merchant(text_norm)
+                 llm_data["category"] = llm_data.get("category") or self._detect_category(text_norm)[0]
+
+                 llm_amount = llm_data.get("amount") or 0
+                 llm_complete = (
+                     llm_amount > 0
+                     and llm_data.get("category") != "Lain-lain"
+                     and llm_data.get("merchant") != "Transaksi"
+                 )
+                 llm_data["is_partial"] = not llm_complete
+
                  # Logic for ambiguous terms
                  if is_ambiguous and llm_data.get("confidence", 0.9) > 0.7:
                      llm_data["needs_disambiguation"] = True
                      llm_data["confidence"] = 0.65
+                 else:
+                     llm_data["needs_disambiguation"] = is_ambiguous and llm_data.get("category") == "Lain-lain"
                  return llm_data
 
         # 3. Heuristic Extraction (Standard)
         category, cat_conf = self._detect_category(text_norm)
         merchant = self.extract_merchant(text_norm)
         date = self._extract_date(text)
-        
+
+        # If no amount, keep partial detail (merchant/category) for follow-up merge flow.
+        if amount <= 0:
+            return {
+                "amount": None,
+                "type": forced_type,
+                "category": category if category != "Lain-lain" else None,
+                "merchant": merchant,
+                "date": date,
+                "confidence": 0.45 if merchant != "Transaksi" else 0.3,
+                "is_partial": True,
+                "needs_disambiguation": is_ambiguous and category == "Lain-lain",
+                "error": "Nominal tidak ditemukan. Contoh: 'kopi 25rb'"
+            }
+
         type_ = forced_type or ("income" if category == "Gaji" else "expense")
-        
-        # Final validation check
         is_complete = amount > 0 and category != "Lain-lain" and merchant != "Transaksi"
-        
+
         return {
             "amount": amount,
             "type": type_,

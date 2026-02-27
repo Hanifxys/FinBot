@@ -690,46 +690,70 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
         
         # --- Intelligent Input Parsing & Validation ---
         extracted = nlp.extract_transaction_data(text)
-        
-        # Validate input parameters
-        if extracted.get("error"):
-            await update.message.reply_text(f"⚠️ {extracted['error']}")
-            return
-
-        # Handle incomplete/partial requests intelligently
-        if extracted.get("is_partial") and not is_follow_up:
-            # If it's a new request but incomplete, ask for more details
-            if not extracted.get("amount"):
-                await update.message.reply_text("Nominalnya berapa ya? Contoh: 'makan 25rb'")
-                return
-            # If amount is there but merchant is missing, we proceed to disambiguation/prediction later
-            
-            # --- Predictive Personalization ---
-            if extracted.get("amount") and extracted.get("category") and extracted.get("merchant") == "Transaksi":
-                prediction = analyzer.get_predictive_context(user_id, extracted["category"], extracted["amount"])
-                if prediction and prediction.get("merchant"):
-                    extracted["merchant"] = prediction["merchant"]
-                    extracted["confidence"] = max(extracted.get("confidence", 0), 0.8)
-
-            if is_follow_up and extracted.get("is_partial"):
-                # Merge logic: if this message is partial (e.g. "di mixue"), merge with previous data
-                prev_data = context_buffer.get("data", {})
-                if prev_data:
-                    # Merge fields: current message values overwrite previous ones if they exist
-                    for key in ["amount", "category", "merchant", "date", "type"]:
-                        if extracted.get(key):
-                            prev_data[key] = extracted[key]
-                    extracted = prev_data
-                    extracted["confidence"] = min(0.95, extracted.get("confidence", 0.6) + 0.1) # Boost confidence on merge
-                    extracted["is_partial"] = not (extracted.get("amount") and extracted.get("merchant") != "Transaksi")
-        
-        # Save current state to context buffer
-        context.user_data["context_buffer"] = {
-            "ts": current_ts,
-            "data": extracted
-        }
-
         intent = extracted.get("intent")
+
+        # Merge logic: if this message is partial (e.g. "di mixue"), merge with previous data
+        if is_follow_up and extracted.get("is_partial"):
+            prev_data = context_buffer.get("data", {})
+            if prev_data:
+                merged = prev_data.copy()
+                for key in ["amount", "category", "merchant", "date", "type"]:
+                    value = extracted.get(key)
+                    if not value:
+                        continue
+                    if key == "merchant" and value == "Transaksi":
+                        continue
+                    if key == "category" and value == "Lain-lain":
+                        continue
+                    merged[key] = value
+                merged["confidence"] = min(
+                    0.95,
+                    max(merged.get("confidence", 0.6), extracted.get("confidence", 0.0)) + 0.1
+                )
+                merged["intent"] = extracted.get("intent") or merged.get("intent") or "ADD_TRANSACTION"
+                merged["is_partial"] = not (
+                    merged.get("amount") and merged.get("merchant") and merged.get("merchant") != "Transaksi"
+                )
+                if not merged["is_partial"]:
+                    merged.pop("error", None)
+                extracted = merged
+                intent = extracted.get("intent")
+
+        # --- Predictive Personalization ---
+        if extracted.get("amount") and extracted.get("category") and extracted.get("merchant") == "Transaksi":
+            prediction = analyzer.get_predictive_context(user_id, extracted["category"], extracted["amount"])
+            if prediction and prediction.get("merchant"):
+                extracted["merchant"] = prediction["merchant"]
+                extracted["confidence"] = max(extracted.get("confidence", 0), 0.8)
+
+        persist_context = True
+
+        # Validate incomplete transaction input after follow-up merge.
+        if extracted.get("error"):
+            looks_like_partial_tx = (
+                intent in {"ADD_TRANSACTION", "CORRECTION"}
+                or bool(extracted.get("category"))
+                or (is_follow_up and bool(context_buffer.get("data")))
+            )
+            if looks_like_partial_tx:
+                # Keep partial payload so user can complete it in next message.
+                context.user_data["context_buffer"] = {
+                    "ts": current_ts,
+                    "data": extracted
+                }
+                await update.message.reply_text(f"⚠️ {extracted['error']}")
+                return
+            extracted.pop("error", None)
+            extracted["is_partial"] = False
+            if intent == "UNKNOWN":
+                persist_context = False
+
+        # Save current state to context buffer
+        if persist_context:
+            context.user_data["context_buffer"] = {
+                "ts": current_ts,
+                "data": extracted
+            }
         
         # --- Intent Routing (Fixed) ---
         if intent == "STOP_NOTIF":
@@ -874,7 +898,7 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
             return
 
         if intent == "SMALL_TALK":
-            response = classification.get("response") or "Halo! Ada yang bisa aku bantu?"
+            response = extracted.get("response") or "Halo! Ada yang bisa aku bantu?"
             await update.message.reply_text(response)
             return
 
