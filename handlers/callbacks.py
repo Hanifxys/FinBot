@@ -757,6 +757,39 @@ async def _h_manual_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action:
     )
 
 
+@router.exact("get_persona")
+async def _h_get_persona(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    """API-like handler for GET /persona."""
+    user_id = update.effective_user.id
+    from core import gamify, db
+    
+    # Use callback_query instead of message for reply
+    query = update.callback_query
+    await query.answer("Calculating your financial persona...")
+    
+    persona_data = await gamify.update_financial_persona(user_id, db)
+    
+    if not persona_data:
+        await query.message.reply_text("Belum ada cukup data untuk menentukan persona kamu. Terus catat ya!")
+        return
+
+    msg = (
+        f"👤 **Financial Persona: {persona_data['persona']}**\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🎯 **Key Drivers**:\n"
+    )
+    for driver in persona_data['key_drivers']:
+        msg += f"• {driver}\n"
+        
+    msg += f"\n💡 **Premium Tips**:\n"
+    for tip in persona_data['tips']:
+        msg += f"• {tip}\n"
+        
+    msg += f"\n_Confidence: {persona_data['confidence']*100:.0f}%_"
+    
+    await query.message.reply_text(msg, parse_mode='Markdown')
+
+
 @router.exact("scan_receipt")
 async def _h_scan_receipt(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
     await update.callback_query.message.reply_text(

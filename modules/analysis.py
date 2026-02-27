@@ -562,28 +562,6 @@ class ExpenseAnalyzer:
         except Exception as e:
             logger.error(f"Error calculating financial score: {e}")
             return {"score": 70, "status": "stabil"}
-        projected_expense = total_expense + (burn_rate * days_remaining)
-        
-        # 3. Compare with Income
-        income = self.db.get_latest_income(user_id)
-        total_income = income.amount if income else 0
-        
-        projected_balance = total_income - projected_expense
-        
-        # 4. Generate Elite AI Insight about this forecast
-        from core import premium_ai
-        analysis = await premium_ai.process_interaction(
-            user_id, 
-            f"Proyeksi pengeluaranku bulan ini Rp{projected_expense:,.0f} dengan sisa saldo Rp{projected_balance:,.0f}. Apa sarannya?", 
-            "User"
-        )
-        
-        return {
-            "burn_rate": burn_rate,
-            "projected_expense": projected_expense,
-            "projected_balance": projected_balance,
-            "ai_advice": analysis.suggested_response
-        }
 
     def calculate_health_score(self, user_id):
         """

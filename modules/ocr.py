@@ -134,6 +134,85 @@ class OCRProcessor:
         finally:
             gc.collect()
 
+    async def process_receipt_intelligence(self, image_path: str, user_id: int) -> Dict[str, Any]:
+        """
+        End-to-end Receipt Intelligence Pipeline.
+        a-c. Pre-processing & Post-OCR cleansing.
+        d. LLM Enrichment with Groq.
+        e. Confidence & Exception flagging.
+        """
+        try:
+            # 1. Advanced Pre-processing (Noise removal, Normalization, Deskewing)
+            prepared_path, should_cleanup = self._prepare_image_advanced(image_path)
+            
+            # 2. Raw Text Extraction
+            full_text, _ = self._extract_text(prepared_path)
+            
+            # 3. Security: Clean up prepared image immediately after text extraction
+            if should_cleanup and os.path.exists(prepared_path):
+                os.remove(prepared_path)
+
+            # 4. Post-OCR Cleansing: Tokenization & Layout preservation
+            clean_text = self._clean_raw_text(full_text)
+
+            # 5. LLM Enrichment (Groq/Llama-3-70b)
+            result = await self._llm_parse_receipt(clean_text)
+            
+            # 6. Confidence & Exception Flagging
+            if not result or result.get("confidence", 0) < 0.9:
+                result["review_required"] = True
+                result["status"] = "REVIEW_MANUAL"
+            else:
+                result["review_required"] = False
+                result["status"] = "SUCCESS"
+
+            return result
+        except Exception as e:
+            logger.error(f"Receipt Intelligence Pipeline Error: {e}")
+            return {"status": "ERROR", "error": str(e), "review_required": True}
+
+    def _clean_raw_text(self, text: str) -> str:
+        """Hapus karakter anomali & preserve layout."""
+        # Hapus karakter anomali tapi simpan struktur baris
+        lines = text.splitlines()
+        clean_lines = []
+        for line in lines:
+            # Hapus simbol non-alfanumerik berlebih tapi simpan spasi & titik/koma uang
+            cleaned = re.sub(r'[^\w\s\.\,\-\:\/]', '', line)
+            if cleaned.strip():
+                clean_lines.append(cleaned.strip())
+        return "\n".join(clean_lines)
+
+    async def _llm_parse_receipt(self, text: str) -> Dict[str, Any]:
+        """Kirim teks bersih ke Groq untuk output JSON terstruktur."""
+        try:
+            from core import premium_ai
+            prompt = f"""
+            Extract receipt data from this raw OCR text. 
+            Output ONLY valid JSON. 
+            JSON Schema: {{
+                "merchant": "string",
+                "date": "YYYY-MM-DD",
+                "tax": number,
+                "service_charge": number,
+                "discount": number,
+                "total": number,
+                "items": [{{ "name": "string", "qty": number, "price": number, "discount": number }}],
+                "confidence": float (0.0-1.0)
+            }}
+            
+            Raw Text:
+            {text[:2000]}
+            """
+            # Use Llama-3-70b if available
+            response = await premium_ai.process_interaction(0, prompt, "System")
+            if response and response.structured_data:
+                return response.structured_data
+            return {}
+        except Exception as e:
+            logger.error(f"LLM Receipt Parsing Failed: {e}")
+            return {}
+
     def _prepare_image_advanced(self, image_path: str, low_mem: bool = False) -> Tuple[str, bool]:
         """Advanced Preprocessing: Denoising, Contrast, and Thresholding."""
         try:

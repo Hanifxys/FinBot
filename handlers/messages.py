@@ -457,9 +457,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if cached:
                     result = json.loads(cached)
                 else:
-                    # Run OCR in thread pool to avoid blocking event loop
+                    # 1. New Receipt Intelligence Pipeline
                     result = await asyncio.wait_for(
-                        asyncio.to_thread(ocr.process_receipt, photo_path, low_mem),
+                        ocr.process_receipt_intelligence(photo_path, user_id),
                         timeout=Config.OCR_HANDLER_TIMEOUT_SECONDS
                     )
                     if result and premium_ai.redis.client:
@@ -475,46 +475,59 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         merchant = result.get('merchant', 'Transaksi')
-        amount = result.get('amount', 0)
+        # Map fields from Receipt Intelligence JSON schema
+        amount = result.get('total', 0) 
         items = result.get('items', [])
         tax = result.get('tax', 0)
         discount = result.get('discount', 0)
-        payment_method = result.get('payment_method', 'UNKNOWN')
         
-        # Construct summary message for user
-        summary = f"🔍 **Data Terbaca:**\n"
+        # Confidence Flagging
+        review_required = result.get("review_required", False)
+        
+        # Construct summary message
+        summary = f"🧾 **Receipt Intelligence Result**\n"
+        if review_required:
+            summary += "⚠️ *Confidence Rendah - Mohon Periksa Kembali*\n"
+        summary += f"━━━━━━━━━━━━━━━━━━━━\n"
         summary += f"🏢 **Toko**: {merchant}\n"
-        summary += f"💰 **Total**: Rp{amount:,.0f}\n"
-        if tax > 0: summary += f"🧾 **Pajak**: Rp{tax:,.0f}\n"
-        if discount > 0: summary += f"🏷️ **Diskon**: Rp{discount:,.0f}\n"
-        if payment_method != 'UNKNOWN': summary += f"💳 **Metode**: {payment_method}\n"
+        from utils.visuals import format_currency
+        summary += f"💰 **Total**: {format_currency(amount)}\n"
+        
+        if tax > 0: summary += f"🧾 **Pajak**: {format_currency(tax)}\n"
+        if discount > 0: summary += f"🏷️ **Diskon**: {format_currency(discount)}\n"
         
         if items:
             summary += "\n🛒 **Item Terdeteksi:**\n"
             for item in items[:5]:
-                summary += f"- {item['name']}: Rp{item['price']:,.0f}\n"
+                qty_str = f" (x{item['qty']})" if item.get('qty') else ""
+                summary += f"• {item['name']}{qty_str}: {format_currency(item['price'])}\n"
             if len(items) > 5: summary += f"  ...dan {len(items)-5} item lainnya\n"
 
         await update.message.reply_text(summary, parse_mode='Markdown')
         
-        # Prepare Pending Transaction directly to avoid re-parsing text
+        # Prepare Pending Transaction
         pending = {
             "amount": float(amount),
-            "category": nlp._detect_category(merchant + " " + (items[0]['name'] if items else "")),
+            "category": nlp._detect_category(merchant + " " + (items[0]['name'] if items else ""))[0],
             "merchant": merchant,
             "date": result.get('date') or datetime.now().strftime("%d-%m-%Y"),
-            "payment_method": payment_method if payment_method != 'UNKNOWN' else None,
-            "items": items,
-            "tax": tax,
-            "discount": discount
+            "type": "expense"
         }
         
-        # Contextual Insight
+        # Financial Persona Update (Gamification 2.0)
+        from core import gamify, db
+        persona_data = await gamify.update_financial_persona(user_id, db)
+        
         feedback = ""
+        if persona_data:
+            feedback = f"👤 **Persona Update**: Kamu saat ini adalah **{persona_data['persona']}**."
+            
+        # Contextual Insight
         try:
-            feedback = analyzer.get_instant_feedback(
+            instant_feedback, stress_level = analyzer.get_instant_feedback(
                 user_id, pending["category"], pending["merchant"], pending["amount"]
             )
+            feedback += "\n" + instant_feedback
         except Exception: pass
 
         context.user_data["pending_tx"] = pending

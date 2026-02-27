@@ -73,6 +73,81 @@ class GamificationEngine:
         self.redis = RedisManager()
 
     # -----------------------------
+    # PERSONA ENGINE (GAMIFICATION 2.0)
+    # -----------------------------
+
+    async def update_financial_persona(self, user_id: int, db_handler) -> Dict[str, Any]:
+        """
+        Gamification 2.0: Persona Engine.
+        Classifies user into: The Monk, The Socialite, or The Survivor.
+        """
+        try:
+            # a. Konsumsi stream transaksi 30 hari terakhir
+            txs = db_handler.get_sliding_window_transactions(user_id, days=30)
+            if not txs: return {}
+
+            income_data = db_handler.get_latest_income(user_id)
+            monthly_income = float(income_data.amount) if income_data else 0
+
+            # b. Feature Engineering
+            total_expense = sum(t.amount for t in txs if t.type == 'expense')
+            lifestyle_expense = sum(t.amount for t in txs if t.type == 'expense' and t.category in ['Lifestyle', 'Jajanan', 'Belanja'])
+            dining_out = sum(t.amount for t in txs if t.type == 'expense' and t.category == 'Makanan')
+            
+            saving_ratio = (monthly_income - total_expense) / monthly_income if monthly_income > 0 else 0
+            lifestyle_pct = lifestyle_expense / total_expense if total_expense > 0 else 0
+            dining_pct = dining_out / total_expense if total_expense > 0 else 0
+            
+            # Simplified daily balance trend & variance
+            # In real XGBoost, these would be input features
+            
+            # c. Multi-label Classification (Heuristic for MVP, XGBoost placeholder)
+            persona = "The Explorer 🌱" # Default
+            confidence = 0.7
+            tips = []
+            drivers = []
+
+            # Logic: The Monk
+            if saving_ratio > 0.5 and lifestyle_pct < 0.2:
+                persona = "The Monk 🧘"
+                confidence = 0.95
+                drivers = ["High Savings Rate", "Minimal Lifestyle Spend"]
+                tips = ["Good job! Consider investing your surplus into long-term assets.", "Don't forget to enjoy small wins."]
+            
+            # Logic: The Socialite
+            elif lifestyle_pct > 0.4 and dining_pct > 0.25:
+                persona = "The Socialite 🥂"
+                confidence = 0.85
+                drivers = ["High Lifestyle Spend", "Frequent Dining Out"]
+                tips = ["Try 'Social Budgeting' to keep the fun without the financial hangover.", "Check for subscription fatigue."]
+
+            # Logic: The Survivor
+            # Check min balance in last 7 days (Simplified proxy)
+            elif monthly_income > 0 and (monthly_income - total_expense) < (0.1 * monthly_income):
+                persona = "The Survivor 🛡️"
+                confidence = 0.8
+                drivers = ["Low End-of-Month Buffer", "High Burn Rate"]
+                tips = ["Build an emergency fund of 3 months expenses.", "Audit your recurring bills."]
+
+            result = {
+                "persona": persona,
+                "confidence": confidence,
+                "key_drivers": drivers,
+                "tips": tips,
+                "updated_at": int(time.time())
+            }
+
+            # e. Simpan ke Redis (TTL 30 hari)
+            if self.redis.client:
+                key = f"user:{user_id}:persona"
+                self.redis.client.set(key, json.dumps(result), ex=2592000) # 30 days
+
+            return result
+        except Exception as e:
+            logger.error(f"Persona Engine Error: {e}")
+            return {}
+
+    # -----------------------------
     # FINANCIAL HEALTH SCORE
     # -----------------------------
 
