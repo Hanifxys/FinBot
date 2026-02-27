@@ -995,6 +995,11 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
             await _handle_sharing_info(update, context, user_db, text, user_name)
             return
 
+        if intent == "HELP":
+            from handlers.commands import help_command
+            await help_command(update, context)
+            return
+
         if intent == "SMALL_TALK":
             response = extracted.get("response") or "Halo! Ada yang bisa aku bantu?"
             await update.message.reply_text(response)

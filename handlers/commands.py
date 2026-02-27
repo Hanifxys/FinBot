@@ -67,31 +67,27 @@ def get_interactive_help_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("💸 Catat Manual", callback_data="manual_add"),
+                InlineKeyboardButton("💸 Catat Transaksi", callback_data="manual_add"),
                 InlineKeyboardButton("📸 Scan Struk", callback_data="scan_receipt"),
             ],
             [
+                InlineKeyboardButton("📊 Laporan", callback_data="get_report"),
+                InlineKeyboardButton("💡 Tips Hemat", callback_data="get_tips"),
+            ],
+            [
                 InlineKeyboardButton("🎯 Target Nabung", callback_data="list_target"),
-                InlineKeyboardButton("💰 Atur Gaji", callback_data="set_gaji_menu"),
+                InlineKeyboardButton("👤 Profil", callback_data="get_profile"),
             ],
             [
-                InlineKeyboardButton("📊 Laporan Lengkap", callback_data="get_report"),
-                InlineKeyboardButton("🧠 AI Insights", callback_data="get_ai_insight"),
-            ],
-            [
-                InlineKeyboardButton("👤 Profil & Rank", callback_data="get_profile"),
-                InlineKeyboardButton("⚙️ Settings", callback_data="settings_menu"),
-            ],
-            [
-                InlineKeyboardButton("📥 Export CSV", callback_data="export_csv"),
+                InlineKeyboardButton("⚙️ Pengaturan", callback_data="settings_menu"),
+                InlineKeyboardButton("📥 Export", callback_data="export_csv"),
             ],
         ]
     )
 
 
 # ---------------------------------------------------------------------------
-# Token helpers  (same logic as web_server — single source of truth ideally
-# but kept here for standalone use; consider moving to a shared auth module)
+# Token helpers
 # ---------------------------------------------------------------------------
 
 _TOKEN_VERSION = "v1"
@@ -163,16 +159,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     help_text = (
-        "🚀 *FINBOT PRO — INTERACTIVE COMMAND CENTER*\n\n"
-        "Gunakan tombol di bawah untuk mengelola keuanganmu secara instan\\.\n"
-        "Sistem kami didukung *Redis Pub\\/Sub* untuk kecepatan maksimal\\.\n\n"
-        "*💡 Tips Cepat:*\n"
-        "Ketik `kopi 25rb` untuk mencatat transaksi tanpa buka menu\\."
+        "💡 *Pusat Bantuan FinBot*\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "Halo! Aku asisten finansialmu. Kamu bisa mengelola keuangan dengan mudah di sini.\n\n"
+        "✨ *Cara Cepat Pencatatan:*\n"
+        "Langsung ketik saja, contoh:\n"
+        "• `kopi 25rb`\n"
+        "• `gaji masuk 10jt`\n"
+        "• `bayar listrik 200k`\n\n"
+        "Gunakan menu di bawah untuk fitur lainnya! 👇"
     )
     await _edit_or_reply(
         update,
         help_text,
-        parse_mode=ParseMode.MARKDOWN_V2,
+        parse_mode=ParseMode.MARKDOWN,
         reply_markup=get_interactive_help_keyboard(),
     )
 

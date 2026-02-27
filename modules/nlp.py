@@ -4,6 +4,7 @@ import logging
 import gc
 import difflib
 import time
+import random
 from typing import Dict, Any, Tuple, Optional, List, Sequence
 from config import GROQ_API_KEY
 from modules.amounts import parse_primary_amount_id
@@ -466,12 +467,29 @@ class NLPProcessor:
             return {"intent": "CHECK_BUDGET", "confidence": 0.9}
         if self._intents_map["get_report"].search(text):
             return {"intent": "QUERY_SUMMARY", "confidence": 0.9}
-        if any(kw in text for kw in ["help", "tolong", "bantuan", "perintah", "command", "bisa apa"]):
+        
+        # Stricter Help Detection: only if it's a short command or clear help request
+        help_keywords = ["help", "tolong", "bantuan", "perintah", "command", "bisa apa"]
+        if any(kw == text.strip() for kw in help_keywords) or (any(kw in text for kw in help_keywords) and len(text.split()) <= 3):
             return {"intent": "HELP", "confidence": 1.0}
+            
         if self._intents_map["greeting"].search(text):
             return {"intent": "GREETING", "confidence": 1.0}
             
         return {"intent": "UNKNOWN", "confidence": 0.0}
+
+    def _generate_error_message(self, context: str = "transaction") -> str:
+        """Generates dynamic and conversational error messages."""
+        if context == "transaction":
+            variations = [
+                "Nominalnya berapa ya? Contoh: 'kopi 25rb' ☕",
+                "Aku butuh angka nominalnya nih. Coba ketik 'makan 50k' gitu.",
+                "Berapa biayanya? Kasih tau aku ya, misal: 'bensin 100rb' ⛽",
+                "Nominalnya jangan lupa ya! Contoh: 'nonton 75rb' 🎬",
+                "Eh, nominalnya berapa? Aku belum dapet angkanya nih. 😊"
+            ]
+            return random.choice(variations)
+        return "Aduh, aku bingung. Bisa diulang lebih jelas? 🙏"
 
     def _llm_classify_intent(self, text: str) -> Optional[Dict[str, Any]]:
         """
@@ -714,7 +732,7 @@ class NLPProcessor:
                 "confidence": 0.45 if merchant != "Transaksi" else 0.3,
                 "is_partial": True,
                 "needs_disambiguation": is_ambiguous and category == "Lain-lain",
-                "error": "Nominal tidak ditemukan. Contoh: 'kopi 25rb'"
+                "error": self._generate_error_message("transaction")
             }
 
         type_ = forced_type or ("income" if category == "Gaji" else "expense")
