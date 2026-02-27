@@ -341,11 +341,6 @@ class DBHandler:
         for r in response.data:
             stats[r['status']] = stats.get(r['status'], 0) + 1
         return stats
-            "is_active": 1,
-            "current_amount": 0.0
-        }
-        response = self._safe_execute(self.supabase.table(Tables.SAVING_GOALS).insert(data))
-        return type('SavingGoal', (object,), response.data[0])
 
     def get_user_saving_goals(self, user_id, active_only=True):
         query = self.supabase.table(Tables.SAVING_GOALS).select("*").eq("user_id", user_id)

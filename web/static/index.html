@@ -97,6 +97,8 @@
         /* Transitions */
         .fade-enter-active, .fade-leave-active { transition: opacity 0.3s ease; }
         .fade-enter-from, .fade-leave-to { opacity: 0; }
+
+        [v-cloak] { display: none; }
         
         .slide-enter-active, .slide-leave-active { transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
         .slide-enter-from, .slide-leave-to { transform: translateX(20px); opacity: 0; }
@@ -142,7 +144,7 @@
     </style>
 </head>
 <body>
-    <div id="app" class="h-screen flex flex-col overflow-hidden bg-[url('https://grainy-gradients.vercel.app/noise.svg')]">
+    <div id="app" v-cloak class="h-screen flex flex-col overflow-hidden bg-[url('https://grainy-gradients.vercel.app/noise.svg')]">
         
         <!-- LOGIN SCREEN -->
         <transition name="fade">
@@ -1671,7 +1673,7 @@
                 const wrapperStats = ref({ total: 0, sent: 0, failed: 0, pending: 0 });
                 const fetchWrapperStats = async () => {
                     try {
-                        const res = await axios.get(`${apiBase}/admin/wrapper/stats`, { headers: { Authorization: `Bearer ${token.value}` } });
+                        const res = await api.get('/admin/wrapper/stats');
                         wrapperStats.value = res.data;
                     } catch (e) {
                         console.error("Failed to fetch wrapper stats", e);
@@ -1725,6 +1727,7 @@
 
                 const isAdmin = computed(() => ['superadmin', 'admin', 'moderator', 'finance', 'support'].includes(normalizedRole.value));
                 const isSuperadmin = computed(() => normalizedRole.value === 'superadmin');
+                
                 const flaggedCount = computed(() => flaggedTransactions.value.length);
                 const broadcastRoleOptions = ['user', 'support', 'finance', 'moderator', 'admin', 'superadmin'];
                 const broadcastPreviewPlatforms = ['telegram', 'whatsapp', 'email', 'sms'];
@@ -2070,38 +2073,6 @@
 
                 const toggleBroadcastPreview = () => {
                     showBroadcastPreview.value = !showBroadcastPreview.value;
-                };
-
-                const toggleBroadcastRole = (role) => {
-                    const roles = [...(broadcastForm.value.audience.roles || [])];
-                    const idx = roles.indexOf(role);
-                    if (idx > -1) roles.splice(idx, 1);
-                    else roles.push(role);
-                    broadcastForm.value.audience.roles = roles;
-                };
-
-                const insertBroadcastVariable = (v) => {
-                    const el = document.querySelector('textarea[placeholder*="broadcast"]');
-                    if (!el) {
-                        broadcastForm.value.message += ` {{${v}}}`;
-                        return;
-                    }
-                    const start = el.selectionStart;
-                    const end = el.selectionEnd;
-                    const text = broadcastForm.value.message;
-                    broadcastForm.value.message = text.substring(0, start) + `{{${v}}}` + text.substring(end);
-                    nextTick(() => {
-                        el.focus();
-                        el.setSelectionRange(start + v.length + 4, start + v.length + 4);
-                    });
-                };
-
-                const resetBroadcastVariables = () => {
-                    broadcastForm.value.variables = {};
-                    const t = broadcastSelectedTemplate.value;
-                    if (t && t.variables) {
-                        for (const v of t.variables) broadcastForm.value.variables[v] = '';
-                    }
                 };
 
                 const login = async () => {
@@ -2570,13 +2541,14 @@
                 return {
                     token, isAuthenticated, isLoading, error, userId, userRole, currentView, mobileMenuOpen,
                     menuItems, managementMenuItems, isAdmin, isSuperadmin, currentTitle, currentDate, kpiCards, transactions, hasData,
-                    users, userSearch, filteredUsers, adminStats, aiStats, adminLogs, broadcastHistory, broadcastScheduled, broadcastTemplates, broadcastForm, showBroadcastPreview, broadcastAudienceEstimate, broadcastAnalytics, broadcastRoleOptions, broadcastPreviewPlatforms, broadcastPreviewUser, broadcastVariableKeys, broadcastVariableChips, broadcastPreviewHtml, isSending, pmModal, userDrawer, toasts, health,
+                    users, userSearch, filteredUsers, adminStats, aiStats, adminLogs, broadcastHistory, broadcastScheduled, broadcastTemplates, broadcastForm, showBroadcastPreview, broadcastAudienceEstimate, broadcastAnalytics, broadcastRoleOptions, broadcastPreviewPlatforms, broadcastPreviewUser, broadcastVariableKeys, broadcastVariableChips, broadcastPreviewHtml, isSending, pmModal, userDrawer, toasts, health, oomStatus,
                     flaggedTransactions, suspiciousUsers, disputes, modSettings, modActiveTab, modTabs, flaggedCount,
                     isDarkTheme, normalizedRole, profileMenuOpen, profileMenuRoot, profileAvatarUrl,
                     login, logout, fetchData, fetchHealth, setView, toggleTheme, updateUserRole, toggleUserStatus, sendBroadcast, fetchLogs, fetchAdminStats, fetchAIStats, fetchBroadcastTemplates, fetchBroadcastHistory, fetchBroadcastScheduled, cancelBroadcastScheduled, refreshBroadcastAudienceEstimate, toggleBroadcastRole, applyBroadcastTemplate, insertBroadcastVariable, resetBroadcastVariables, addBroadcastButton, removeBroadcastButton, toggleBroadcastPreview, openPrivateMessage, sendPrivateMessage, openUserDrawer, removeToast,
                     toggleProfileMenu, onProfileAction, wrapperStats, fetchWrapperStats,
                     fetchModerationData, saveModSettings, resolveFlag,
-                    getRoleClass, formatCurrency, formatCompact, formatDate, formatDateShort, formatDateRelative, getCategoryIcon
+                    getRoleClass, formatCurrency, formatCompact, formatDate, formatDateShort, formatDateRelative, getCategoryIcon,
+                    canAccessView
                 };
             }
         }).mount('#app');
