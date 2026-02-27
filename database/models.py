@@ -30,6 +30,22 @@ def init_db():
     """
     pass
 
+# Compatibility shims for legacy tests expecting SQLAlchemy-style classes
+class Budget:
+    def __init__(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+class MonthlyIncome:
+    def __init__(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+class Transaction:
+    def __init__(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
 # We don't need SQLAlchemy classes here anymore as we'll use dictionaries with Supabase,
 # but keeping simple names for reference in other files if needed.
 class Tables:

@@ -590,9 +590,10 @@ async def _handle_disambiguation(update: Update, context: ContextTypes.DEFAULT_T
     """Asks for clarification on ambiguous intents like 'transfer'."""
     amount = data.get("amount")
     
+    from utils.visuals import format_currency
     msg = (
         f"🔍 **Konfirmasi Transaksi**\n\n"
-        f"Kamu baru saja menyebutkan: **Rp{amount:,.0f}**\n"
+        f"Kamu baru saja menyebutkan: **{format_currency(amount)}**\n"
         "Ini masuk ke kategori mana ya?"
     )
     
@@ -601,7 +602,8 @@ async def _handle_disambiguation(update: Update, context: ContextTypes.DEFAULT_T
         "amount": amount,
         "merchant": data.get("merchant") or "Transfer/Bayar",
         "date": data.get("date"),
-        "type": "expense" # Default
+        "type": data.get("type", "expense"),
+        "category": None # Explicitly None until chosen
     }
     
     keyboard = InlineKeyboardMarkup([
@@ -874,9 +876,9 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
              if tx_data.get("amount"):
                  # Prepare Pending Transaction
                  pending = {
-                    "amount": float(tx_data["amount"]),
-                    "category": tx_data["category"] or "Lain-lain",
-                    "merchant": tx_data["merchant"] or "Transaksi",
+                    "amount": float(tx_data.get("amount", 0)),
+                    "category": tx_data.get("category") or "Lain-lain",
+                    "merchant": tx_data.get("merchant") or "Transaksi",
                     "date": tx_data.get("date") or datetime.now().strftime("%d-%m-%Y"),
                     "type": tx_data.get("type", "expense")
                  }

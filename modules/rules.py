@@ -49,9 +49,9 @@ class RuleEngine:
     # MAIN EVALUATION
     # ----------------------------------
 
-    def evaluate(self, transaction_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def evaluate(self, transaction_data: Dict[str, Any]) -> List[str]:
         """
-        Returns list of matched rules with explanation.
+        Returns list of matched rule tags.
         """
 
         results = []
@@ -60,11 +60,7 @@ class RuleEngine:
 
         for rule in sorted(self.rules, key=lambda r: r.get("priority", 999)):
             if self._match_rule(rule, context):
-                results.append({
-                    "tag": rule["tag"],
-                    "priority": rule.get("priority", 999),
-                    "explanation": self._build_explanation(rule, context)
-                })
+                results.append(rule["tag"])
 
         return results
 

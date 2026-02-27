@@ -80,6 +80,7 @@ class BudgetManager:
             return ""
 
     def generate_yearly_summary(self, user_id, year: int):
+        from utils.visuals import format_currency
         transactions = self.db.get_yearly_report(user_id, year)
         if not transactions:
             return f"Tidak ada transaksi untuk tahun {year}."
@@ -94,27 +95,28 @@ class BudgetManager:
         balance = total_income - total_expense
         return (
             f"📅 Ringkasan Tahun {year}\n\n"
-            f"Total Pemasukan: Rp {total_income:,.0f}\n"
-            f"Total Pengeluaran: Rp {total_expense:,.0f}\n"
-            f"Saldo Tahun Ini: Rp {balance:,.0f}"
+            f"Total Pemasukan: {format_currency(total_income)}\n"
+            f"Total Pengeluaran: {format_currency(total_expense)}\n"
+            f"Saldo Tahun Ini: **{format_currency(balance)}**"
         )
 
     def get_detailed_budget_status(self, user_id, category):
         """
         3-line template for budget status.
         """
+        from utils.visuals import format_currency
         now = datetime.now()
         budgets = self.db.get_user_budgets(user_id)
         target_budget = next((b for b in budgets if b.category == category), None)
         
         if not target_budget:
-            return f"{category}\nLimit: Rp 0\nSisa: Rp 0"
+            return f"{category}\nLimit: {format_currency(0)}\nSisa: {format_currency(0)}"
             
         remaining = target_budget.limit_amount - target_budget.current_usage
         return (f"{category}\n"
-                f"Limit: Rp {target_budget.limit_amount:,.0f}\n"
-                f"Terpakai: Rp {target_budget.current_usage:,.0f}\n"
-                f"Sisa: Rp {remaining:,.0f}")
+                f"Limit: {format_currency(target_budget.limit_amount)}\n"
+                f"Terpakai: {format_currency(target_budget.current_usage)}\n"
+                f"Sisa: {format_currency(remaining)}")
 
     def generate_report(self, user_id, period='monthly'):
         """
@@ -165,6 +167,7 @@ class BudgetManager:
     def get_allocation_recommendation(self, total_income):
         # Professional & Clean formatting
         # No excessive emojis, clear numbers
+        from utils.visuals import format_currency
         p_pokok = total_income * 0.5
         p_tabungan = total_income * 0.2
         p_investasi = total_income * 0.1
@@ -172,10 +175,10 @@ class BudgetManager:
         
         msg = (
             "Ringkasan gaji bulan ini\n\n"
-            f"Pokok: Rp{p_pokok:,.0f}\n"
-            f"Tabungan: Rp{p_tabungan:,.0f}\n"
-            f"Investasi: Rp{p_investasi:,.0f}\n"
-            f"Fleksibel: Rp{p_fleksibel:,.0f}"
+            f"Pokok: {format_currency(p_pokok)}\n"
+            f"Tabungan: {format_currency(p_tabungan)}\n"
+            f"Investasi: {format_currency(p_investasi)}\n"
+            f"Fleksibel: {format_currency(p_fleksibel)}"
         )
         
         return msg, {
@@ -206,4 +209,6 @@ class BudgetManager:
         
         if diff > 10:
             return f"⚠️ Pengeluaran kamu {diff:.0f}% lebih cepat dari normal."
-        return None
+        elif diff < -10:
+            return f"✅ Pengeluaran kamu {abs(diff):.0f}% lebih hemat dari normal."
+        return "⚖️ Pengeluaran kamu sesuai target bulan ini."

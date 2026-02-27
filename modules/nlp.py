@@ -180,6 +180,28 @@ class NLPProcessor:
         
         return text.strip()
 
+    def process_text(self, text: str):
+        """
+        Parses amount, category, and transaction type from raw text.
+        Returns: (amount, category, type)
+        """
+        norm_text = self.normalize_text(text)
+        
+        # 1. Extract Amount
+        amounts = re.findall(r'\d+', norm_text)
+        amount = float(amounts[0]) if amounts else 0.0
+        
+        # 2. Detect Category
+        category, _ = self._detect_category(norm_text)
+        
+        # 3. Detect Type
+        tx_type = "expense"
+        income_keywords = ["gaji", "masuk", "bonus", "terima", "transfer dari"]
+        if any(k in norm_text for k in income_keywords):
+            tx_type = "income"
+            
+        return amount, category, tx_type
+
     def analyze_sentiment(self, text: str) -> Dict[str, Any]:
         """
         Analyzes user sentiment using LLM or Rule-based fallback.
@@ -844,7 +866,7 @@ class NLPProcessor:
         except Exception:
             return 0.0
 
-    def extract_merchant(self, text: str) -> str:
+    def extract_merchant(self, text: str) -> Optional[str]:
         """
         Tries to extract merchant name from text.
         Example: "mixue 48rb" -> Mixue

@@ -571,19 +571,19 @@ async def _h_tx_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action:
 
     tx_date = _parse_date(pending.get("date"))
     tags = rules.evaluate({
-        "amount": pending["amount"],
-        "category": pending["category"],
+        "amount": pending.get("amount", 0),
+        "category": pending.get("category", "Lain-lain"),
         "hour": tx_date.hour,
     })
-    description = pending.get("merchant") or "Transaksi"
+    description = pending.get("merchant") or pending.get("description") or "Transaksi"
     if tags:
         description += f" ({', '.join(tags)})"
 
     try:
         new_tx = db.add_transaction(
             user_id=user_db.id,
-            amount=pending["amount"],
-            category=pending["category"],
+            amount=pending.get("amount", 0),
+            category=pending.get("category", "Lain-lain"),
             trans_type=pending.get("type", "expense"),
             description=description,
             trans_date=tx_date,
@@ -599,14 +599,14 @@ async def _h_tx_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action:
         return
 
     from utils.visuals import format_currency
-    amount_str = format_currency(pending['amount'])
-    budget_msg = budget_mgr.check_budget_status(user_db.id, pending["category"])
+    amount_str = format_currency(pending.get('amount', 0))
+    budget_msg = budget_mgr.check_budget_status(user_db.id, pending.get("category", "Lain-lain"))
     
     # Internal Score Check
     from core import analyzer
     score_data = analyzer.calculate_financial_score(user_db.id)
     
-    final_msg = f"✅ Dicatat: {amount_str} · {pending['category']}"
+    final_msg = f"✅ Dicatat: {amount_str} · {pending.get('category', 'Lain-lain')}"
     if budget_msg:
         final_msg += f"\n\n{budget_msg}"
     
@@ -665,8 +665,10 @@ async def _h_set_category(update: Update, ctx: ContextTypes.DEFAULT_TYPE, action
         return
     pending["category"] = new_cat
     ctx.user_data["pending_tx"] = pending
+    from utils.visuals import format_currency
+    amount_str = format_currency(pending.get('amount', 0))
     await query.edit_message_text(
-        f"Kategori diubah ke: {new_cat}\n\nRp{pending['amount']:,.0f} · {new_cat}",
+        f"Kategori diubah ke: {new_cat}\n\n{amount_str} · {new_cat}",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("✓ Simpan", callback_data="tx_confirm"),
             InlineKeyboardButton("✎ Edit Lagi", callback_data="tx_edit"),

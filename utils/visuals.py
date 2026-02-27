@@ -3,6 +3,7 @@ matplotlib.use('Agg')  # Set backend to non-interactive Agg
 import matplotlib.pyplot as plt
 import matplotlib.ticker
 import io
+import os
 import pandas as pd
 from datetime import datetime
 import logging
@@ -13,8 +14,13 @@ class VisualReporter:
     """
     Handles generation of visual reports (charts, graphs) for financial data.
     """
-    def __init__(self):
-        pass
+    def __init__(self, output_dir="reports"):
+        self.output_dir = output_dir
+        if not os.path.exists(self.output_dir):
+            try:
+                os.makedirs(self.output_dir)
+            except Exception:
+                pass
 
     def generate_monthly_chart(self, transactions, title="Laporan Bulanan"):
         """
@@ -143,17 +149,33 @@ class VisualReporter:
                 
             plt.gca().yaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(rupiah_fmt))
             
-            plt.tight_layout()
-            
+            # Save to Bytes
             buf = io.BytesIO()
             plt.savefig(buf, format='png', transparent=True)
             buf.seek(0)
             plt.close()
             
             return buf
-            
         except Exception as e:
-            logger.error(f"Error generating projection: {e}")
+            logger.error(f"Error generating cashflow projection: {e}")
+            return None
+
+    def generate_expense_pie(self, transactions, user_id):
+        """
+        Generates a pie chart of expenses and saves it to a file.
+        Returns: Path to the generated image.
+        """
+        buf = self.generate_monthly_chart(transactions, title="Expense Distribution")
+        if not buf:
+            return None
+            
+        file_path = os.path.join(self.output_dir, f"report_{user_id}.png")
+        try:
+            with open(file_path, "wb") as f:
+                f.write(buf.getbuffer())
+            return file_path
+        except Exception as e:
+            logger.error(f"Failed to save expense pie: {e}")
             return None
 
     def generate_risk_profile_chart(self, risk_data: dict):
@@ -218,4 +240,8 @@ class VisualReporter:
         except Exception as e:
             logger.error(f"Market trend viz error: {e}")
             return None
+
+def format_currency(amount):
+    """Formats a number as Indonesian Rupiah."""
+    return f"Rp {amount:,.0f}".replace(",", ".")
 

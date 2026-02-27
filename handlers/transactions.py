@@ -54,10 +54,11 @@ async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     msg = "📜 **RIWAYAT TRANSAKSI BULAN INI**\n\n"
+    from utils.visuals import format_currency
     for tx in txs[:15]: # Show last 15
         type_icon = "🔻" if tx.type == 'expense' else "🔹"
         date_str = tx.date.strftime('%d/%m') if hasattr(tx.date, 'strftime') else str(tx.date)[:10]
-        msg += f"{type_icon} `#{tx.id}` | {date_str} | {tx.category} | **Rp{tx.amount:,.0f}**\n_{tx.description or '-'}_\n"
+        msg += f"{type_icon} `#{tx.id}` | {date_str} | {tx.category} | **{format_currency(tx.amount)}**\n_{tx.description or '-'}_\n"
     
     if len(txs) > 15:
         msg += f"\n...dan {len(txs)-15} transaksi lainnya. Gunakan `/export` untuk data lengkap."

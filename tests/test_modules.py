@@ -34,34 +34,45 @@ def test_visual_reporter_empty():
     assert vr.generate_expense_pie([], 123) is None
 
 # --- AI ENGINE TESTS ---
-def test_ai_engine_no_client():
+@pytest.mark.asyncio
+async def test_ai_engine_no_client():
     with patch('modules.ai_engine.GROQ_API_KEY', ''):
         ai = AIEngine()
         # Ensure _client is None so it tries to use the empty GROQ_API_KEY
         ai._client = None 
-        assert ai.parse_transaction("halo") is None
-        assert "AI Key tidak ditemukan" in ai.generate_smart_insight({})
-        assert "FinBot" in ai.chat_response("halo")
+        res = await ai.parse_transaction("halo")
+        assert res is not None # Fallback should trigger
+        assert "Belum cukup data" in await ai.generate_smart_insight({})
+        assert "FinBot" in await ai.chat_response("halo")
 
-def test_ai_engine_parsing():
+@pytest.mark.asyncio
+async def test_ai_engine_parsing():
     ai = AIEngine()
     ai.client = MagicMock()
     mock_response = MagicMock()
-    mock_response.choices[0].message.content = '{"amount": 50000, "category": "Makanan", "is_transaction": true}'
-    ai.client.chat.completions.create.return_value = mock_response
+    # Mock the nested async call create()
+    async def mock_create(*args, **kwargs):
+        return mock_response
     
-    result = ai.parse_transaction("makan sate 50rb")
+    mock_response.choices[0].message.content = '{"amount": 50000, "category": "Makanan", "is_transaction": true, "confidence": 0.9, "merchant": "Sate"}'
+    ai.client.chat.completions.create = mock_create
+    
+    result = await ai.parse_transaction("makan sate 50rb")
     assert result["amount"] == 50000
     assert result["category"] == "Makanan"
 
-def test_ai_engine_insight():
+@pytest.mark.asyncio
+async def test_ai_engine_insight():
     ai = AIEngine()
     ai.client = MagicMock()
     mock_response = MagicMock()
+    async def mock_create(*args, **kwargs):
+        return mock_response
+        
     mock_response.choices[0].message.content = "Bagus sekali!"
-    ai.client.chat.completions.create.return_value = mock_response
+    ai.client.chat.completions.create = mock_create
     
-    result = ai.generate_smart_insight({"data": "test"})
+    result = await ai.generate_smart_insight({"data": "test"})
     assert result == "Bagus sekali!"
 
 # --- NLP TESTS ---

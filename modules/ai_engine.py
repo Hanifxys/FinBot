@@ -55,6 +55,10 @@ class AIEngine:
                 self._client = None
         return self._client
 
+    @client.setter
+    def client(self, value):
+        self._client = value
+
     # -----------------------------------
     # CIRCUIT BREAKER
     # -----------------------------------

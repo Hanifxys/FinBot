@@ -23,7 +23,8 @@ async def set_gaji(update: Update, context: ContextTypes.DEFAULT_TYPE):
             amount = float(amount_str)
             
         db.add_monthly_income(user_db.id, amount)
-        await update.message.reply_text(f"✅ Pendapatan bulanan berhasil diatur ke Rp{amount:,.0f}. Semangat mengelola uangnya! 💪", parse_mode='Markdown')
+        from utils.visuals import format_currency
+        await update.message.reply_text(f"✅ Pendapatan bulanan berhasil diatur ke {format_currency(amount)}. Semangat mengelola uangnya! 💪", parse_mode='Markdown')
         await update_pinned_dashboard(update, context)
     except ValueError:
         await update.message.reply_text("Format nominal salah. Gunakan angka saja.")
@@ -49,13 +50,14 @@ async def set_budget(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         db.set_budget(user_db.id, category, amount)
         
+        from utils.visuals import format_currency
         # Invalidate budget cache if any
         from core import budget_mgr
         # Note: BudgetManager doesn't have explicit cache invalidation method exposed, 
         # but DB handler updates should be sufficient. 
         # Ideally: budget_mgr.invalidate_cache(user_id)
         
-        await update.message.reply_text(f"✅ Budget {category} berhasil diatur ke Rp {amount:,.0f} per bulan.")
+        await update.message.reply_text(f"✅ Budget {category} berhasil diatur ke {format_currency(amount)} per bulan.")
         await update_pinned_dashboard(update, context)
     except ValueError:
         await update.message.reply_text("Format nominal salah. Gunakan angka saja.")

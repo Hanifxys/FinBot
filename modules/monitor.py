@@ -266,6 +266,24 @@ def create_app(deps: AppDependencies) -> FastAPI:
     return application
 
 
+# Global application instance for standard testing/deployment
+# Note: In production, it's better to use create_app() with proper dependencies
+try:
+    from database.db_handler import DBHandler
+    from modules.premium_ai import PremiumAIEngine
+    
+    _default_deps = AppDependencies(
+        db=DBHandler(),
+        premium_ai=PremiumAIEngine(),
+        auth_secret=os.getenv("WEB_JWT_SECRET", "default_secret_for_dev_only")
+    )
+    app = create_app(_default_deps)
+except Exception as e:
+    # Fallback to a bare app if dependencies fail to load (e.g. during some test environments)
+    app = FastAPI(title="FinBot Pro Dashboard (Fallback)")
+    logger.warning(f"Failed to initialize default app instance: {e}")
+
+
 def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
     broadcast_history: list[dict] = []
     scheduled_broadcasts: dict[str, dict] = {}
