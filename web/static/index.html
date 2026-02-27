@@ -959,6 +959,9 @@
                                                             <input type="checkbox" v-model="broadcastForm.audience.activeOnly" class="accent-brand-500">
                                                             Active only
                                                         </label>
+                                                        <button @click="autofillBroadcastData" class="px-3 py-2 rounded-xl bg-brand-600/20 text-brand-400 border border-brand-500/30 hover:bg-brand-600/30 transition-all text-xs font-bold flex items-center gap-2">
+                                                            <i class="fas fa-magic"></i> Autofill
+                                                        </button>
                                                         <button @click="refreshBroadcastAudienceEstimate" class="px-3 py-2 rounded-xl bg-dark-900/50 border border-white/5 text-slate-400 hover:text-brand-400 hover:border-white/10 transition-all text-xs font-bold">
                                                             Re-check
                                                         </button>
@@ -2051,6 +2054,43 @@
                     broadcastForm.value.variables = {};
                 };
 
+                const autofillBroadcastData = () => {
+                    const now = new Date();
+                    const nextHour = new Date(now.getTime() + 3600000);
+                    
+                    // Format for datetime-local input (YYYY-MM-DDThh:mm)
+                    const pad = (n) => n.toString().padStart(2, '0');
+                    const localIso = `${nextHour.getFullYear()}-${pad(nextHour.getMonth() + 1)}-${pad(nextHour.getDate())}T${pad(nextHour.getHours())}:${pad(nextHour.getMinutes())}`;
+                    
+                    // 1. Set Schedule & Audience defaults
+                    broadcastForm.value.schedule.enabled = true;
+                    broadcastForm.value.schedule.at = localIso;
+                    broadcastForm.value.audience.activeOnly = true;
+                    broadcastForm.value.audience.roles = ['user'];
+
+                    // 2. Pre-fill variables based on current system data
+                    const vars = {
+                        name: 'User',
+                        date: formatDateShort(now.toISOString()),
+                        promo: 'FinBot Premium 50%',
+                        end_date: formatDateShort(new Date(now.getTime() + 86400000 * 3).toISOString()),
+                        start_time: '09:00',
+                        end_time: '18:00',
+                        feature: 'AI Financial Advisor v2.0',
+                        cta: 'Klik tombol di bawah untuk info selengkapnya!',
+                        amount: formatCurrency(150000),
+                        due_date: formatDateShort(new Date(now.getTime() + 86400000 * 7).toISOString())
+                    };
+
+                    broadcastForm.value.variables = { ...vars };
+                    
+                    // 3. Set a default message if empty
+                    if (!broadcastForm.value.message) {
+                        broadcastForm.value.templateId = 'promo_flash_sale';
+                        applyBroadcastTemplate();
+                    }
+                };
+
                 const addBroadcastButton = () => {
                     broadcastForm.value.buttons = [...(broadcastForm.value.buttons || []), { text: '', url: '' }];
                 };
@@ -2430,6 +2470,7 @@
                             fetchBroadcastHistory();
                             fetchBroadcastScheduled();
                             refreshBroadcastAudienceEstimate();
+                            autofillBroadcastData(); // Autofill on open
                         }
                     } else if (newView === 'admin_moderation') {
                         if (isSuperadmin.value) fetchModerationData();
