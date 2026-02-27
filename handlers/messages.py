@@ -98,20 +98,22 @@ def _tx_preview_message(pending: dict, feedback: str = "") -> str:
     merchant = pending.get("merchant") or pending.get("description") or "Transaksi"
     payment = pending.get("payment_method") or "-"
     date = pending.get("date") or datetime.now().strftime("%d-%m-%Y")
+    ttype = pending.get("type", "expense")
+    
+    icon = "💰" if ttype == "income" else "💸"
+    title = "Konfirmasi Pemasukan" if ttype == "income" else "Konfirmasi Pengeluaran"
     
     msg = (
-        "🧾 **Preview Transaksi**\n\n"
-        f"• Item: **{merchant}**\n"
-        f"• Nominal: **Rp{float(amount):,.0f}**\n"
-        f"• Kategori: **{category}**\n"
-        f"• Metode: **{payment}**\n"
-        f"• Tanggal: **{date}**\n"
+        f"{icon} **{title}**\n\n"
+        f"• **Nominal**: Rp{amount:,.0f}\n"
+        f"• **Kategori**: {category}\n"
+        f"• **Deskripsi**: {merchant}\n"
+        f"• **Tanggal**: {date}\n"
     )
     
     if feedback:
-        msg += f"\n💡 {feedback}\n"
+        msg += f"\n💡 **Analisis**: {feedback}"
         
-    msg += "\nLanjut simpan atau edit dulu?"
     return msg
 
 # --- Logic Helpers ---
@@ -471,12 +473,55 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         merchant = result.get('merchant', 'Transaksi')
         amount = result.get('amount', 0)
+        items = result.get('items', [])
+        tax = result.get('tax', 0)
+        discount = result.get('discount', 0)
+        payment_method = result.get('payment_method', 'UNKNOWN')
         
-        # Construct natural language text for AI processing
-        text = f"Beli {merchant} seharga {amount}"
+        # Construct summary message for user
+        summary = f"🔍 **Data Terbaca:**\n"
+        summary += f"🏢 **Toko**: {merchant}\n"
+        summary += f"💰 **Total**: Rp{amount:,.0f}\n"
+        if tax > 0: summary += f"🧾 **Pajak**: Rp{tax:,.0f}\n"
+        if discount > 0: summary += f"🏷️ **Diskon**: Rp{discount:,.0f}\n"
+        if payment_method != 'UNKNOWN': summary += f"💳 **Metode**: {payment_method}\n"
+        
+        if items:
+            summary += "\n🛒 **Item Terdeteksi:**\n"
+            for item in items[:5]:
+                summary += f"- {item['name']}: Rp{item['price']:,.0f}\n"
+            if len(items) > 5: summary += f"  ...dan {len(items)-5} item lainnya\n"
 
-        await update.message.reply_text(f"🔍 **Data Terbaca:**\n{merchant}: {amount}\n\n_Menganalisis detail..._", parse_mode='Markdown')
-        await _process_text(update, context, text)
+        await update.message.reply_text(summary, parse_mode='Markdown')
+        
+        # Prepare Pending Transaction directly to avoid re-parsing text
+        pending = {
+            "amount": float(amount),
+            "category": nlp._detect_category(merchant + " " + (items[0]['name'] if items else "")),
+            "merchant": merchant,
+            "date": result.get('date') or datetime.now().strftime("%d-%m-%Y"),
+            "payment_method": payment_method if payment_method != 'UNKNOWN' else None,
+            "items": items,
+            "tax": tax,
+            "discount": discount
+        }
+        
+        # Contextual Insight
+        feedback = ""
+        try:
+            feedback = analyzer.get_instant_feedback(
+                user_id, pending["category"], pending["merchant"], pending["amount"]
+            )
+        except Exception: pass
+
+        context.user_data["pending_tx"] = pending
+        context.user_data.pop("state", None)
+        
+        await update.message.reply_text(
+            _tx_preview_message(pending, feedback), 
+            parse_mode="Markdown", 
+            reply_markup=_tx_preview_keyboard()
+        )
         
     except Exception as e:
         logger.error(f"OCR Error for {user_id}: {e}", exc_info=True)
@@ -684,6 +729,10 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
                         user_id, pending["category"], pending["merchant"], pending["amount"]
                     )
                  except Exception: pass
+                 
+                 # Force type if detected from classification earlier
+                 if tx_data.get("type"):
+                    pending["type"] = tx_data["type"]
 
                  context.user_data["pending_tx"] = pending
                  context.user_data.pop("state", None)

@@ -46,6 +46,7 @@ class AppDependencies:
     premium_ai: object = None
     ws_server: object = None
     bot: object = None
+    oom_engine: object = None
     auth_secret: str = field(
         default_factory=lambda: os.getenv("WEB_JWT_SECRET", "")
     )
@@ -348,10 +349,20 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
                 "username": getattr(u, "username", "-"),
                 "role": getattr(u, "role", "user"),
                 "is_active": getattr(u, "is_active", True),
-                "created_at": getattr(u, "created_at", "-"),
+                "created_at": getattr(u, "created_at", None),
             }
             for u in users
         ]
+
+    @app.get("/admin/oom/status", tags=["admin"])
+    def get_oom_status(user_id: int = Depends(get_current_user)):
+        if not deps.db.has_permission(user_id, "view_users"):
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+            
+        if not deps.oom_engine:
+            return {"status": "not_initialized"}
+            
+        return deps.oom_engine.get_status()
 
     @app.post("/admin/users/{target_id}/role", tags=["admin"])
     def admin_set_role(

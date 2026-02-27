@@ -11,6 +11,7 @@ from modules.premium_ai import PremiumAIEngine
 from utils.visuals import VisualReporter
 from modules.websocket_server import WebSocketServer
 from modules.gamification import GamificationEngine
+from modules.oom_engine import OOMEngine
 
 # Initialize Shared instances properly
 db = DBHandler()
@@ -23,6 +24,7 @@ analyzer = ExpenseAnalyzer(db)
 rules = RuleEngine()
 visual_reporter = VisualReporter()
 gamify = GamificationEngine()
+oom_engine = OOMEngine(db, premium_ai)
 
 # Global WebSocket Server Instance
 ws_server = WebSocketServer(port=int(os.getenv("WS_PORT", 8001)))
@@ -34,6 +36,11 @@ def init_components():
     logging.info("Core components initialized with Supabase API")
     # Start WS Server in background
     ws_server.start_in_thread()
+    # Start OOM Engine for Real-time Monitoring
+    try:
+        oom_engine.start()
+    except Exception as e:
+        logging.error(f"Failed to start OOM Engine: {e}")
     # Start Monitoring API for Koyeb Health Checks
     try:
         from modules.monitor import start_monitor_thread

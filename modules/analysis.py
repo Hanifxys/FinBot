@@ -104,6 +104,26 @@ class ExpenseAnalyzer:
             if category_total > 500000 and category == "Makanan":
                  feedback += f"🍔 **Foodie Alert**: Budget makan minggu ini udah tembus Rp{category_total:,.0f} lho. "
                  
+            # 2. Check category budget status (Linear Drift)
+            now = datetime.now()
+            days_in_month = 30
+            day_of_month = now.day
+            expected_pct = (day_of_month / days_in_month) * 100
+            
+            budgets = self.db.get_user_budgets(user_id)
+            target_budget = next((b for b in budgets if b.category == category), None)
+            
+            if target_budget and target_budget.limit_amount > 0:
+                current_pct = (target_budget.current_usage / target_budget.limit_amount) * 100
+                new_pct = ((target_budget.current_usage + amount) / target_budget.limit_amount) * 100
+                
+                if new_pct > 100:
+                    feedback += f"🚨 **OVER BUDGET!** Transaksi ini bakal bikin budget {category} jebol ({new_pct:.1f}%). "
+                elif new_pct > expected_pct + 15:
+                    feedback += f"⚠️ **Budget Drift**: Kecepatan belanjamu di {category} ({new_pct:.1f}%) jauh melampaui waktu bulan ini ({expected_pct:.1f}%). "
+                elif new_pct > 80:
+                    feedback += f"🟡 **Hampir Limit**: Budget {category} sudah terpakai {new_pct:.1f}%. Sisa tinggal sedikit! "
+
             return feedback
             
         except Exception as e:

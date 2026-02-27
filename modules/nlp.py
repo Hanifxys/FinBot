@@ -97,7 +97,7 @@ class NLPProcessor:
             "what_if": re.compile(r'\b(what if|simulasi|kalo|misal|kalau|andai|seandainya)\b', re.IGNORECASE),
             "greeting": re.compile(r'\b(halo|hi|hai|siang|pagi|malam|apa kabar|sehat)\b', re.IGNORECASE),
             "set_budget_alert": re.compile(r'\b(ingat|inget|alert|warning|batas|notif|peringatan).*(budget|anggaran)\b', re.IGNORECASE),
-            "set_budget": re.compile(r'\b(set|atur|ubah|ganti|tambah).*(budget|anggaran|limit)\b', re.IGNORECASE),
+            "set_budget": re.compile(r'\b(target|set|atur|ubah|ganti|tambah).*(budget|anggaran|limit)\b', re.IGNORECASE),
             "set_gaji": re.compile(r'\b(set|atur|ubah|ganti|masukkan).*(gaji|pemasukan|income|pendapatan)\b', re.IGNORECASE),
         }
 
@@ -214,6 +214,11 @@ class NLPProcessor:
         if self._intents_map["what_if"].search(text):
             return {"intent": "WHAT_IF", "confidence": 0.95}
         
+        # Income recognition heuristics (Prioritize over ADD_TRANSACTION)
+        income_keywords = ["gaji", "bonus", "pemasukan", "income", "payroll", "transfer masuk", "pembayaran dari"]
+        if any(re.search(rf"\b{kw}\b", text) for kw in income_keywords) and self._extract_amount(text) > 0:
+            return {"intent": "ADD_TRANSACTION", "type": "income", "confidence": 0.95}
+
         # Anti-Robot Check (Declarative)
         declarative_pattern = r'\b(punya|ada|total|sisa|tabungan|saldo|duit|uang|rekening|dompet|cash|aset).*\d+'
         if re.search(declarative_pattern, text) and not any(kw in text for kw in ["beli", "bayar", "jajan", "keluar", "habis", "tambah", "simpan", "catat"]):
@@ -303,10 +308,16 @@ class NLPProcessor:
         Extracts structured financial transaction data.
         Returns JSON-like dict.
         """
+        # 0. Check for implicit type from classification
+        classification = self._regex_classify(text)
+        forced_type = classification.get("type")
+
         # 1. Try LLM Extraction for complex sentences if enabled
         if self.groq_enabled and len(text.split()) > 4:
              llm_data = self._llm_extract_entities(text)
              if llm_data and llm_data.get("amount"):
+                 if forced_type:
+                     llm_data["type"] = forced_type
                  return llm_data
 
         # 2. Fallback to Regex/Heuristic (Standard)
@@ -324,7 +335,12 @@ class NLPProcessor:
             "Gaji": "Gaji", "Lain-lain": "Lain-lain"
         }
         mapped_cat = category_map.get(category, "Lain-lain")
-        type_ = "income" if mapped_cat == "Gaji" else "expense"
+        
+        # Determine type
+        if forced_type:
+            type_ = forced_type
+        else:
+            type_ = "income" if mapped_cat == "Gaji" else "expense"
         
         from datetime import datetime
         return {
