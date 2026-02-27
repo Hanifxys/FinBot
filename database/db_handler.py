@@ -491,6 +491,23 @@ class DBHandler:
             logging.error(f"Failed to log admin action: {e}")
         return True
 
+    def add_system_log(self, level, message, metadata=None):
+        """Generic system logging for OOM, errors, and critical events."""
+        data = {
+            "admin_id": 0,
+            "target_id": 0,
+            "action": level,
+            "action_type": "system",
+            "reason": message[:255] if message else None,
+            "new_value": str(metadata or message) if metadata or (message and len(message) > 255) else None,
+            "timestamp": datetime.now().isoformat()
+        }
+        try:
+            self._safe_execute(self.supabase.table(Tables.ADMIN_LOGS).insert(data))
+        except Exception as e:
+            logging.error(f"Failed to add system log: {e}")
+        return True
+
     def get_admin_logs(self, limit=100):
         """Fetch audit logs, sorted by most recent."""
         try:

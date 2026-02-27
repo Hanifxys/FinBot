@@ -132,9 +132,15 @@ class NLPProcessor:
         if not text:
             return ""
             
+        # 0. Basic cleaning: remove extra whitespace, lower case
         text = text.lower().strip()
         
-        # 0. Slang Replacement (Token-based)
+        # 1. Advanced cleaning: remove noise like 'kak', 'bang', 'dong', 'ya', 'nih'
+        noise_words = ["kak", "bang", "sis", "bro", "dong", "ya", "nih", "deh", "sih", "kok", "tuh", "lah", "aja", "saja"]
+        pattern = r'\b(' + '|'.join(map(re.escape, noise_words)) + r')\b'
+        text = re.sub(pattern, '', text)
+        
+        # 2. Slang Replacement (Token-based)
         tokens = text.split()
         normalized_tokens = []
         for token in tokens:
@@ -148,24 +154,100 @@ class NLPProcessor:
             
         text = " ".join(normalized_tokens)
 
-        # 1. Standardize separators: change comma to dot for decimal parsing
+        # 3. Standardize separators: change comma to dot for decimal parsing
         # But only if it looks like a decimal (e.g., 1,5jt or 1.5jt)
         text = re.sub(r'(\d+),(\d+)\s*(jt|mio|rb|k|ribu)', r'\1.\2\3', text)
         
-        # 2. Normalize Million (jt/mio -> 000000)
+        # 4. Normalize Million (jt/mio -> 000000)
         text = re.sub(r'([\d\.]+)\s*(jt|mio|juta)', lambda m: str(int(float(m.group(1)) * 1000000)), text)
         
-        # 3. Normalize Thousand (rb/k -> 000)
+        # 5. Normalize Thousand (rb/k -> 000)
         text = re.sub(r'([\d\.]+)\s*(rb|k|ribu|rebu)', lambda m: str(int(float(m.group(1)) * 1000)), text)
         
-        # 4. Clean common Indonesian currency prefix and trailing zeros/separators
+        # 6. Clean common Indonesian currency prefix and trailing zeros/separators
         text = text.replace('rp', '').replace('rupiah', '')
         
-        # 5. Handle cases like 100,000 or 100.000 (treat as 100000)
-        # If it matches \d{1,3}([,.]\d{3})+ it's likely a thousand separator
+        # 7. Handle cases like 100,000 or 100.000 (treat as 100000)
         text = re.sub(r'(\d{1,3})([,\.]\d{3})+(?!\d)', lambda m: m.group(0).replace(',', '').replace('.', ''), text)
         
-        return text
+        return text.strip()
+
+    def analyze_sentiment(self, text: str) -> Dict[str, Any]:
+        """
+        Analyzes user sentiment using LLM or Rule-based fallback.
+        Returns: {"sentiment": "POSITIVE|NEGATIVE|NEUTRAL", "mood": "happy|stressed|angry|etc", "score": 0.0-1.0}
+        """
+        # Rule-based fallback for quick detection
+        positive_keywords = ["senang", "bagus", "keren", "mantap", "hebat", "makasih", "thanks", "untung", "naik", "hemat"]
+        negative_keywords = ["sedih", "pusing", "stres", "marah", "rugi", "boros", "mahal", "habis", "kosong", "kering"]
+        
+        text_lower = text.lower()
+        pos_count = sum(1 for kw in positive_keywords if kw in text_lower)
+        neg_count = sum(1 for kw in negative_keywords if kw in text_lower)
+        
+        sentiment = "NEUTRAL"
+        mood = "neutral"
+        score = 0.5
+        
+        if pos_count > neg_count:
+            sentiment = "POSITIVE"
+            mood = "happy"
+            score = 0.8
+        elif neg_count > pos_count:
+            sentiment = "NEGATIVE"
+            mood = "stressed"
+            score = 0.2
+            
+        # LLM refinement if available
+        if self.groq_enabled:
+            try:
+                prompt = f"""
+                Analyze the financial sentiment of this message: "{text}"
+                Return JSON: {{"sentiment": "POSITIVE|NEGATIVE|NEUTRAL", "mood": "happy|stressed|angry|hopeful|frustrated", "confidence": 0.0-1.0}}
+                """
+                chat_completion = self.client.chat.completions.create(
+                    messages=[{"role": "user", "content": prompt}],
+                    model="llama-3.3-70b-versatile",
+                    response_format={"type": "json_object"},
+                    temperature=0.1
+                )
+                import json
+                llm_res = json.loads(chat_completion.choices[0].message.content)
+                return {
+                    "sentiment": llm_res.get("sentiment", sentiment),
+                    "mood": llm_res.get("mood", mood),
+                    "score": llm_res.get("confidence", score)
+                }
+            except Exception as e:
+                logger.error(f"Sentiment analysis failed: {e}")
+                
+        return {"sentiment": sentiment, "mood": mood, "score": score}
+
+    def handle_small_talk(self, text: str) -> Optional[str]:
+        """
+        Handles small talk or casual questions that don't fit into financial intents.
+        """
+        if not self.groq_enabled:
+            return None
+            
+        text_lower = text.lower()
+        # Only handle if it looks like a question or casual greeting not caught by regex
+        if any(kw in text_lower for kw in ["siapa", "kamu", "bot", "nama", "pencipta", "buat", "makan", "apa", "cerita"]):
+            try:
+                prompt = f"""
+                You are FinBot, a helpful and friendly financial assistant. 
+                Answer this casual message/question concisely: "{text}"
+                Keep it short, professional yet friendly. Use Indonesian.
+                """
+                chat_completion = self.client.chat.completions.create(
+                    messages=[{"role": "user", "content": prompt}],
+                    model="llama-3.3-70b-versatile",
+                    temperature=0.7
+                )
+                return chat_completion.choices[0].message.content
+            except Exception:
+                return None
+        return None
 
     def hybrid_classify(self, text: str, state: str = "IDLE") -> Dict[str, Any]:
         """
@@ -185,24 +267,34 @@ class NLPProcessor:
                 return {"intent": "CANCEL", "confidence": 1.0}
             return {"intent": "EDIT_TRANSACTION", "confidence": 0.9}
 
-        # 2. Fast Path: Regex Matching (Priority 2)
+        # 2. Sentiment Context (New)
+        sentiment_data = self.analyze_sentiment(text)
+        
+        # 3. Fast Path: Regex Matching (Priority 2)
         regex_intent = self._regex_classify(normalized_text)
         if regex_intent["confidence"] >= 0.85:
+            regex_intent["sentiment"] = sentiment_data
             return regex_intent
             
-        # 3. Slow Path: LLM Fallback (Priority 3)
+        # 4. Slow Path: LLM Fallback (Priority 3)
         # Only if regex failed or low confidence AND LLM is enabled
         if self.groq_enabled:
             llm_intent = self._llm_classify_intent(text) # Pass original text for better context
             if llm_intent and llm_intent.get('confidence', 0) >= 0.7:
+                llm_intent["sentiment"] = sentiment_data
                 return llm_intent
         
-        # 4. Fallback if everything fails
-        # If regex found something weak (e.g. 0.5), return it instead of UNKNOWN
+        # 5. Small Talk Fallback (New)
+        small_talk_res = self.handle_small_talk(text)
+        if small_talk_res:
+            return {"intent": "SMALL_TALK", "response": small_talk_res, "confidence": 1.0, "sentiment": sentiment_data}
+
+        # 6. Fallback if everything fails
         if regex_intent["confidence"] > 0.0:
+            regex_intent["sentiment"] = sentiment_data
             return regex_intent
             
-        return {"intent": "UNKNOWN", "confidence": 0.0}
+        return {"intent": "UNKNOWN", "confidence": 0.0, "sentiment": sentiment_data}
 
     def _regex_classify(self, text: str) -> Dict[str, Any]:
         """Internal regex classifier."""

@@ -468,7 +468,7 @@ async def _h_cancel_choose(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _acti
     pending_cancel = ctx.user_data.get("pending_cancel")
     if not pending_cancel or not pending_cancel.get("candidates"):
         await query.message.reply_text(
-            "Aku belum nemu kandidat transaksi. Coba tulis: `batal yang 25rb` atau `hapus #ID`.",
+            "Aku belum nemu kandidat transaksi. Coba tulis: `batal transaksi terakhir` atau `hapus #ID`.",
             parse_mode="Markdown",
         )
         return
@@ -476,6 +476,12 @@ async def _h_cancel_choose(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _acti
         "Pilih transaksi yang mau dibatalkan:",
         reply_markup=_cancel_candidates_kb(pending_cancel["candidates"]),
     )
+
+
+@router.exact("list_targets")
+async def _h_list_targets(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    from handlers.saving import list_targets
+    await list_targets(update, ctx)
 
 
 @router.prefix("cancel_pick:")

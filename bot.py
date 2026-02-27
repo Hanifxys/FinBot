@@ -22,7 +22,7 @@ from handlers.transactions import undo, hapus_transaksi, history, export_data
 from handlers.saving import set_target, add_savings, list_targets
 from handlers.messages import handle_message, handle_photo, handle_voice, handle_document
 from handlers.callbacks import handle_callback
-from handlers.digest import daily_digest
+from handlers.digest import daily_digest, smart_reminder_check
 from middlewares.logging import log_update
 from telegram import BotCommand
 
@@ -158,16 +158,22 @@ if __name__ == '__main__':
     try:
         from modules.monitor import set_bot_instance
         set_bot_instance(application.bot)
+        logging.info("Bot registered to Monitor system successfully.")
     except Exception as e:
         logging.error(f"Failed to register bot to monitor: {e}")
 
     application.add_error_handler(error_handler)
     
+    # Enhanced Logging for Startup
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    logging.info(f"--- FinBot Pro Startup at {now_str} ---")
+    logging.info(f"Instance ID: {os.getenv('KOYEB_INSTANCE_ID', 'Local')}")
+    
     job_queue = application.job_queue
     # Daily Digest at 21:00 WIB (14:00 UTC)
     job_queue.run_daily(daily_digest, time(hour=14, minute=0, tzinfo=timezone.utc))
     # 24-hour Intelligent Reminder Check (runs every hour to check inactive users)
-    job_queue.run_repeating(daily_digest, interval=3600, first=60)
+    job_queue.run_repeating(smart_reminder_check, interval=3600, first=60)
     
     # Logging Middleware (Group -1 runs before other groups)
     application.add_handler(TypeHandler(object, log_update), group=-1)

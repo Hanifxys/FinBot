@@ -91,8 +91,8 @@ def _format_tx(tx) -> str:
     
     return f"{icon} `#{tx_id}` | {date_str} | {category} | **Rp{amount:,.0f}**\n_{desc}_"
 
-def _tx_preview_message(pending: dict, feedback: str = "") -> str:
-    """Formats a pending transaction preview message with optional feedback."""
+def _tx_preview_message(pending: dict, feedback: str = "", sentiment: dict = None) -> str:
+    """Formats a pending transaction preview message with optional feedback and sentiment."""
     amount = pending.get("amount", 0) or 0
     category = pending.get("category") or "Lain-lain"
     merchant = pending.get("merchant") or pending.get("description") or "Transaksi"
@@ -103,8 +103,18 @@ def _tx_preview_message(pending: dict, feedback: str = "") -> str:
     icon = "💰" if ttype == "income" else "💸"
     title = "Konfirmasi Pemasukan" if ttype == "income" else "Konfirmasi Pengeluaran"
     
+    # Sentiment-based greeting/tone
+    mood_emoji = ""
+    if sentiment:
+        mood = sentiment.get("mood", "neutral")
+        mood_map = {
+            "happy": "😊", "stressed": "😟", "angry": "😠", 
+            "hopeful": "🤞", "frustrated": "😫", "neutral": ""
+        }
+        mood_emoji = mood_map.get(mood, "")
+
     msg = (
-        f"{icon} **{title}**\n\n"
+        f"{icon} **{title}** {mood_emoji}\n\n"
         f"• **Nominal**: Rp{amount:,.0f}\n"
         f"• **Kategori**: {category}\n"
         f"• **Deskripsi**: {merchant}\n"
@@ -700,6 +710,11 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
             await _handle_sharing_info(update, context, user_db, text, user_name)
             return
 
+        if intent == "SMALL_TALK":
+            response = classification.get("response") or "Halo! Ada yang bisa aku bantu?"
+            await update.message.reply_text(response)
+            return
+
         # 3. Handle Pending States (Edit Flows)
         if await _handle_pending_states(update, context, text):
             return
@@ -738,7 +753,7 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
                  context.user_data.pop("state", None)
                  
                  await update.message.reply_text(
-                    _tx_preview_message(pending, feedback), 
+                    _tx_preview_message(pending, feedback, sentiment=classification.get("sentiment")), 
                     parse_mode="Markdown", 
                     reply_markup=_tx_preview_keyboard()
                  )

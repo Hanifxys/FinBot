@@ -12,6 +12,7 @@ from utils.visuals import VisualReporter
 from modules.websocket_server import WebSocketServer
 from modules.gamification import GamificationEngine
 from modules.oom_engine import OOMEngine
+from modules.ai_persona import PersonaManager
 
 # Initialize Shared instances properly
 db = DBHandler()
@@ -25,6 +26,7 @@ rules = RuleEngine()
 visual_reporter = VisualReporter()
 gamify = GamificationEngine()
 oom_engine = OOMEngine(db, premium_ai)
+persona_mgr = PersonaManager()
 
 # Global WebSocket Server Instance
 ws_server = WebSocketServer(port=int(os.getenv("WS_PORT", 8001)))
@@ -44,6 +46,6 @@ def init_components():
     # Start Monitoring API for Koyeb Health Checks
     try:
         from modules.monitor import start_monitor_thread
-        start_monitor_thread(db=db, premium_ai=premium_ai, ws_server=ws_server, auth_secret=os.getenv("WEB_JWT_SECRET", ""))
+        start_monitor_thread(db=db, premium_ai=premium_ai, ws_server=ws_server, oom_engine=oom_engine, auth_secret=os.getenv("WEB_JWT_SECRET", ""))
     except Exception as e:
         logging.error(f"Failed to start monitor: {e}")

@@ -707,6 +707,10 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
         for u in recipients:
             try:
                 tid = int(getattr(u, "telegram_id", 0) or 0)
+                if not tid:
+                    fail += 1
+                    continue
+
                 if media and media.image_url:
                     await deps.bot.send_photo(chat_id=tid, photo=media.image_url, caption=message, parse_mode="Markdown", reply_markup=reply_markup)
                 elif media and media.video_url:
@@ -714,7 +718,8 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
                 else:
                     await deps.bot.send_message(chat_id=tid, text=message, parse_mode="Markdown", reply_markup=reply_markup)
                 ok += 1
-            except Exception:
+            except Exception as e:
+                logger.error(f"Failed to send broadcast to {getattr(u, 'telegram_id', 'unknown')}: {str(e)}")
                 fail += 1
         return ok, fail
 
@@ -1031,6 +1036,7 @@ def init_dependencies(
     db=None,
     premium_ai=None,
     ws_server=None,
+    oom_engine=None,
     auth_secret: Optional[str] = None,
 ) -> AppDependencies:
     """
@@ -1043,6 +1049,7 @@ def init_dependencies(
             db=db,
             premium_ai=premium_ai,
             ws_server=ws_server,
+            oom_engine=oom_engine,
             auth_secret=auth_secret or os.getenv("WEB_JWT_SECRET", ""),
         )
     return _deps
@@ -1059,9 +1066,10 @@ def start_monitor_thread(
     db=None,
     premium_ai=None,
     ws_server=None,
+    oom_engine=None,
     auth_secret: Optional[str] = None,
 ) -> tuple[threading.Thread, AppDependencies]:
-    deps = init_dependencies(db, premium_ai, ws_server, auth_secret)
+    deps = init_dependencies(db, premium_ai, ws_server, oom_engine, auth_secret)
     thread = threading.Thread(target=start_monitor, args=(deps,), daemon=True)
     thread.start()
     return thread, deps

@@ -112,11 +112,16 @@ async def add_savings(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def list_targets(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_db = db.get_user(user_id)
-    if not user_db: return
+    if not user_db:
+        return
 
     goals = db.get_user_saving_goals(user_db.id)
+    
+    # Check if message exists (command) or use effective_message (callback)
+    message = update.message or update.effective_message
+    
     if not goals:
-        await update.message.reply_text("Kamu belum punya target menabung. Buat dengan `/target`")
+        await message.reply_text("Kamu belum punya target menabung. Buat dengan `/target`")
         return
 
     msg = "🎯 **DAFTAR TARGET MENABUNG**\n\n"
@@ -135,4 +140,4 @@ async def list_targets(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         msg += "\n"
     
-    await update.message.reply_text(msg, parse_mode='Markdown')
+    await message.reply_text(msg, parse_mode='Markdown')
