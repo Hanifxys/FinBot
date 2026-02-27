@@ -3,16 +3,34 @@ import numpy as np
 import logging
 import json
 import asyncio
-import redis
+try:
+    import redis
+    REDIS_AVAILABLE = True
+except ImportError:
+    REDIS_AVAILABLE = False
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta
-from sklearn.ensemble import IsolationForest
-from sklearn.cluster import KMeans
-from statsmodels.tsa.holtwinters import ExponentialSmoothing
-from scipy.stats import pearsonr, spearmanr
 
-from sklearn.neighbors import LocalOutlierFactor
-from scipy.optimize import minimize
+try:
+    from sklearn.ensemble import IsolationForest
+    from sklearn.cluster import KMeans
+    from sklearn.neighbors import LocalOutlierFactor
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
+
+try:
+    from statsmodels.tsa.holtwinters import ExponentialSmoothing
+    STATSMODELS_AVAILABLE = True
+except ImportError:
+    STATSMODELS_AVAILABLE = False
+
+try:
+    from scipy.stats import pearsonr, spearmanr
+    from scipy.optimize import minimize
+    SCIPY_AVAILABLE = True
+except ImportError:
+    SCIPY_AVAILABLE = False
 
 # --- Custom Exceptions ---
 class FinancialIntelligenceError(Exception):
@@ -62,11 +80,15 @@ class FinancialIntelligenceEngine:
             redis_url: Connection URL for Redis caching.
         """
         self.db = db_handler
-        self.cache = redis.from_url(redis_url, decode_responses=True)
+        if REDIS_AVAILABLE:
+            self.cache = redis.from_url(redis_url, decode_responses=True)
+        else:
+            self.cache = None
         self._lock = asyncio.Lock()
 
     async def _get_cached_data(self, key: str) -> Optional[Any]:
         """Retrieves data from Redis cache."""
+        if not self.cache: return None
         try:
             data = self.cache.get(key)
             return json.loads(data) if data else None
@@ -76,6 +98,7 @@ class FinancialIntelligenceEngine:
 
     async def _set_cached_data(self, key: str, data: Any, ex: int = 3600):
         """Sets data to Redis cache with expiration."""
+        if not self.cache: return
         try:
             self.cache.set(key, json.dumps(data), ex=ex)
         except Exception as e:
@@ -177,6 +200,8 @@ class FinancialIntelligenceEngine:
         """
         Uses Isolation Forest to detect suspicious transactions.
         """
+        if not SKLEARN_AVAILABLE:
+            return []
         try:
             txs = self.db.get_sliding_window_transactions(user_id, days=90)
             if len(txs) < 10: return []
@@ -219,6 +244,8 @@ class FinancialIntelligenceEngine:
         """
         Ensemble Anomaly Detection using Isolation Forest and LOF.
         """
+        if not SKLEARN_AVAILABLE:
+            return []
         try:
             txs = self.db.get_sliding_window_transactions(user_id, days=120)
             if len(txs) < 15: return []
@@ -454,6 +481,8 @@ class FinancialIntelligenceEngine:
         """
         Predicts future cashflow using Exponential Smoothing.
         """
+        if not STATSMODELS_AVAILABLE:
+            return {"error": "Statsmodels library not available for forecasting"}
         try:
             txs = self.db.get_sliding_window_transactions(user_id, days=180)
             if len(txs) < 20: raise DataQualityError("Need more data for forecasting")
@@ -535,6 +564,8 @@ class FinancialIntelligenceEngine:
         """
         Spending habit clustering using K-Means.
         """
+        if not SKLEARN_AVAILABLE:
+            return {}
         try:
             txs = self.db.get_sliding_window_transactions(user_id, days=120)
             if len(txs) < 20: return {}
