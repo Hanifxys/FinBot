@@ -49,8 +49,6 @@ CallbackHandler = Callable[
     Coroutine[Any, Any, None],
 ]
 
-context.user_data["last_action_ts"] = datetime.now().timestamp()
-
 # ---------------------------------------------------------------------------
 # Keyboards (pure functions — no side effects)
 # ---------------------------------------------------------------------------
@@ -1315,6 +1313,7 @@ def _broadcast_ws(user_id: int, message: dict) -> None:
 # ---------------------------------------------------------------------------
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data["last_action_ts"] = datetime.now().timestamp()
     query = update.callback_query
     if not query:
         return
