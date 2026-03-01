@@ -276,8 +276,12 @@ class FinancialIntelligenceEngine:
 
     def _calculate_stress_index(self, survival_days: int, liabilities: Dict[str, float], stats: Dict[str, float]) -> str:
         total_debt = sum(liabilities.values())
-        inc = stats.get("avg_monthly_income", 1)
-        debt_ratio = total_debt / (inc * 12) # Debt to Annual Income
+        inc = stats.get("avg_monthly_income", 0)
+        # Avoid ZeroDivisionError if income is 0 or less
+        if inc <= 0:
+            debt_ratio = 1.0 if total_debt > 0 else 0.0
+        else:
+            debt_ratio = total_debt / (inc * 12) # Debt to Annual Income
         
         score = 0
         if survival_days < 30: score += 3

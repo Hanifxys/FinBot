@@ -311,6 +311,41 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
         if not deps.premium_ai: return {"status": "disabled"}
         return {"total_requests": "1,284", "error_rate": "0.2%", "avg_latency": "1.2s", "models": []}
 
+    @app.get("/admin/moderation/flagged", tags=["admin"])
+    def admin_get_flagged(user_id: int = Depends(get_current_user)):
+        if not deps.db.is_admin(user_id): raise HTTPException(status_code=403)
+        return deps.db.get_flagged_transactions()
+
+    @app.get("/admin/moderation/suspicious", tags=["admin"])
+    def admin_get_suspicious(user_id: int = Depends(get_current_user)):
+        if not deps.db.is_admin(user_id): raise HTTPException(status_code=403)
+        return deps.db.get_suspicious_users()
+
+    @app.get("/admin/moderation/disputes", tags=["admin"])
+    def admin_get_disputes(user_id: int = Depends(get_current_user)):
+        if not deps.db.is_admin(user_id): raise HTTPException(status_code=403)
+        return deps.db.get_dispute_tickets()
+
+    @app.get("/admin/moderation/settings", tags=["admin"])
+    def admin_get_mod_settings(user_id: int = Depends(get_current_user)):
+        if not deps.db.is_admin(user_id): raise HTTPException(status_code=403)
+        return deps.db.get_moderation_settings()
+
+    @app.get("/admin/broadcast/templates", tags=["admin"])
+    def admin_broadcast_templates(user_id: int = Depends(get_current_user)):
+        if not deps.db.has_permission(user_id, "broadcast"): raise HTTPException(status_code=403)
+        return [{"id": "promo", "name": "Flash Sale", "body": "Halo {{name}}!"}]
+
+    @app.get("/admin/broadcast/history", tags=["admin"])
+    def admin_broadcast_history(user_id: int = Depends(get_current_user)):
+        if not deps.db.has_permission(user_id, "broadcast"): raise HTTPException(status_code=403)
+        return []
+
+    @app.get("/admin/broadcast/scheduled", tags=["admin"])
+    def admin_broadcast_scheduled(user_id: int = Depends(get_current_user)):
+        if not deps.db.has_permission(user_id, "broadcast"): raise HTTPException(status_code=403)
+        return []
+
     # --- Transactions & Budgets ---
     @app.get("/transactions", tags=["finance"])
     def list_transactions(limit: int = Query(50), user_id: int = Depends(get_current_user)):
