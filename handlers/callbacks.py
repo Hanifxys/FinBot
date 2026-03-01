@@ -24,7 +24,9 @@ from telegram.ext import ContextTypes
 from config import CATEGORIES
 from core import budget_mgr, db, rules, visual_reporter
 from handlers import tutorial_mode
+from handlers.transactions import duplicate_transaction, history, load_pending_update
 from utils.dashboard import update_pinned_dashboard
+from utils.onboarding import send_onboarding_hint
 from utils.executor import execute_code
 
 logger = logging.getLogger(__name__)
@@ -615,6 +617,7 @@ async def _h_tx_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action:
 
     await query.edit_message_text(final_msg, reply_markup=_post_action_kb())
     await query.message.reply_text("Ada lagi yang bisa saya bantu?", reply_markup=get_main_menu_keyboard())
+    await send_onboarding_hint(query.message, db_user_id=user_db.id, telegram_user_id=user_id)
 
     ctx.user_data.pop("pending_tx", None)
     ctx.user_data.pop("state", None)
@@ -728,6 +731,12 @@ async def _h_suggest_budget(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _act
 async def _h_suggest_insight(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
     from handlers.finance import get_ai_insight
     await get_ai_insight(update, ctx)
+    await update.callback_query.message.reply_text(
+        "Aksi konkret: kurangi ngopi 20% minggu ini.",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("Set limit Minuman", callback_data="insight:set_limit:minuman"),
+        ]]),
+    )
 
 
 @router.exact("open_history")
@@ -955,6 +964,168 @@ async def _h_split_receivable(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _a
     await update.callback_query.answer("Fitur Piutang sedang dalam pengembangan! 🚀", show_alert=True)
 
 
+# History UX
+@router.prefix("hist:")
+async def _h_history_ux(update: Update, ctx: ContextTypes.DEFAULT_TYPE, action: str):
+    query = update.callback_query
+    user_id = update.effective_user.id
+    user_db = db.get_or_create_user(user_id, update.effective_user.username)
+    parts = action.split(":")
+
+    if len(parts) == 2 and parts[1] in {"today", "week", "top", "all"}:
+        ctx.user_data["history_filter"] = parts[1]
+        if parts[1] != "all":
+            ctx.user_data.pop("history_category", None)
+        await history(update, ctx)
+        return
+
+    if len(parts) == 2 and parts[1] == "cat":
+        rows = []
+        for i in range(0, len(CATEGORIES), 2):
+            row = []
+            for cat in CATEGORIES[i : i + 2]:
+                row.append(InlineKeyboardButton(cat, callback_data=f"hist:catset:{cat}"))
+            rows.append(row)
+        rows.append([InlineKeyboardButton("Reset", callback_data="hist:all")])
+        await query.edit_message_text("Pilih kategori:", reply_markup=InlineKeyboardMarkup(rows))
+        return
+
+    if len(parts) == 3 and parts[1] == "catset":
+        ctx.user_data["history_filter"] = "all"
+        ctx.user_data["history_category"] = parts[2]
+        await history(update, ctx)
+        return
+
+    if len(parts) == 4 and parts[1] == "item":
+        try:
+            tx_id = int(parts[2])
+        except ValueError:
+            await query.answer("ID transaksi invalid.", show_alert=True)
+            return
+        action_name = parts[3]
+        if action_name == "delete":
+            ok = db.delete_transaction(user_db.id, tx_id)
+            if ok:
+                await query.message.reply_text(f"Transaksi #{tx_id} dihapus.")
+                await history(update, ctx)
+            else:
+                await query.message.reply_text("Transaksi tidak ditemukan.")
+            return
+
+        if action_name == "dup":
+            ok = await duplicate_transaction(update, ctx, tx_id)
+            if ok:
+                await query.message.reply_text(f"Transaksi #{tx_id} berhasil diduplikasi.")
+                await history(update, ctx)
+            else:
+                await query.message.reply_text("Gagal duplikasi transaksi.")
+            return
+
+        if action_name == "edit":
+            ok = load_pending_update(ctx, user_db.id, tx_id)
+            if not ok:
+                await query.message.reply_text("Transaksi tidak ditemukan.")
+                return
+            kb = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton("Edit Nominal", callback_data="hist:update:amount"),
+                        InlineKeyboardButton("Edit Kategori", callback_data="hist:update:category"),
+                    ],
+                    [
+                        InlineKeyboardButton("Simpan Perubahan", callback_data="update_confirm"),
+                        InlineKeyboardButton("Batal", callback_data="update_cancel"),
+                    ],
+                ]
+            )
+            await query.message.reply_text(
+                f"Edit transaksi #{tx_id}. Pilih field yang ingin diubah.",
+                reply_markup=kb,
+            )
+            return
+
+    if action == "hist:update:amount":
+        ctx.user_data["state"] = "WAITING_UPDATE_EDIT_AMOUNT"
+        await query.edit_message_text("Ketik nominal baru untuk transaksi ini:")
+        return
+
+    if action == "hist:update:category":
+        ctx.user_data["state"] = "WAITING_UPDATE_EDIT_CATEGORY"
+        await query.edit_message_text("Ketik kategori baru. Contoh: Makanan")
+        return
+
+
+@router.prefix("insight:set_limit:")
+async def _h_insight_set_limit(update: Update, ctx: ContextTypes.DEFAULT_TYPE, action: str):
+    query = update.callback_query
+    user_id = update.effective_user.id
+    user_db = db.get_or_create_user(user_id, update.effective_user.username)
+    category = action.split(":")[-1].capitalize()
+    budget = db.get_budget(user_db.id, category)
+    current = float(getattr(budget, "limit_amount", 0) or 0)
+    new_limit = max(100000, current * 0.8) if current > 0 else 300000
+    db.set_budget(user_db.id, category, new_limit)
+    await query.message.reply_text(f"Limit {category} di-set ke Rp{new_limit:,.0f}.")
+
+
+@router.prefix("reminder:")
+async def _h_reminder_personal(update: Update, ctx: ContextTypes.DEFAULT_TYPE, action: str):
+    query = update.callback_query
+    user_id = update.effective_user.id
+    parts = action.split(":")
+    try:
+        from modules.redis_mgr import RedisManager
+
+        redis = RedisManager()
+        if not redis.client:
+            await query.message.reply_text("Redis tidak tersedia, coba lagi nanti.")
+            return
+        if action == "reminder:menu":
+            kb = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton("Santai", callback_data="reminder:tone:santai"),
+                        InlineKeyboardButton("Tegas", callback_data="reminder:tone:tegas"),
+                        InlineKeyboardButton("Formal", callback_data="reminder:tone:formal"),
+                    ],
+                    [
+                        InlineKeyboardButton("Jam 08", callback_data="reminder:time:8"),
+                        InlineKeyboardButton("Jam 20", callback_data="reminder:time:20"),
+                        InlineKeyboardButton("Jam 21", callback_data="reminder:time:21"),
+                    ],
+                    [
+                        InlineKeyboardButton("Snooze 1 hari", callback_data="reminder:snooze:1d"),
+                        InlineKeyboardButton("ON", callback_data="reminder:toggle:on"),
+                        InlineKeyboardButton("OFF", callback_data="reminder:toggle:off"),
+                    ],
+                ]
+            )
+            await query.edit_message_text("Pengaturan reminder personal:", reply_markup=kb)
+            return
+        if len(parts) == 3 and parts[1] == "toggle":
+            redis.client.set(f"user:{user_id}:reminder_enabled", "1" if parts[2] == "on" else "0")
+            await query.message.reply_text(f"Reminder {'aktif' if parts[2] == 'on' else 'nonaktif'}.")
+            return
+        if len(parts) == 3 and parts[1] == "tone":
+            redis.client.set(f"user:{user_id}:reminder_tone", parts[2])
+            await query.message.reply_text(f"Tone reminder di-set: {parts[2]}.")
+            return
+        if len(parts) == 3 and parts[1] == "time":
+            hour = int(parts[2])
+            hour = max(0, min(23, hour))
+            redis.client.set(f"user:{user_id}:reminder_hour", str(hour))
+            await query.message.reply_text(f"Jam reminder di-set ke {hour:02d}:00.")
+            return
+        if len(parts) == 3 and parts[1] == "snooze" and parts[2] == "1d":
+            snooze_until = int(datetime.now(tz=timezone.utc).timestamp()) + 86400
+            redis.client.set(f"user:{user_id}:reminder_snooze_until", str(snooze_until))
+            await query.message.reply_text("Reminder disnooze 1 hari.")
+            return
+    except Exception as exc:
+        logger.error("reminder callback failed: %s", exc)
+        await query.message.reply_text("Gagal mengatur reminder.")
+
+
 # ---------------------------------------------------------------------------
 # WebSocket broadcast helper (fire-and-forget)
 # ---------------------------------------------------------------------------
@@ -1007,3 +1178,4 @@ async def send_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     msg = "Pilih periode laporan:"
     target = update.callback_query.message if update.callback_query else update.message
     await target.reply_text(msg, reply_markup=kb)
+

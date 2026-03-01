@@ -100,6 +100,35 @@ _REMINDER_MAX_HOURS = 48
 # Daily digest
 # ---------------------------------------------------------------------------
 
+
+def _is_preferred_hour(user_id: int, now_dt: datetime) -> bool:
+    try:
+        redis = RedisManager()
+        if not redis.client:
+            return True
+        raw = redis.client.get(f"user:{user_id}:reminder_hour")
+        if raw is None:
+            return True
+        raw_str = raw.decode() if isinstance(raw, (bytes, bytearray)) else str(raw)
+        hour = int(raw_str)
+        return int(now_dt.hour) == max(0, min(23, hour))
+    except Exception:
+        return True
+
+
+def _is_snoozed(user_id: int) -> bool:
+    try:
+        redis = RedisManager()
+        if not redis.client:
+            return False
+        raw = redis.client.get(f"user:{user_id}:reminder_snooze_until")
+        if raw is None:
+            return False
+        raw_str = raw.decode() if isinstance(raw, (bytes, bytearray)) else str(raw)
+        return int(raw_str) > int(datetime.now().timestamp())
+    except Exception:
+        return False
+
 async def daily_digest(context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Nightly digest (runs at 21:00 WIB via job queue).
@@ -151,6 +180,10 @@ async def smart_reminder_check(context: ContextTypes.DEFAULT_TYPE) -> None:
             reminder_lock = f"user:{user.id}:reminder_cooldown"
 
             if timedelta(hours=_REMINDER_MIN_HOURS) < diff < timedelta(hours=_REMINDER_MAX_HOURS):
+                if _is_snoozed(user.id):
+                    continue
+                if not _is_preferred_hour(user.id, now):
+                    continue
                 if redis.client and not redis.client.get(reminder_lock):
                     msg = await _build_reminder_message(user.id)
                     await context.bot.send_message(chat_id=user.telegram_id, text=msg)
@@ -429,6 +462,10 @@ async def check_and_send_reminder(context: ContextTypes.DEFAULT_TYPE, user) -> N
 
         if not _reminder_is_enabled(user.id):
             return
+        if _is_snoozed(user.id):
+            return
+        if not _is_preferred_hour(user.id, datetime.now()):
+            return
 
         msg = await _build_reminder_message(user.id)
         await context.bot.send_message(chat_id=user.telegram_id, text=msg)
@@ -486,7 +523,8 @@ def _reminder_is_enabled(user_id: int) -> bool:
         pref = redis.client.get(f"user:{user_id}:reminder_enabled")
         if pref is None:
             return True  # Key not set → default ON
-        return pref.decode() != "0"
+        pref_str = pref.decode() if isinstance(pref, (bytes, bytearray)) else str(pref)
+        return pref_str != "0"
     except Exception:
         logger.warning("_reminder_is_enabled check failed for user_id=%d — defaulting ON", user_id)
         return True
@@ -502,6 +540,21 @@ async def _build_reminder_message(user_id: int) -> str:
             return ai_msg
     except Exception:
         logger.warning("AI reminder generation failed for user_id=%d", user_id, exc_info=True)
+
+    tone = "santai"
+    try:
+        redis = RedisManager()
+        if redis.client:
+            raw_tone = redis.client.get(f"user:{user_id}:reminder_tone")
+            if raw_tone is not None:
+                tone = (raw_tone.decode() if isinstance(raw_tone, (bytes, bytearray)) else str(raw_tone)).lower()
+    except Exception:
+        pass
+
+    if tone == "tegas":
+        return "Pengingat tegas: catat transaksi terbaru kamu sekarang."
+    if tone == "formal":
+        return "Pengingat resmi: mohon lakukan pencatatan transaksi terkini."
 
     # 1. Choose based on time of day
     now = datetime.now()

@@ -59,26 +59,38 @@ def get_main_menu_keyboard() -> ReplyKeyboardMarkup:
         [KeyboardButton("💡 Tips Hemat"), KeyboardButton("🚀 Menu Utama")]
     ], resize_keyboard=True)
 
-def _tx_preview_keyboard(category: str = None) -> InlineKeyboardMarkup:
+def _tx_preview_keyboard(
+    category: str = None,
+    suggestions: Optional[List[str]] = None,
+    low_confidence: bool = False,
+) -> InlineKeyboardMarkup:
     """Returns inline keyboard for transaction preview actions."""
+    confirm_label = "Ya, bener" if low_confidence else "Simpan"
     buttons = [
         [
-            InlineKeyboardButton("✅ Simpan", callback_data="tx_confirm"),
-            InlineKeyboardButton("✎ Edit", callback_data="tx_edit"),
-        ]
+            InlineKeyboardButton(confirm_label, callback_data="tx_confirm"),
+            InlineKeyboardButton("Edit", callback_data="tx_edit"),
+        ],
+        [
+            InlineKeyboardButton("Ubah Nominal", callback_data="edit_amount"),
+            InlineKeyboardButton("Ubah Kategori", callback_data="edit_category"),
+        ],
     ]
-    
-    # Proactive feedback: If category is unknown or "Lain-lain", suggest quick edit
-    if not category or category == "Lain-lain":
+    if low_confidence and suggestions:
+        category_row = []
+        for cat in suggestions[:3]:
+            category_row.append(InlineKeyboardButton(cat, callback_data=f"set_cat_{cat}"))
+        if category_row:
+            buttons.append(category_row)
+    elif not category or category == "Lain-lain":
         buttons.append([
-            InlineKeyboardButton("🏷️ Pilih Kategori", callback_data="edit_category"),
+            InlineKeyboardButton("Pilih Kategori", callback_data="edit_category"),
         ])
-        
     buttons.append([
-        InlineKeyboardButton("❌ Batal", callback_data="tx_ignore"),
+        InlineKeyboardButton("Batal", callback_data="tx_ignore"),
     ])
-    
     return InlineKeyboardMarkup(buttons)
+
 
 def _format_tx(tx) -> str:
     """Formats a transaction object into a readable string."""
@@ -104,33 +116,77 @@ def _format_tx(tx) -> str:
     
     return f"{icon} `#{tx_id}` | {date_str} | {category} | **{amount_str}**\n_{desc}_"
 
-def _tx_preview_message(pending: dict, feedback: str = "", persona: Any = None) -> str:
+def _tx_preview_message(
+    pending: dict,
+    feedback: str = "",
+    persona: Any = None,
+    confidence: Optional[float] = None,
+) -> str:
     """Formats a premium pending transaction preview message with behavioural insights."""
     from utils.visuals import format_currency
     amount_str = format_currency(pending.get("amount", 0) or 0)
     category = pending.get("category") or "Lain-lain"
     merchant = pending.get("merchant") or pending.get("description") or "Transaksi"
     date = pending.get("date") or datetime.now().strftime("%d-%m-%Y")
-    
     # Premium Persona Tone
     persona_name = persona.name if persona else "FinBot"
-    
     msg = (
-        f"💳 **{persona_name} Preview**\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"💰 **Nominal**: {amount_str}\n"
-        f"🏷️ **Kategori**: {category}\n"
-        f"🏢 **Merchant**: {merchant}\n"
-        f"📅 **Waktu**: {date}\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"Preview Transaksi ({persona_name})\n"
+        f"------------------------------\n"
+        f"Nominal: {amount_str}\n"
+        f"Kategori: {category}\n"
+        f"Merchant: {merchant}\n"
+        f"Waktu: {date}\n"
+        f"------------------------------\n"
     )
-    
     if feedback:
-        msg += f"\n💡 **Behavioural Insights**:\n{feedback}\n"
-        
-    msg += "\n*Konfirmasi untuk simpan transaksi ini?*"
+        msg += f"\nBehavioral Insights:\n{feedback}\n"
+    if confidence is not None:
+        confidence = max(0.0, min(1.0, float(confidence)))
+        if confidence < 0.75:
+            msg += f"\nAku baca ini {amount_str} {category}, bener?"
+        else:
+            msg += f"\nConfidence parser: {int(confidence * 100)}%"
+    msg += "\n\n*Konfirmasi untuk simpan transaksi ini?*"
     return msg
 
+
+def _suggest_categories_from_text(
+    text: str,
+    current_category: Optional[str] = None,
+    limit: int = 3,
+) -> List[str]:
+    """Suggests categories from text token overlap for quick one-tap correction."""
+    tokens = {
+        token.strip(".,:;!?()[]{}\"'")
+        for token in (text or "").lower().split()
+        if token and len(token) >= 3
+    }
+    if not tokens:
+        fallback_default = ["Makanan", "Belanja", "Transportasi", "Tagihan"]
+        return [cat for cat in fallback_default if cat != current_category][:limit]
+    ranked: List[Tuple[int, str]] = []
+    category_keywords = getattr(nlp, "category_keywords", {})
+    for category, keywords in category_keywords.items():
+        score = 0
+        for kw in keywords:
+            kw_l = (kw or "").lower()
+            if kw_l in tokens:
+                score += 2
+            elif any(tok in kw_l or kw_l in tok for tok in tokens):
+                score += 1
+        if score > 0 and category != current_category:
+            ranked.append((score, category))
+    ranked.sort(key=lambda x: x[0], reverse=True)
+    top = [cat for _, cat in ranked[:limit]]
+    if len(top) < limit:
+        fallback = ["Makanan", "Belanja", "Transportasi", "Tagihan", "Minuman", "Sosial"]
+        for cat in fallback:
+            if cat != current_category and cat not in top:
+                top.append(cat)
+            if len(top) >= limit:
+                break
+    return top[:limit]
 # --- Logic Helpers ---
 
 def _parse_amount_hint(text: str) -> Optional[float]:
@@ -582,13 +638,19 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             feedback += "\n" + instant_feedback
         except Exception: pass
 
+        pending["confidence"] = 0.6 if review_required else 0.9
+        pending["source_text"] = merchant
         context.user_data["pending_tx"] = pending
         context.user_data.pop("state", None)
         
         await update.message.reply_text(
-            _tx_preview_message(pending, feedback), 
+            _tx_preview_message(pending, feedback, confidence=pending.get("confidence")), 
             parse_mode="Markdown", 
-            reply_markup=_tx_preview_keyboard(pending.get("category"))
+            reply_markup=_tx_preview_keyboard(
+                pending.get("category"),
+                suggestions=_suggest_categories_from_text(merchant, pending.get("category")),
+                low_confidence=bool(review_required),
+            )
         )
         
     except Exception as e:
@@ -655,7 +717,9 @@ async def _handle_disambiguation(update: Update, context: ContextTypes.DEFAULT_T
         "merchant": data.get("merchant") or "Transfer/Bayar",
         "date": data.get("date"),
         "type": data.get("type", "expense"),
-        "category": None # Explicitly None until chosen
+        "category": None, # Explicitly None until chosen
+        "confidence": float(data.get("confidence", 0.0) or 0.0),
+        "source_text": data.get("merchant") or "transfer",
     }
     
     keyboard = InlineKeyboardMarkup([
@@ -1071,7 +1135,9 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
                     "category": tx_data.get("category") or "Lain-lain",
                     "merchant": tx_data.get("merchant") or "Transaksi",
                     "date": tx_data.get("date") or datetime.now().strftime("%d-%m-%Y"),
-                    "type": tx_data.get("type", "expense")
+                    "type": tx_data.get("type", "expense"),
+                    "confidence": float(tx_data.get("confidence", 0.0) or 0.0),
+                    "source_text": text,
                  }
                  
                  # Contextual Insight & Stress Level
@@ -1122,9 +1188,18 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
                  context.user_data.pop("state", None)
                  
                  await update.message.reply_text(
-                    _tx_preview_message(pending, feedback, persona), 
+                    _tx_preview_message(
+                        pending,
+                        feedback,
+                        persona,
+                        confidence=pending.get("confidence"),
+                    ), 
                     parse_mode="Markdown", 
-                    reply_markup=_tx_preview_keyboard(pending.get("category"))
+                    reply_markup=_tx_preview_keyboard(
+                        pending.get("category"),
+                        suggestions=_suggest_categories_from_text(text, pending.get("category")),
+                        low_confidence=bool((pending.get("confidence") or 0.0) < 0.75),
+                    )
                  )
                  return
 
@@ -1401,11 +1476,48 @@ async def _handle_pending_states(update: Update, context: ContextTypes.DEFAULT_T
             v = nlp.validate_edit("amount", text)
             if v.get("valid"):
                 pending_tx["amount"] = v.get("new_value")
+                pending_tx["confidence"] = max(0.8, float(pending_tx.get("confidence", 0.0) or 0.0))
                 context.user_data["pending_tx"] = pending_tx
                 context.user_data.pop("state", None)
-                await update.message.reply_text(_tx_preview_message(pending_tx), parse_mode="Markdown", reply_markup=_tx_preview_keyboard())
+                await update.message.reply_text(
+                    _tx_preview_message(pending_tx, confidence=pending_tx.get("confidence")),
+                    parse_mode="Markdown",
+                    reply_markup=_tx_preview_keyboard(
+                        pending_tx.get("category"),
+                        suggestions=_suggest_categories_from_text(
+                            pending_tx.get("source_text") or text,
+                            pending_tx.get("category"),
+                        ),
+                        low_confidence=bool((pending_tx.get("confidence") or 0.0) < 0.75),
+                    ),
+                )
             else:
                 await update.message.reply_text("Nominalnya belum valid. Contoh: `25rb` atau `25000`.")
+            return True
+
+        if state == "WAITING_EDIT_CATEGORY":
+            v = nlp.validate_edit("category", text)
+            if v.get("valid"):
+                pending_tx["category"] = v.get("new_value")
+                pending_tx["confidence"] = max(0.82, float(pending_tx.get("confidence", 0.0) or 0.0))
+                context.user_data["pending_tx"] = pending_tx
+                context.user_data.pop("state", None)
+                await update.message.reply_text(
+                    _tx_preview_message(pending_tx, confidence=pending_tx.get("confidence")),
+                    parse_mode="Markdown",
+                    reply_markup=_tx_preview_keyboard(
+                        pending_tx.get("category"),
+                        suggestions=_suggest_categories_from_text(
+                            pending_tx.get("source_text") or text,
+                            pending_tx.get("category"),
+                        ),
+                        low_confidence=bool((pending_tx.get("confidence") or 0.0) < 0.75),
+                    ),
+                )
+            else:
+                await update.message.reply_text(
+                    "Kategori belum kebaca. Contoh: `Makanan`, `Transportasi`, atau `Tagihan`."
+                )
             return True
             
         if state == "WAITING_EDIT_DATE":
@@ -1414,9 +1526,48 @@ async def _handle_pending_states(update: Update, context: ContextTypes.DEFAULT_T
                 pending_tx["date"] = t
                 context.user_data["pending_tx"] = pending_tx
                 context.user_data.pop("state", None)
-                await update.message.reply_text(_tx_preview_message(pending_tx), parse_mode="Markdown", reply_markup=_tx_preview_keyboard())
+                await update.message.reply_text(
+                    _tx_preview_message(pending_tx, confidence=pending_tx.get("confidence")),
+                    parse_mode="Markdown",
+                    reply_markup=_tx_preview_keyboard(
+                        pending_tx.get("category"),
+                        suggestions=_suggest_categories_from_text(
+                            pending_tx.get("source_text") or text,
+                            pending_tx.get("category"),
+                        ),
+                        low_confidence=bool((pending_tx.get("confidence") or 0.0) < 0.75),
+                    ),
+                )
             else:
                 await update.message.reply_text("Format tanggal belum kebaca. Contoh: `16-11-2015` atau `2015-11-16`.")
+            return True
+
+        if state == "WAITING_UPDATE_EDIT_AMOUNT":
+            pending_update = context.user_data.get("pending_update")
+            v = nlp.validate_edit("amount", text)
+            if pending_update and v.get("valid"):
+                pending_update["amount"] = v.get("new_value")
+                context.user_data["pending_update"] = pending_update
+                context.user_data.pop("state", None)
+                await update.message.reply_text(
+                    f"Nominal baru: Rp{float(pending_update['amount']):,.0f}\nTekan 'Simpan Perubahan' di pesan sebelumnya."
+                )
+            else:
+                await update.message.reply_text("Nominal belum valid. Contoh: 50000 atau 50rb.")
+            return True
+
+        if state == "WAITING_UPDATE_EDIT_CATEGORY":
+            pending_update = context.user_data.get("pending_update")
+            v = nlp.validate_edit("category", text)
+            if pending_update and v.get("valid"):
+                pending_update["category"] = v.get("new_value")
+                context.user_data["pending_update"] = pending_update
+                context.user_data.pop("state", None)
+                await update.message.reply_text(
+                    f"Kategori baru: {pending_update['category']}\nTekan 'Simpan Perubahan' di pesan sebelumnya."
+                )
+            else:
+                await update.message.reply_text("Kategori belum valid. Contoh: Makanan, Transportasi.")
             return True
 
     # Handle Payment Method Context for pending transactions
@@ -1425,7 +1576,18 @@ async def _handle_pending_states(update: Update, context: ContextTypes.DEFAULT_T
         if pm:
             pending_tx["payment_method"] = pm
             context.user_data["pending_tx"] = pending_tx
-            await update.message.reply_text(_tx_preview_message(pending_tx), parse_mode="Markdown", reply_markup=_tx_preview_keyboard())
+            await update.message.reply_text(
+                _tx_preview_message(pending_tx, confidence=pending_tx.get("confidence")),
+                parse_mode="Markdown",
+                reply_markup=_tx_preview_keyboard(
+                    pending_tx.get("category"),
+                    suggestions=_suggest_categories_from_text(
+                        pending_tx.get("source_text") or text,
+                        pending_tx.get("category"),
+                    ),
+                    low_confidence=bool((pending_tx.get("confidence") or 0.0) < 0.75),
+                ),
+            )
             return True
             
     return False
@@ -1510,6 +1672,8 @@ async def _handle_record_intent(update: Update, context: ContextTypes.DEFAULT_TY
         "merchant": data.get("description", text),
         "date": datetime.now().strftime("%d-%m-%Y"),
         "payment_method": data.get("payment_method", None),
+        "confidence": float(data.get("confidence", 0.0) or 0.0),
+        "source_text": text,
     }
     
     # Get Contextual Insight (New Feature)
@@ -1528,9 +1692,13 @@ async def _handle_record_intent(update: Update, context: ContextTypes.DEFAULT_TY
     context.user_data.pop("state", None)
     
     await update.message.reply_text(
-        _tx_preview_message(pending, feedback), 
+        _tx_preview_message(pending, feedback, confidence=pending.get("confidence")), 
         parse_mode="Markdown", 
-        reply_markup=_tx_preview_keyboard()
+        reply_markup=_tx_preview_keyboard(
+            pending.get("category"),
+            suggestions=_suggest_categories_from_text(text, pending.get("category")),
+            low_confidence=bool((pending.get("confidence") or 0.0) < 0.75),
+        )
     )
 
 async def _handle_gamification_update(user_id: int, intent: str, text: str, premium_response, response_msg: str):
@@ -1565,3 +1733,4 @@ async def _handle_gamification_update(user_id: int, intent: str, text: str, prem
             )
     except Exception as ws_err:
         logger.warning(f"Gamification/WS Broadcast failed for {user_id}: {ws_err}")
+

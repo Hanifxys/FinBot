@@ -1,7 +1,8 @@
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from core import db, analyzer, ai
 from utils.dashboard import update_pinned_dashboard
+from utils.onboarding import send_onboarding_hint
 import logging
 
 async def set_gaji(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -25,6 +26,7 @@ async def set_gaji(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.add_monthly_income(user_db.id, amount)
         from utils.visuals import format_currency
         await update.message.reply_text(f"✅ Pendapatan bulanan berhasil diatur ke {format_currency(amount)}. Semangat mengelola uangnya! 💪", parse_mode='Markdown')
+        await send_onboarding_hint(update.message, db_user_id=user_db.id, telegram_user_id=user_id)
         await update_pinned_dashboard(update, context)
     except ValueError:
         await update.message.reply_text("Format nominal salah. Gunakan angka saja.")
@@ -58,6 +60,7 @@ async def set_budget(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Ideally: budget_mgr.invalidate_cache(user_id)
         
         await update.message.reply_text(f"✅ Budget {category} berhasil diatur ke {format_currency(amount)} per bulan.")
+        await send_onboarding_hint(update.message, db_user_id=user_db.id, telegram_user_id=user_id)
         await update_pinned_dashboard(update, context)
     except ValueError:
         await update.message.reply_text("Format nominal salah. Gunakan angka saja.")
@@ -232,4 +235,3 @@ async def what_if_simulator(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Jika masalah berlanjut, hubungi admin."
         )
         await update.message.reply_text(error_msg, parse_mode='Markdown')
-

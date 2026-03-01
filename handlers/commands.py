@@ -245,9 +245,32 @@ async def reminder_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     user = update.effective_user
     args = context.args or []
 
-    if not args or args[0].lower() not in ("on", "off"):
+    if not args:
+        kb = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("Santai", callback_data="reminder:tone:santai"),
+                    InlineKeyboardButton("Tegas", callback_data="reminder:tone:tegas"),
+                    InlineKeyboardButton("Formal", callback_data="reminder:tone:formal"),
+                ],
+                [
+                    InlineKeyboardButton("Jam 08", callback_data="reminder:time:8"),
+                    InlineKeyboardButton("Jam 20", callback_data="reminder:time:20"),
+                    InlineKeyboardButton("Jam 21", callback_data="reminder:time:21"),
+                ],
+                [
+                    InlineKeyboardButton("Snooze 1 hari", callback_data="reminder:snooze:1d"),
+                    InlineKeyboardButton("ON", callback_data="reminder:toggle:on"),
+                    InlineKeyboardButton("OFF", callback_data="reminder:toggle:off"),
+                ],
+            ]
+        )
+        await update.message.reply_text("Pengaturan reminder personal:", reply_markup=kb)
+        return
+
+    if args[0].lower() not in ("on", "off"):
         await update.message.reply_text(
-            "Gunakan `/reminder on` atau `/reminder off`",
+            "Gunakan `/reminder` untuk menu lengkap, atau `/reminder on|off`",
             parse_mode=ParseMode.MARKDOWN,
         )
         return
