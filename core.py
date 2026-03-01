@@ -64,6 +64,6 @@ def init_components():
     # Start Monitoring API for Koyeb Health Checks
     try:
         from modules.monitor import start_monitor_thread
-        start_monitor_thread(db=db, premium_ai=premium_ai, ws_server=ws_server, oom_engine=oom_engine, auth_secret=os.getenv("WEB_JWT_SECRET", ""))
+        start_monitor_thread(db=db, premium_ai=premium_ai, ws_server=ws_server, oom_engine=oom_engine, fin_intel=fin_intel, auth_secret=os.getenv("WEB_JWT_SECRET", ""))
     except Exception as e:
         logging.error(f"Failed to start monitor: {e}")

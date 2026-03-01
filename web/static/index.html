@@ -273,6 +273,26 @@
                         </div>
                     </div>
                     
+                    <!-- Command Center Quick Stats (New) -->
+                    <div class="hidden lg:flex items-center gap-6 px-6 py-2 rounded-2xl bg-brand-500/5 border border-brand-500/10 mx-4">
+                        <div class="flex flex-col">
+                            <span class="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Stability Score</span>
+                            <div class="flex items-center gap-2">
+                                <span class="text-sm font-mono font-bold text-brand-400">{{ financial_health.score || 0 }}</span>
+                                <div class="w-16 h-1.5 bg-dark-800 rounded-full overflow-hidden">
+                                    <div class="h-full bg-brand-500 shadow-[0_0_8px_rgba(59,130,246,0.5)] transition-all duration-1000" :style="{width: (financial_health.score || 0) + '%'}"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="w-px h-8 bg-white/5"></div>
+                        <div class="flex flex-col">
+                            <span class="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Health Delta</span>
+                            <span :class="['text-sm font-mono font-bold', (financial_health.delta || 0) >= 0 ? 'text-success-500' : 'text-danger-500']">
+                                {{ (financial_health.delta || 0) >= 0 ? '+' : '' }}{{ financial_health.delta || 0 }}%
+                            </span>
+                        </div>
+                    </div>
+
                     <div class="flex items-center gap-3 md:gap-4">
                         <div class="hidden md:flex items-center gap-4 px-4 py-2 rounded-xl bg-dark-900/50 border border-white/5">
                             <div v-for="(status, name) in health.components" :key="name" class="flex items-center gap-1.5 px-2 py-0.5 rounded border border-white/5 bg-dark-800">
@@ -348,8 +368,20 @@
                             <div :key="currentView" class="w-full">
                                 <!-- DASHBOARD VIEW -->
                                 <div v-if="currentView === 'dashboard'" class="space-y-8">
+                                    <!-- Skeleton Loading for KPI -->
+                                    <div v-if="isLoading && !hasData" class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                        <div v-for="i in 3" :key="i" class="glass-card p-6 rounded-2xl animate-pulse">
+                                            <div class="h-3 w-24 bg-dark-800 rounded mb-4"></div>
+                                            <div class="h-8 w-40 bg-dark-700 rounded mb-6"></div>
+                                            <div class="flex gap-2">
+                                                <div class="h-3 w-12 bg-dark-800 rounded"></div>
+                                                <div class="h-3 w-16 bg-dark-800 rounded"></div>
+                                            </div>
+                                        </div>
+                                    </div>
+
                                     <!-- KPI Cards -->
-                                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                    <div v-else class="grid grid-cols-1 md:grid-cols-3 gap-6">
                                         <div v-if="isAdmin" class="glass-card p-6 rounded-2xl relative overflow-hidden group border-l-4 border-brand-500">
                                             <div class="flex justify-between items-start mb-4">
                                                 <div>
@@ -382,6 +414,75 @@
                                                 <span class="text-slate-600">vs last month</span>
                                             </div>
                                             <div class="absolute -right-6 -bottom-6 w-24 h-24 bg-gradient-to-br from-white/5 to-transparent rounded-full blur-2xl group-hover:bg-brand-500/10 transition-colors duration-500"></div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Financial Intelligence Center (New) -->
+                                    <div v-if="!isAdmin" class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                                        <div class="lg:col-span-2 glass-panel p-8 rounded-3xl border border-brand-500/10 relative overflow-hidden group">
+                                            <div class="absolute top-0 right-0 p-8 opacity-10 group-hover:opacity-20 transition-opacity">
+                                                <i class="fas fa-brain text-8xl text-brand-400"></i>
+                                            </div>
+                                            
+                                            <div class="relative z-10">
+                                                <div class="flex items-center gap-3 mb-6">
+                                                    <div class="w-10 h-10 rounded-xl bg-brand-500/10 flex items-center justify-center text-brand-400">
+                                                        <i class="fas fa-chart-line"></i>
+                                                    </div>
+                                                    <div>
+                                                        <h3 class="text-lg font-bold text-white">Financial Stability Analysis</h3>
+                                                        <p class="text-xs text-slate-500 uppercase tracking-widest font-mono">Real-time Intelligence</p>
+                                                    </div>
+                                                </div>
+
+                                                <div class="grid grid-cols-1 md:grid-cols-2 gap-10">
+                                                    <div>
+                                                        <div class="flex items-baseline gap-2 mb-2">
+                                                            <span class="text-5xl font-black text-white tracking-tighter">{{ financial_health.score }}</span>
+                                                            <span class="text-slate-500 font-bold">/ 100</span>
+                                                        </div>
+                                                        <p class="text-sm text-slate-400 mb-6">Your current stability score is <span :class="financial_health.score >= 70 ? 'text-success-400' : 'text-amber-400'">{{ financial_health.score >= 70 ? 'Healthy' : 'Moderate' }}</span>. Direction is <span class="text-brand-400 font-bold italic">{{ financial_health.trajectory }}</span>.</p>
+                                                        
+                                                        <div class="space-y-4">
+                                                            <div v-for="(rec, i) in (financial_health.recommendations || []).slice(0, 2)" :key="i" class="flex gap-3 items-start p-3 rounded-xl bg-white/2 border border-white/5">
+                                                                <i class="fas fa-lightbulb text-amber-400 mt-1"></i>
+                                                                <p class="text-xs text-slate-300 leading-relaxed">{{ rec }}</p>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div class="space-y-6">
+                                                        <div>
+                                                            <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">Risk Exposure</p>
+                                                            <div class="flex flex-wrap gap-2">
+                                                                <span v-for="risk in financial_health.risk_profile" :key="risk" class="px-2.5 py-1 rounded-lg bg-danger-500/10 text-danger-400 text-[10px] font-bold border border-danger-500/20">
+                                                                    {{ risk }}
+                                                                </span>
+                                                                <span v-if="!financial_health.risk_profile?.length" class="text-xs text-slate-600 italic">No critical risks detected.</span>
+                                                            </div>
+                                                        </div>
+                                                        
+                                                        <div>
+                                                            <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">Confidence Level</p>
+                                                            <div class="flex items-center gap-3">
+                                                                <div class="flex-1 h-1.5 bg-dark-800 rounded-full overflow-hidden">
+                                                                    <div class="h-full bg-brand-500" :style="{width: (financial_health.confidence * 100) + '%'}"></div>
+                                                                </div>
+                                                                <span class="text-[10px] font-mono text-slate-400">{{ (financial_health.confidence * 100).toFixed(0) }}%</span>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div class="glass-panel p-6 rounded-3xl border border-white/5 flex flex-col justify-center items-center text-center">
+                                            <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-brand-500 to-purple-600 flex items-center justify-center text-white text-2xl shadow-xl shadow-brand-500/20 mb-4 animate-float">
+                                                <i class="fas fa-rocket"></i>
+                                            </div>
+                                            <h4 class="text-white font-bold mb-2">Upgrade to Pro</h4>
+                                            <p class="text-xs text-slate-500 mb-6 px-4">Unlock predictive AI modeling and deep macro sensitivity analysis.</p>
+                                            <button class="w-full py-3 rounded-xl bg-white text-dark-950 font-bold text-xs hover:bg-slate-200 transition-all active:scale-95">Explore Features</button>
                                         </div>
                                     </div>
 
@@ -1625,6 +1726,7 @@
                 const profileMenuRoot = ref(null);
                 
                 const stats = ref({ total_income: 0, total_expense: 0 });
+                const financial_health = ref({ score: 0, delta: 0, trajectory: 'stable', risk_profile: [], recommendations: [], confidence: 0 });
                 const transactions = ref([]);
                 const users = ref([]);
                 const adminStats = ref({ 
@@ -1680,6 +1782,15 @@
                         wrapperStats.value = res.data;
                     } catch (e) {
                         console.error("Failed to fetch wrapper stats", e);
+                    }
+                };
+
+                const fetchFinancialHealth = async () => {
+                    try {
+                        const res = await api.get('/financial/health');
+                        financial_health.value = res.data;
+                    } catch (e) {
+                        console.error("Failed to fetch financial health", e);
                     }
                 };
 
@@ -2176,6 +2287,13 @@
                                 console.error("Transactions failed", e);
                                 showToast("Gagal memuat transaksi", "error");
                             }
+                        },
+                        async () => {
+                            try {
+                                await fetchFinancialHealth();
+                            } catch (e) {
+                                console.error("Financial health fetch failed", e);
+                            }
                         }
                     ];
 
@@ -2585,6 +2703,7 @@
                     users, userSearch, filteredUsers, adminStats, aiStats, adminLogs, broadcastHistory, broadcastScheduled, broadcastTemplates, broadcastForm, showBroadcastPreview, broadcastAudienceEstimate, broadcastAnalytics, broadcastRoleOptions, broadcastPreviewPlatforms, broadcastPreviewUser, broadcastVariableKeys, broadcastVariableChips, broadcastPreviewHtml, isSending, pmModal, userDrawer, toasts, health, oomStatus,
                     flaggedTransactions, suspiciousUsers, disputes, modSettings, modActiveTab, modTabs, flaggedCount,
                     isDarkTheme, normalizedRole, profileMenuOpen, profileMenuRoot, profileAvatarUrl,
+                    financial_health, fetchFinancialHealth,
                     login, logout, fetchData, fetchHealth, setView, toggleTheme, updateUserRole, toggleUserStatus, sendBroadcast, fetchLogs, fetchAdminStats, fetchAIStats, fetchBroadcastTemplates, fetchBroadcastHistory, fetchBroadcastScheduled, cancelBroadcastScheduled, refreshBroadcastAudienceEstimate, toggleBroadcastRole, applyBroadcastTemplate, insertBroadcastVariable, resetBroadcastVariables, addBroadcastButton, removeBroadcastButton, toggleBroadcastPreview, openPrivateMessage, sendPrivateMessage, openUserDrawer, removeToast,
                     toggleProfileMenu, onProfileAction, wrapperStats, fetchWrapperStats,
                     fetchModerationData, saveModSettings, resolveFlag,

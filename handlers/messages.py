@@ -157,7 +157,11 @@ def _tx_preview_message(
         msg += f"\nBehavioral Insights:\n{feedback}\n"
     if confidence is not None:
         confidence = max(0.0, min(1.0, float(confidence)))
-        if confidence < 0.75:
+        if confidence < 0.65:
+            percent = int(confidence * 100)
+            # 4. Confidence Transparency Mode
+            msg += f"\n\n_Aku {percent}% yakin ini transaksi. Koreksi kalau salah ya._"
+        elif confidence < 0.85:
             msg += f"\n💡 Aku baca ini {amount_str} untuk {category}, bener gak?"
         else:
             msg += f"\n✅ Confidence parser: {int(confidence * 100)}%"
@@ -225,19 +229,16 @@ def _looks_like_explain_spending(text: str) -> bool:
     return any(k in t for k in keys)
 
 def _build_context_messages(context_buffer: dict) -> List[str]:
-    """Build a compact multi-turn context list for transformer-aware classifiers."""
+    """
+    3. Financial Context Memory Compression
+    Build context from the compressed semantic summary if available, 
+    otherwise fallback to raw history.
+    """
+    compressed_state = context_buffer.get("conversation_financial_state")
+    if compressed_state:
+        return [compressed_state]
+        
     messages: List[str] = []
-    data = context_buffer.get("data") or {}
-    if data:
-        hint_parts = []
-        if data.get("merchant"):
-            hint_parts.append(str(data.get("merchant")))
-        if data.get("category"):
-            hint_parts.append(str(data.get("category")))
-        if data.get("amount"):
-            hint_parts.append(str(int(float(data.get("amount")))))
-        if hint_parts:
-            messages.append(" ".join(hint_parts))
     history = context_buffer.get("history") or []
     if isinstance(history, list):
         for item in history[-Config.NLP_CONTEXT_TURNS :]:
@@ -812,6 +813,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- Core Text Processing Logic ---
 
+async def _reply_with_transparency(update: Update, text: str, confidence: float, **kwargs):
+    """
+    4. Confidence Transparency Mode
+    Appends a confidence statement if uncertainty is high.
+    """
+    final_text = text
+    if confidence < 0.65:
+        percent = round(confidence * 100)
+        # Identify probable intent name in Indonesian for the message
+        intent_label = "transaksi" if "catat" in text.lower() or "simpan" in text.lower() else "pesan"
+        transparency_msg = f"\n\n_Aku {percent}% yakin ini {intent_label}. Koreksi kalau salah ya._"
+        final_text += transparency_msg
+        
+    return await update.message.reply_text(final_text, **kwargs)
+
 async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
     user_id = update.effective_user.id
     user_name = update.effective_user.first_name
@@ -836,6 +852,11 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
         context_messages = _build_context_messages(context_buffer)
         classification = nlp.classify_intent_with_context(text, context_messages=context_messages)
         metrics_ms["classify"] = round((time.perf_counter() - t0) * 1000.0, 2)
+
+        # 1. Intent Confidence Gap Detection
+        if classification.get("low_separation"):
+            await update.message.reply_text("🤔 Maksud kamu mau catat transaksi atau cuma sharing info?")
+            return
 
         intent = classification.get("intent") or "UNKNOWN"
         forced_type = classification.get("type")
@@ -934,11 +955,16 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
             if not isinstance(history, list):
                 history = []
             history.append((text or "").strip())
-            history = history[-Config.NLP_CONTEXT_TURNS :]
+            history = history[-10:] # Keep last 10 for compression
+            
+            # 3. Financial Context Memory Compression
+            compressed_state = await nlp.summarize_financial_context(history)
+            
             context.user_data["context_buffer"] = {
                 "ts": current_ts,
                 "data": extracted,
-                "history": history
+                "history": history,
+                "conversation_financial_state": compressed_state
             }
 
         metrics_ms["total"] = round((time.perf_counter() - started_total) * 1000.0, 2)
@@ -1084,7 +1110,7 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
             return
 
         if intent == "SHARING_INFO":
-            await _handle_sharing_info(update, context, user_db, text, user_name)
+            await _handle_sharing_info(update, context, user_db, text, user_name, confidence=extracted.get("confidence"))
             return
             
         if intent == "GREETING":
@@ -1488,7 +1514,7 @@ async def _handle_correction(update: Update, context: ContextTypes.DEFAULT_TYPE,
     
     await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=keyboard)
 
-async def _handle_sharing_info(update: Update, context: ContextTypes.DEFAULT_TYPE, user_db, text: str, user_name: str):
+async def _handle_sharing_info(update: Update, context: ContextTypes.DEFAULT_TYPE, user_db, text: str, user_name: str, confidence: float = 1.0):
     """Handles informational statements (non-transactional)."""
     try:
         # Use Premium AI to generate a conversational response
@@ -1500,7 +1526,8 @@ async def _handle_sharing_info(update: Update, context: ContextTypes.DEFAULT_TYP
         if premium_response.predictive_advice:
             response_msg += f"\n\n💡 **Saran:**\n{premium_response.predictive_advice}"
             
-        await update.message.reply_text(response_msg, parse_mode='Markdown')
+        # 4. Confidence Transparency Mode
+        await _reply_with_transparency(update, response_msg, confidence, parse_mode='Markdown')
         
     except Exception as e:
         logger.error(f"Error handling sharing info: {e}")

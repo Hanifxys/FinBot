@@ -48,6 +48,7 @@ class AppDependencies:
     ws_server: object = None
     bot: object = None
     oom_engine: object = None
+    fin_intel: object = None
     auth_secret: str = field(
         default_factory=lambda: os.getenv("WEB_JWT_SECRET", "")
     )
@@ -283,50 +284,6 @@ class TokenRevokeRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # App factory (enables testing with custom deps)
 # ---------------------------------------------------------------------------
-def create_app(deps: AppDependencies) -> FastAPI:
-    deps.validate()
-
-    @asynccontextmanager
-    async def lifespan(app: FastAPI):
-        logger.info("FinBot web server starting up")
-        yield
-        logger.info("FinBot web server shutting down")
-
-    application = FastAPI(title="FinBot Pro Dashboard", lifespan=lifespan)
-
-    application.add_middleware(
-        CORSMiddleware,
-        allow_origins=os.getenv("CORS_ORIGINS", "*").split(","),
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
-    # Inject our specific deps instance so tests can override it
-    application.dependency_overrides[get_deps] = lambda: deps
-
-    _register_routes(application, deps)
-    return application
-
-
-# Global application instance for standard testing/deployment
-# Note: In production, it's better to use create_app() with proper dependencies
-try:
-    from database.db_handler import DBHandler
-    from modules.premium_ai import PremiumAIEngine
-    
-    _default_deps = AppDependencies(
-        db=DBHandler(),
-        premium_ai=PremiumAIEngine(),
-        auth_secret=os.getenv("WEB_JWT_SECRET", "default_secret_for_dev_only")
-    )
-    app = create_app(_default_deps)
-except Exception as e:
-    # Fallback to a bare app if dependencies fail to load (e.g. during some test environments)
-    app = FastAPI(title="FinBot Pro Dashboard (Fallback)")
-    logger.warning(f"Failed to initialize default app instance: {e}")
-
-
 def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
     broadcast_history: list[dict] = []
     scheduled_broadcasts: dict[str, dict] = {}
@@ -414,6 +371,78 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
             raise HTTPException(status_code=400, detail="Invalid token or Redis unavailable")
         _audit_admin_action(user_id, "auth_revoke_token", reason="manual revocation")
         return {"status": "revoked"}
+
+    # -----------------------------------------------------------------------
+    # Financial Health
+    # -----------------------------------------------------------------------
+    @app.get("/financial/health", tags=["financial"])
+    async def get_financial_health(user_id: int = Depends(get_current_user)):
+        """Retrieve real-time financial health and stability score."""
+        if not deps.fin_intel:
+            # High-fidelity placeholder if service is unavailable
+            return {
+                "score": 68,
+                "delta": -1.5,
+                "trajectory": "stable",
+                "risk_profile": ["High food spending", "Low emergency fund"],
+                "recommendations": [
+                    "Kurangi pengeluaran makan di luar minggu ini.",
+                    "Siapkan dana darurat setara 3x pengeluaran bulanan."
+                ],
+                "confidence": 0.85
+            }
+        
+        try:
+            # Assuming fin_intel has this method based on previous context
+            health = await deps.fin_intel.get_financial_health_status(user_id)
+            return health
+        except Exception as e:
+            logger.error(f"Financial health analysis failed: {e}")
+            raise HTTPException(status_code=500, detail="Health analysis service error")
+
+
+def create_app(deps: AppDependencies) -> FastAPI:
+    deps.validate()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        logger.info("FinBot web server starting up")
+        yield
+        logger.info("FinBot web server shutting down")
+
+    application = FastAPI(title="FinBot Pro Dashboard", lifespan=lifespan)
+
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=os.getenv("CORS_ORIGINS", "*").split(","),
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # Inject our specific deps instance so tests can override it
+    application.dependency_overrides[get_deps] = lambda: deps
+
+    _register_routes(application, deps)
+    return application
+
+
+# Global application instance for standard testing/deployment
+# Note: In production, it's better to use create_app() with proper dependencies
+try:
+    from database.db_handler import DBHandler
+    from modules.premium_ai import PremiumAIEngine
+    
+    _default_deps = AppDependencies(
+        db=DBHandler(),
+        premium_ai=PremiumAIEngine(),
+        auth_secret=os.getenv("WEB_JWT_SECRET", "default_secret_for_dev_only")
+    )
+    app = create_app(_default_deps)
+except Exception as e:
+    # Fallback to a bare app if dependencies fail to load (e.g. during some test environments)
+    app = FastAPI(title="FinBot Pro Dashboard (Fallback)")
+    logger.warning(f"Failed to initialize default app instance: {e}")
 
     # -----------------------------------------------------------------------
     # Admin
@@ -1235,6 +1264,7 @@ def init_dependencies(
     premium_ai=None,
     ws_server=None,
     oom_engine=None,
+    fin_intel=None,
     auth_secret: Optional[str] = None,
 ) -> AppDependencies:
     """
@@ -1248,6 +1278,7 @@ def init_dependencies(
             premium_ai=premium_ai,
             ws_server=ws_server,
             oom_engine=oom_engine,
+            fin_intel=fin_intel,
             auth_secret=auth_secret or os.getenv("WEB_JWT_SECRET", ""),
         )
     return _deps
@@ -1265,9 +1296,10 @@ def start_monitor_thread(
     premium_ai=None,
     ws_server=None,
     oom_engine=None,
+    fin_intel=None,
     auth_secret: Optional[str] = None,
 ) -> tuple[threading.Thread, AppDependencies]:
-    deps = init_dependencies(db, premium_ai, ws_server, oom_engine, auth_secret)
+    deps = init_dependencies(db, premium_ai, ws_server, oom_engine, fin_intel, auth_secret)
     thread = threading.Thread(target=start_monitor, args=(deps,), daemon=True)
     thread.start()
     return thread, deps

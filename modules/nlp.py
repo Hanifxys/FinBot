@@ -131,33 +131,34 @@ class NLPProcessor:
         self._control_patterns = {
             "STOP_NOTIF": re.compile(r'\b(jangan|janganlah|stop|berhenti|henti|ga usah|gak usah|kurangi|kurangin|matiin|matikan).*(daily|digest|notif|notifikasi|pesan|laporan|sering|digestnya)\b', re.IGNORECASE),
             "ASK_FOR_NOTIF": re.compile(r'\b(kapan|jadwal|jam berapa|aktifin|nyalain|hidupin).*(daily|digest|notif|notifikasi)\b', re.IGNORECASE),
+            "FEEDBACK": re.compile(r'\b(jelek|buruk|bagus|keren|mantap|asik|error|bug|salah|ngaco|aneh|susah|mudah|gampang).*(ui|tampilan|fitur|bot|respon|jawaban)\b', re.IGNORECASE),
         }
 
         # Transformer intent descriptions for multilingual zero-shot fallback.
         self._intent_descriptions = {
-            "ADD_TRANSACTION": "mencatat transaksi pengeluaran atau pemasukan",
-            "SHARING_INFO": "berbagi informasi kondisi keuangan tanpa aksi pencatatan",
-            "CHECK_BUDGET": "meminta status budget atau limit",
-            "QUERY_SUMMARY": "meminta ringkasan laporan keuangan",
-            "SET_BUDGET": "mengatur budget kategori",
-            "SET_BUDGET_ALERT": "mengatur pengingat atau batas budget",
-            "SET_GAJI": "mengatur nominal gaji atau pendapatan bulanan",
-            "CORRECTION": "koreksi transaksi yang sudah disebut",
-            "SPLIT_BILL": "membagi total tagihan ke beberapa orang",
-            "BULK_TRANSACTION": "mencatat beberapa transaksi sekaligus",
-            "SET_MODE": "mengubah gaya asisten",
-            "SET_REMINDER": "mengubah pengaturan reminder atau notifikasi",
-            "UNDO": "membatalkan aksi terakhir",
-            "ROAST_WALLET": "meminta evaluasi gaya belanja secara tegas",
-            "EXPORT_DATA": "meminta ekspor data transaksi",
-            "WHAT_IF": "simulasi skenario keuangan",
-            "DOC_ANALYSIS": "meminta analisis dokumen keuangan",
-            "ELITE_ANALYSIS": "meminta analisis finansial mendalam",
-            "INVESTMENT_OPPS": "meminta peluang investasi",
-            "SMALL_TALK": "percakapan santai non-transaksi",
-            "GREETING": "sapaan pembuka",
-            "HELP": "permintaan bantuan fitur",
-            "UNKNOWN": "tidak jelas atau di luar cakupan",
+            "ADD_TRANSACTION": "mencatat transaksi pengeluaran atau pemasukan baru",
+            "SHARING_INFO": "berbagi informasi kondisi keuangan atau saldo tanpa aksi pencatatan",
+            "CHECK_BUDGET": "memeriksa sisa anggaran atau limit kategori tertentu",
+            "QUERY_SUMMARY": "meminta laporan, rekap, atau statistik keuangan",
+            "SET_BUDGET": "mengatur atau mengubah target anggaran/budget",
+            "SET_BUDGET_ALERT": "mengatur pengingat otomatis saat budget hampir habis",
+            "SET_GAJI": "mengatur nominal gaji bulanan atau pendapatan tetap",
+            "CORRECTION": "mengoreksi kesalahan pada transaksi yang baru saja disebut",
+            "SPLIT_BILL": "menghitung pembagian tagihan/bill dengan teman",
+            "BULK_TRANSACTION": "mencatat banyak transaksi sekaligus dalam satu pesan",
+            "SET_MODE": "mengubah kepribadian atau gaya bicara asisten (coach/buddy/analyst)",
+            "SET_REMINDER": "mengatur jadwal atau status notifikasi pengingat",
+            "UNDO": "membatalkan atau menghapus aksi terakhir yang dilakukan",
+            "ROAST_WALLET": "meminta kritik pedas atau evaluasi jujur tentang kebiasaan belanja",
+            "EXPORT_DATA": "mengunduh atau mengekspor data transaksi ke file (Excel/CSV)",
+            "WHAT_IF": "melakukan simulasi skenario keuangan di masa depan",
+            "DOC_ANALYSIS": "menganalisis dokumen, struk, atau laporan keuangan yang diunggah",
+            "ELITE_ANALYSIS": "meminta analisis pasar, risiko, atau strategi investasi mendalam",
+            "INVESTMENT_OPPS": "mencari peluang atau rekomendasi investasi yang cocok",
+            "SMALL_TALK": "percakapan umum, sapaan, atau pertanyaan di luar topik keuangan",
+            "GREETING": "sapaan pembuka seperti halo, hai, atau selamat pagi",
+            "HELP": "meminta panduan penggunaan atau daftar perintah yang tersedia",
+            "UNKNOWN": "pesan yang tidak jelas maksudnya atau di luar kemampuan sistem",
         }
 
         # Deep-topic taxonomy for richer contextual understanding.
@@ -336,9 +337,20 @@ class NLPProcessor:
         total = sum(votes.values()) or 1e-9
         confidence = votes[best_intent] / total
         confidence = self._calibrate_confidence(confidence, floor=0.0, ceil=0.98)
+
+        # 1. Intent Confidence Gap Detection
+        low_separation = False
+        if len(votes) >= 2:
+            sorted_votes = sorted(votes.values(), reverse=True)
+            top1 = sorted_votes[0] / total
+            top2 = sorted_votes[1] / total
+            if abs(top1 - top2) < 0.12:
+                low_separation = True
+
         return {
             "intent": best_intent,
             "confidence": confidence,
+            "low_separation": low_separation,
             "source": "ensemble",
             "candidates": details,
             "language": (
@@ -489,29 +501,52 @@ class NLPProcessor:
 
     def handle_small_talk(self, text: str) -> Optional[str]:
         """
-        Handles small talk or casual questions that don't fit into financial intents.
+        Handles small talk, feedback, or general questions that don't fit into financial intents.
         """
         if not self.groq_enabled:
             return None
             
         text_lower = text.lower()
-        # Only handle if it looks like a question or casual greeting not caught by regex
-        if any(kw in text_lower for kw in ["siapa", "kamu", "bot", "nama", "pencipta", "buat", "makan", "apa", "cerita"]):
-            try:
-                prompt = f"""
-                You are FinBot, a helpful and friendly financial assistant. 
-                Answer this casual message/question concisely: "{text}"
-                Keep it short, professional yet friendly. Use Indonesian.
-                """
-                chat_completion = self.client.chat.completions.create(
-                    messages=[{"role": "user", "content": prompt}],
-                    model="llama-3.3-70b-versatile",
-                    temperature=0.7
-                )
-                return chat_completion.choices[0].message.content
-            except Exception:
+        
+        # If it's too short and doesn't look like anything, maybe it's just noise
+        if len(text_lower.strip()) < 2:
+            return None
+
+        # Heuristic: If it contains many noise words and no numbers/transaction keywords, it's small talk
+        noise_words = ["kok", "sih", "lah", "deh", "ya", "nih", "tuh", "aja", "jelek", "bagus"]
+        if any(kw in text_lower for kw in noise_words) and not re.search(r'\d+', text_lower):
+            pass # Continue to LLM
+        elif not any(kw in text_lower for kw in ["siapa", "kamu", "bot", "nama", "pencipta", "buat", "apa", "cerita", "halo", "hi", "hai"]):
+            # If no common small talk keywords and not feedback, return None to allow other intents
+            if not any(kw in text_lower for kw in ["jelek", "buruk", "ui", "tampilan", "keren"]):
                 return None
-        return None
+
+        try:
+            # Context-aware system prompt for broader understanding
+            prompt = f"""
+            Kamu adalah FinBot, asisten keuangan pribadi yang cerdas, ramah, dan solutif.
+            Tugasmu adalah merespons pesan user yang bersifat percakapan umum, masukan (feedback), atau pertanyaan di luar pencatatan keuangan.
+            
+            Pesan User: "{text}"
+            
+            Panduan Respon:
+            1. Jika user memberi feedback (misal: "UI-nya jelek"), terima dengan lapang dada, berikan alasan profesional (misal: sedang dalam tahap pengembangan), dan tanyakan saran spesifik.
+            2. Jika user bertanya hal umum, jawab dengan singkat dan cerdas.
+            3. Jika user menyapa, balas dengan ramah.
+            4. Gunakan Bahasa Indonesia yang santai namun tetap sopan (seperti asisten pribadi).
+            5. JANGAN mencoba mencatat transaksi di sini.
+            
+            Respon singkat (maks 2-3 kalimat):
+            """
+            chat_completion = self.client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model="llama-3.3-70b-versatile",
+                temperature=0.7
+            )
+            return chat_completion.choices[0].message.content
+        except Exception as e:
+            logger.error(f"Small talk LLM failed: {e}")
+            return "Halo! Ada yang bisa aku bantu seputar keuanganmu hari ini? 😊"
 
     def hybrid_classify(self, text: str, state: str = "IDLE") -> Dict[str, Any]:
         """
@@ -730,10 +765,23 @@ class NLPProcessor:
             if "off" in text or "mati" in text:
                 return {"intent": "SET_REMINDER", "value": "off", "confidence": 0.9}
 
-        # Transaction Check
+        # Transaction Check - Stricter to avoid misclassification of general text
         amount = self._extract_amount(text)
         if amount > 0:
-            return {"intent": "ADD_TRANSACTION", "confidence": 0.95}
+            # Check for transaction-related keywords or structure
+            tx_keywords = ["beli", "bayar", "jajan", "makan", "minum", "topup", "gaji", "bonus", "pemasukan", "pengeluaran", "catat", "buat", "untuk"]
+            has_tx_keyword = any(kw in text for kw in tx_keywords)
+            
+            # If has amount and keyword, high confidence
+            if has_tx_keyword:
+                return {"intent": "ADD_TRANSACTION", "confidence": 0.96}
+            
+            # If just amount but very simple (e.g. "50rb"), still likely a transaction
+            if len(text.split()) <= 2:
+                return {"intent": "ADD_TRANSACTION", "confidence": 0.92}
+                
+            # Otherwise, moderate confidence, allow other classifiers to override
+            return {"intent": "ADD_TRANSACTION", "confidence": 0.75}
 
         # Query Checks
         if self._intents_map["query_budget"].search(text):
@@ -1960,6 +2008,95 @@ class NLPProcessor:
             return "analytical_response"
         return "concise_response"
 
+    def _compute_cognitive_state(
+        self, 
+        text: str, 
+        sentiment_data: Dict[str, Any], 
+        topic_scores: Dict[str, float],
+        complexity: float,
+        intent: str,
+        amount: float = 0.0
+    ) -> Dict[str, float]:
+        """
+        2. Financial Cognitive Layer
+        Computes decimal probabilities for behavioral modelling.
+        """
+        state = {
+            "financial_stress_probability": 0.0,
+            "impulsivity_signal": 0.0,
+            "risk_seeking_signal": 0.0,
+            "caution_signal": 0.0
+        }
+        
+        # Stress probability: NEGATIVE sentiment, cashflow topic, high complexity
+        if sentiment_data.get("sentiment") == "NEGATIVE":
+            state["financial_stress_probability"] += 0.4
+        if topic_scores.get("cashflow", 0) > 0.5:
+            state["financial_stress_probability"] += 0.3
+        if complexity > 0.6:
+            state["financial_stress_probability"] += 0.3
+            
+        # Risk seeking: INVESTMENT topic, emotion GREED (or similar), HIGH intensity
+        if topic_scores.get("investasi", 0) > 0.5:
+            state["risk_seeking_signal"] += 0.4
+        emotion = sentiment_data.get("emotion", "").upper()
+        if emotion in ["GREED", "EXCITED", "HOPEFUL"]:
+            state["risk_seeking_signal"] += 0.3
+        if sentiment_data.get("intensity") == "HIGH":
+            state["risk_seeking_signal"] += 0.3
+            
+        # Impulsivity: short sentence, high amount, lacks detail
+        words = text.split()
+        if len(words) < 5:
+            state["impulsivity_signal"] += 0.3
+        if amount > 1000000: # Threshold for 'high amount' heuristic
+            state["impulsivity_signal"] += 0.4
+        if intent == "ADD_TRANSACTION" and len(words) < 3:
+            state["impulsivity_signal"] += 0.3
+            
+        # Caution: high complexity, low amount or sharing info, neutral/positive sentiment
+        if complexity > 0.7:
+            state["caution_signal"] += 0.4
+        if intent == "SHARING_INFO":
+            state["caution_signal"] += 0.3
+        if sentiment_data.get("sentiment") == "NEUTRAL":
+            state["caution_signal"] += 0.3
+            
+        # Normalize all values to 0.0 - 1.0
+        for k in state:
+            state[k] = round(max(0.0, min(1.0, state[k])), 4)
+            
+        return state
+
+    async def summarize_financial_context(self, messages: List[str]) -> str:
+        """
+        3. Financial Context Memory Compression
+        Generates a dense summary of the conversation's financial state.
+        """
+        if not self.groq_enabled or not messages:
+            return "No recent financial context."
+            
+        try:
+            corpus = "\n".join(messages[-10:])
+            prompt = f"""
+            Compress the following financial conversation into a single dense summary.
+            Capture the user's financial state, active topics (investment, debt, spending), and current intent.
+            
+            Conversation:
+            {corpus}
+            
+            Dense Summary (max 2 sentences):
+            """
+            chat_completion = self.client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model="llama-3.3-70b-versatile",
+                temperature=0.3
+            )
+            return chat_completion.choices[0].message.content.strip()
+        except Exception as e:
+            logger.error(f"Context compression failed: {e}")
+            return "Stable financial discussion in progress."
+
     def deep_understanding_analysis(
         self,
         text: str,
@@ -1982,14 +2119,27 @@ class NLPProcessor:
         strategy = self._reasoning_strategy(intent_data.get("intent", "UNKNOWN"), complexity, confidence)
         dominant_topics = [k for k, _ in sorted(topic_scores.items(), key=lambda x: x[1], reverse=True)[:3]]
 
+        # Compute cognitive state (Behavioral Modelling)
+        sentiment_data = self.analyze_sentiment(text)
+        cognitive_state = self._compute_cognitive_state(
+            text, 
+            sentiment_data, 
+            topic_scores, 
+            complexity, 
+            intent_data.get("intent", "UNKNOWN"),
+            amount=tx_data.get("amount", 0.0)
+        )
+
         return {
             "intent": intent_data.get("intent", "UNKNOWN"),
             "intent_confidence": confidence,
             "intent_source": intent_data.get("source", "unknown"),
+            "low_separation": intent_data.get("low_separation", False),
             "transaction": tx_data,
             "complexity_score": complexity,
             "topic_scores": topic_scores,
             "dominant_topics": dominant_topics,
+            "cognitive_state": cognitive_state,
             "language": intent_data.get("language", self._detect_language_safe(text)),
             "recommended_strategy": strategy,
             "reasoning_trace": {
