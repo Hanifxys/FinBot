@@ -101,21 +101,37 @@ if __name__ == '__main__':
                 logging.error(f"CRITICAL: Polling backoff active. Another instance recently crashed or is starting. Waiting {wait_time}s...")
                 _time.sleep(wait_time)
         
-        # Try to acquire lock
-        acquired = _POLLING_LOCK_REDIS.set(_POLLING_LOCK_KEY, _POLLING_LOCK_VALUE, nx=True, ex=45)
+        # Try to acquire lock with multiple attempts
+        max_attempts = 3
+        acquired = False
+        for attempt in range(max_attempts):
+            acquired = _POLLING_LOCK_REDIS.set(_POLLING_LOCK_KEY, _POLLING_LOCK_VALUE, nx=True, ex=45)
+            if acquired:
+                break
+            
+            # Check if existing lock is stale (though EX should handle it)
+            existing_val = _POLLING_LOCK_REDIS.get(_POLLING_LOCK_KEY)
+            logging.warning(f"Attempt {attempt+1}: Lock active by instance {existing_val}. Retrying in 5s...")
+            _time.sleep(5)
+
         if not acquired:
-            logging.error("CRITICAL: Another instance of FinBot is already running (Redis Lock active). Exiting to prevent Conflict.")
-            sys.exit(0) # Exit with 0 to prevent Koyeb from immediately restarting and looping
+            logging.error("CRITICAL: Another instance of FinBot is already running. Exiting to prevent Conflict.")
+            # We exit with 0 to signal Koyeb that this is a "clean" skip, 
+            # otherwise it might keep restarting this instance immediately.
+            sys.exit(0)
             
         # Background thread to refresh lock
         def _refresh_lock():
             while True:
                 try:
-                    _time.sleep(30)
+                    _time.sleep(20) # Refresh more frequently than expiry
                     if _POLLING_LOCK_REDIS.get(_POLLING_LOCK_KEY) == _POLLING_LOCK_VALUE:
                         _POLLING_LOCK_REDIS.expire(_POLLING_LOCK_KEY, 45)
-                except Exception:
-                    pass
+                    else:
+                        logging.error("CRITICAL: Redis lock lost! Instance might have been superseded.")
+                        os._exit(1)
+                except Exception as e:
+                    logging.debug(f"Lock refresh error: {e}")
         
         threading.Thread(target=_refresh_lock, daemon=True).start()
 
@@ -162,13 +178,15 @@ if __name__ == '__main__':
     logging.info("🤖 FinBot Pro is RUNNING (Natural Language Mode)...")
     
     # Start Polling with Conflict Resolution
-    # ... (existing lock logic)
-    
     logging.info("FinBot sedang berjalan...")
     sys.stdout.flush()
+    
     try:
-        application.run_polling(drop_pending_updates=True)
+        # We manually run the event loop to ensure we can handle the Conflict error 
+        # and clean up properly before the process exits.
+        application.run_polling(drop_pending_updates=True, close_loop=False)
     except Exception as e:
         logging.error(f"Bot exited with error: {e}")
     finally:
-        pass
+        _release_polling_lock()
+        logging.info("FinBot shutdown complete.")
