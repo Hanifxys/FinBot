@@ -49,6 +49,7 @@ class AppDependencies:
     bot: object = None
     oom_engine: object = None
     fin_intel: object = None
+    intelligence_manager: object = None
     auth_secret: str = field(
         default_factory=lambda: os.getenv("WEB_JWT_SECRET", "")
     )
@@ -399,6 +400,28 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
         except Exception as e:
             logger.error(f"Financial health analysis failed: {e}")
             raise HTTPException(status_code=500, detail="Health analysis service error")
+
+    # -----------------------------------------------------------------------
+    # Micro Intelligence Layer APIs
+    # -----------------------------------------------------------------------
+    @app.get("/intelligence/analytics", tags=["intelligence"])
+    async def get_intelligence_analytics(user_id: int = Depends(get_current_user)):
+        """Expose real-time analytics from the Micro Intelligence Layer."""
+        if not deps.intelligence_manager:
+            raise HTTPException(status_code=503, detail="Intelligence Layer not initialized")
+        
+        layer = deps.intelligence_manager.get_layer(user_id)
+        return await layer.get_analytics()
+
+    @app.get("/intelligence/memory", tags=["intelligence"])
+    async def get_memory_brain(user_id: int = Depends(get_current_user)):
+        """Retrieve conversation context and semantic summary."""
+        if not deps.intelligence_manager:
+            raise HTTPException(status_code=503, detail="Intelligence Layer not initialized")
+        
+        layer = deps.intelligence_manager.get_layer(user_id)
+        summary = await layer.brain.get_semantic_summary()
+        return {"user_id": user_id, "semantic_summary": summary}
 
 
 def create_app(deps: AppDependencies) -> FastAPI:
@@ -1265,6 +1288,7 @@ def init_dependencies(
     ws_server=None,
     oom_engine=None,
     fin_intel=None,
+    intelligence_manager=None,
     auth_secret: Optional[str] = None,
 ) -> AppDependencies:
     """
@@ -1279,6 +1303,7 @@ def init_dependencies(
             ws_server=ws_server,
             oom_engine=oom_engine,
             fin_intel=fin_intel,
+            intelligence_manager=intelligence_manager,
             auth_secret=auth_secret or os.getenv("WEB_JWT_SECRET", ""),
         )
     return _deps
@@ -1297,9 +1322,10 @@ def start_monitor_thread(
     ws_server=None,
     oom_engine=None,
     fin_intel=None,
+    intelligence_manager=None,
     auth_secret: Optional[str] = None,
 ) -> tuple[threading.Thread, AppDependencies]:
-    deps = init_dependencies(db, premium_ai, ws_server, oom_engine, fin_intel, auth_secret)
+    deps = init_dependencies(db, premium_ai, ws_server, oom_engine, fin_intel, intelligence_manager, auth_secret)
     thread = threading.Thread(target=start_monitor, args=(deps,), daemon=True)
     thread.start()
     return thread, deps

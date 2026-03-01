@@ -22,6 +22,7 @@ from modules.recurring import RecurringManager
 from modules.budget_autopilot import BudgetAutopilot
 from modules.weekly_challenges import WeeklyChallengeManager
 from modules.personal_finance_ai import PersonalFinanceAI
+from modules.intelligence import MicroIntelligenceLayer
 
 # Initialize Shared instances properly
 db = DBHandler()
@@ -46,6 +47,18 @@ autopilot_mgr = BudgetAutopilot(db)
 weekly_challenges = WeeklyChallengeManager()
 personal_finance_ai = PersonalFinanceAI(db, persona_mgr)
 
+# Conversation Intelligence Layer (User-scoped manager)
+class ConversationIntelligenceManager:
+    def __init__(self):
+        self._layers: dict[int, MicroIntelligenceLayer] = {}
+
+    def get_layer(self, user_id: int) -> MicroIntelligenceLayer:
+        if user_id not in self._layers:
+            self._layers[user_id] = MicroIntelligenceLayer(user_id)
+        return self._layers[user_id]
+
+intelligence_manager = ConversationIntelligenceManager()
+
 # Global WebSocket Server Instance
 ws_server = WebSocketServer(port=int(os.getenv("WS_PORT", 8001)))
 
@@ -64,6 +77,14 @@ def init_components():
     # Start Monitoring API for Koyeb Health Checks
     try:
         from modules.monitor import start_monitor_thread
-        start_monitor_thread(db=db, premium_ai=premium_ai, ws_server=ws_server, oom_engine=oom_engine, fin_intel=fin_intel, auth_secret=os.getenv("WEB_JWT_SECRET", ""))
+        start_monitor_thread(
+            db=db, 
+            premium_ai=premium_ai, 
+            ws_server=ws_server, 
+            oom_engine=oom_engine, 
+            fin_intel=fin_intel, 
+            intelligence_manager=intelligence_manager,
+            auth_secret=os.getenv("WEB_JWT_SECRET", "")
+        )
     except Exception as e:
         logging.error(f"Failed to start monitor: {e}")

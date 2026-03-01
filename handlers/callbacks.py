@@ -49,6 +49,8 @@ CallbackHandler = Callable[
     Coroutine[Any, Any, None],
 ]
 
+context.user_data["last_action_ts"] = datetime.now().timestamp()
+
 # ---------------------------------------------------------------------------
 # Keyboards (pure functions — no side effects)
 # ---------------------------------------------------------------------------

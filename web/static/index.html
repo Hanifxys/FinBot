@@ -857,6 +857,82 @@
                                     </table>
                                 </div>
                             </div>
+
+                            <!-- Micro Intelligence Layer Dashboard (New) -->
+                            <div v-if="!isAdmin" class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                <div class="glass-panel p-6 rounded-3xl border border-brand-500/10">
+                                    <div class="flex items-center gap-3 mb-6">
+                                        <div class="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center text-purple-400 border border-purple-500/20 shadow-[0_0_15px_rgba(139,92,246,0.3)]">
+                                            <i class="fas fa-brain"></i>
+                                        </div>
+                                        <div>
+                                            <h3 class="text-lg font-bold text-white tracking-tight">Intelligence Layer Status</h3>
+                                            <p class="text-[10px] text-slate-500 uppercase tracking-widest font-mono">Neural Behavioral Processing</p>
+                                        </div>
+                                    </div>
+
+                                    <div class="grid grid-cols-2 gap-4">
+                                        <div class="p-4 rounded-2xl bg-white/2 border border-white/5 group hover:border-brand-500/20 transition-all">
+                                            <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Session Depth</p>
+                                            <div class="flex items-baseline gap-2">
+                                                <span class="text-2xl font-bold text-white font-mono tracking-tighter">{{ intelAnalytics.session_depth }}</span>
+                                                <span class="text-[10px] text-slate-600">Nodes</span>
+                                            </div>
+                                        </div>
+                                        <div class="p-4 rounded-2xl bg-white/2 border border-white/5 group hover:border-brand-500/20 transition-all">
+                                            <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Avg Confidence</p>
+                                            <div class="flex items-baseline gap-2">
+                                                <span class="text-2xl font-bold text-brand-400 font-mono tracking-tighter">{{ (intelAnalytics.average_confidence * 100).toFixed(0) }}%</span>
+                                                <span class="text-[10px] text-slate-600">Parser</span>
+                                            </div>
+                                        </div>
+                                        <div class="p-4 rounded-2xl bg-white/2 border border-white/5 group hover:border-brand-500/20 transition-all">
+                                            <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Stress Level</p>
+                                            <div class="flex items-center gap-2">
+                                                <span :class="['text-sm font-bold uppercase font-mono tracking-widest', intelAnalytics.dominant_stress_level === 'low' ? 'text-success-500' : 'text-danger-500']">{{ intelAnalytics.dominant_stress_level }}</span>
+                                                <div class="w-2 h-2 rounded-full bg-success-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]"></div>
+                                            </div>
+                                        </div>
+                                        <div class="p-4 rounded-2xl bg-white/2 border border-white/5 group hover:border-brand-500/20 transition-all">
+                                            <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Active Branches</p>
+                                            <div class="flex items-baseline gap-2">
+                                                <span class="text-2xl font-bold text-purple-400 font-mono tracking-tighter">{{ intelAnalytics.branch_count }}</span>
+                                                <span class="text-[10px] text-slate-600">Contexts</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="glass-panel p-6 rounded-3xl border border-white/5 relative overflow-hidden group">
+                                    <div class="absolute -right-8 -bottom-8 w-48 h-48 bg-brand-500/5 rounded-full blur-3xl group-hover:bg-brand-500/10 transition-colors duration-700"></div>
+                                    
+                                    <div class="relative z-10 h-full flex flex-col">
+                                        <div class="flex items-center justify-between mb-6">
+                                            <h3 class="text-sm font-bold text-white uppercase tracking-wider">Neural Context Memory</h3>
+                                            <div class="flex items-center gap-2">
+                                                <span class="text-[10px] font-bold text-success-500 uppercase font-mono tracking-widest">Encrypted</span>
+                                                <i class="fas fa-lock text-[10px] text-success-500"></i>
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="flex-1 p-5 rounded-2xl bg-dark-900/80 border border-white/5 font-mono text-[11px] text-slate-400 leading-relaxed italic overflow-hidden relative">
+                                            <div class="absolute top-0 left-0 w-1 h-full bg-brand-500/30"></div>
+                                            <span class="text-brand-400 opacity-50">"{{ financial_health.trajectory === 'stable' ? 'Stable conversation regarding financial goals and transaction history.' : 'Conversation summary being generated...' }}"</span>
+                                            <div class="mt-4 flex items-center gap-2 not-italic">
+                                                <span class="w-1.5 h-1.5 rounded-full bg-brand-500 animate-ping"></span>
+                                                <span class="text-[9px] font-bold text-slate-600 uppercase tracking-widest">Semantic Brain Syncing...</span>
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="mt-6 flex items-center justify-between">
+                                            <div class="flex -space-x-2">
+                                                <div v-for="i in 3" :key="i" class="w-7 h-7 rounded-full border-2 border-dark-950 bg-dark-800 flex items-center justify-center text-[10px] text-slate-500 font-bold">#{{ i }}</div>
+                                            </div>
+                                            <button class="text-[10px] font-bold text-brand-400 hover:text-white transition-colors uppercase tracking-widest">Switch Branch <i class="fas fa-chevron-right ml-1"></i></button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                         </transition>
 
@@ -1794,6 +1870,16 @@
                     }
                 };
 
+                const intelAnalytics = ref({ session_depth: 0, average_confidence: 0, dominant_stress_level: 'low', branch_count: 0 });
+                const fetchIntelAnalytics = async () => {
+                    try {
+                        const res = await api.get('/intelligence/analytics');
+                        intelAnalytics.value = res.data;
+                    } catch (e) {
+                        console.error("Failed to fetch intel analytics", e);
+                    }
+                };
+
                 const userSearch = ref('');
                 const flaggedTransactions = ref([]);
                 const suspiciousUsers = ref([]);
@@ -2294,6 +2380,13 @@
                             } catch (e) {
                                 console.error("Financial health fetch failed", e);
                             }
+                        },
+                        async () => {
+                            try {
+                                await fetchIntelAnalytics();
+                            } catch (e) {
+                                console.error("Intel analytics fetch failed", e);
+                            }
                         }
                     ];
 
@@ -2703,7 +2796,7 @@
                     users, userSearch, filteredUsers, adminStats, aiStats, adminLogs, broadcastHistory, broadcastScheduled, broadcastTemplates, broadcastForm, showBroadcastPreview, broadcastAudienceEstimate, broadcastAnalytics, broadcastRoleOptions, broadcastPreviewPlatforms, broadcastPreviewUser, broadcastVariableKeys, broadcastVariableChips, broadcastPreviewHtml, isSending, pmModal, userDrawer, toasts, health, oomStatus,
                     flaggedTransactions, suspiciousUsers, disputes, modSettings, modActiveTab, modTabs, flaggedCount,
                     isDarkTheme, normalizedRole, profileMenuOpen, profileMenuRoot, profileAvatarUrl,
-                    financial_health, fetchFinancialHealth,
+                    financial_health, fetchFinancialHealth, intelAnalytics, fetchIntelAnalytics,
                     login, logout, fetchData, fetchHealth, setView, toggleTheme, updateUserRole, toggleUserStatus, sendBroadcast, fetchLogs, fetchAdminStats, fetchAIStats, fetchBroadcastTemplates, fetchBroadcastHistory, fetchBroadcastScheduled, cancelBroadcastScheduled, refreshBroadcastAudienceEstimate, toggleBroadcastRole, applyBroadcastTemplate, insertBroadcastVariable, resetBroadcastVariables, addBroadcastButton, removeBroadcastButton, toggleBroadcastPreview, openPrivateMessage, sendPrivateMessage, openUserDrawer, removeToast,
                     toggleProfileMenu, onProfileAction, wrapperStats, fetchWrapperStats,
                     fetchModerationData, saveModSettings, resolveFlag,
