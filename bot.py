@@ -87,38 +87,39 @@ async def post_init(application):
     await application.bot.set_my_commands(commands)
 
 if __name__ == '__main__':
-    # --- 0. MULTI-INSTANCE CONFLICT PREVENTION (REDIS LOCK) ---
+    # --- 0. Initialize Core Components (includes Monitoring Server for Health Checks) ---
+    # We start this BEFORE the lock to ensure Koyeb health checks pass even in standby mode.
+    init_components()
+
+    # --- 1. MULTI-INSTANCE CONFLICT PREVENTION (REDIS LOCK) ---
     _POLLING_LOCK_REDIS = RedisManager().client
     if _POLLING_LOCK_REDIS:
         _POLLING_LOCK_KEY = "finbot:instance:polling_lock"
         _POLLING_LOCK_VALUE = str(uuid.uuid4())
         
-        # Check backoff first
-        backoff_until = _POLLING_LOCK_REDIS.get("finbot:polling_backoff_until")
-        if backoff_until:
-            wait_time = int(backoff_until) - int(_time.time())
-            if wait_time > 0:
-                logging.error(f"CRITICAL: Polling backoff active. Another instance recently crashed or is starting. Waiting {wait_time}s...")
-                _time.sleep(wait_time)
-        
-        # Try to acquire lock with multiple attempts
-        max_attempts = 3
+        # Continuous loop until lock is acquired (Standby Mode)
         acquired = False
-        for attempt in range(max_attempts):
+        retry_count = 0
+        while not acquired:
+            # Check backoff first
+            backoff_until = _POLLING_LOCK_REDIS.get("finbot:polling_backoff_until")
+            if backoff_until:
+                wait_time = int(backoff_until) - int(_time.time())
+                if wait_time > 0:
+                    logging.info(f"Polling backoff active. Waiting {wait_time}s before next attempt...")
+                    _time.sleep(wait_time)
+            
             acquired = _POLLING_LOCK_REDIS.set(_POLLING_LOCK_KEY, _POLLING_LOCK_VALUE, nx=True, ex=45)
             if acquired:
+                logging.info(f"Lock acquired successfully (Instance ID: {_POLLING_LOCK_VALUE}).")
                 break
             
-            # Check if existing lock is stale (though EX should handle it)
+            retry_count += 1
             existing_val = _POLLING_LOCK_REDIS.get(_POLLING_LOCK_KEY)
-            logging.warning(f"Attempt {attempt+1}: Lock active by instance {existing_val}. Retrying in 5s...")
+            if retry_count % 6 == 0: # Log every 30s (6 * 5s)
+                logging.warning(f"Standby Mode: Another instance ({existing_val}) is active. Waiting for turn... (Healthy for Koyeb)")
+            
             _time.sleep(5)
-
-        if not acquired:
-            logging.error("CRITICAL: Another instance of FinBot is already running. Exiting to prevent Conflict.")
-            # We exit with 0 to signal Koyeb that this is a "clean" skip, 
-            # otherwise it might keep restarting this instance immediately.
-            sys.exit(0)
             
         # Background thread to refresh lock
         def _refresh_lock():
@@ -129,15 +130,14 @@ if __name__ == '__main__':
                         _POLLING_LOCK_REDIS.expire(_POLLING_LOCK_KEY, 45)
                     else:
                         logging.error("CRITICAL: Redis lock lost! Instance might have been superseded.")
+                        # If lock is lost, we should probably stop polling rather than exiting the whole process
+                        # but for now we follow previous logic of exiting to trigger a clean restart if needed.
                         os._exit(1)
                 except Exception as e:
                     logging.debug(f"Lock refresh error: {e}")
         
         threading.Thread(target=_refresh_lock, daemon=True).start()
 
-    # Initialize Core Components (includes Database, AI, and Monitoring Server)
-    init_components()
-    
     if not TELEGRAM_BOT_TOKEN:
         logging.error("TELEGRAM_BOT_TOKEN is missing! Check .env file.")
         sys.exit(1)

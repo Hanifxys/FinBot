@@ -288,6 +288,12 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
         if not deps.db.has_permission(user_id, "view_users"): raise HTTPException(status_code=403)
         return [{"id": u.id, "telegram_id": u.telegram_id, "username": getattr(u, "username", "-"), "role": getattr(u, "role", "user"), "is_active": getattr(u, "is_active", True)} for u in deps.db.get_all_users()]
 
+    @app.get("/admin/oom/status", tags=["admin"])
+    def get_oom_status(user_id: int = Depends(get_current_user)):
+        if not deps.db.has_permission(user_id, "view_users"): raise HTTPException(status_code=403)
+        if not deps.oom_engine: return {"status": "not_initialized"}
+        return deps.oom_engine.get_status()
+
     @app.get("/admin/wrapper/stats", tags=["admin"])
     def admin_get_wrapper_stats(month: int = None, year: int = None, user_id: int = Depends(get_current_user)):
         if not deps.db.has_permission(user_id, "view_reports"): raise HTTPException(status_code=403)
@@ -345,6 +351,16 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
     def admin_broadcast_scheduled(user_id: int = Depends(get_current_user)):
         if not deps.db.has_permission(user_id, "broadcast"): raise HTTPException(status_code=403)
         return []
+
+    @app.post("/admin/broadcast/estimate", tags=["admin"])
+    def admin_broadcast_estimate(payload: BroadcastAudienceFilter, user_id: int = Depends(get_current_user)):
+        if not deps.db.has_permission(user_id, "broadcast"): raise HTTPException(status_code=403)
+        return {"estimated_recipients": 100}
+
+    @app.post("/admin/broadcast/preview", tags=["admin"])
+    def admin_broadcast_preview(payload: BroadcastPreviewRequest, user_id: int = Depends(get_current_user)):
+        if not deps.db.has_permission(user_id, "broadcast"): raise HTTPException(status_code=403)
+        return {"rendered": "Preview"}
 
     # --- Transactions & Budgets ---
     @app.get("/transactions", tags=["finance"])
