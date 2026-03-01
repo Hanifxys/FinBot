@@ -100,7 +100,7 @@ if __name__ == '__main__':
     
     # 1. Global Message Handler (The Brain) - Handles Text & Commands via NLP
     # We remove specific CommandHandlers to force everything through NLP engine
-    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
     
     # 2. Legacy Command Fallback (Optional: keep for /start, /help specifically)
     application.add_handler(CommandHandler("start", start))

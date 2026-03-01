@@ -50,7 +50,8 @@ class TransformerNLPBackend:
 
     def __init__(self, config: Optional[TransformerNLPConfig] = None):
         self.config = config or TransformerNLPConfig()
-        self.enabled = bool(self.config.enabled and TRANSFORMERS_AVAILABLE)
+        # Explicit check for torch availability to avoid NameError if import failed
+        self.enabled = bool(self.config.enabled and TRANSFORMERS_AVAILABLE and 'torch' in globals())
         self.device = 0 if (self.enabled and torch and torch.cuda.is_available()) else -1
 
         self._zero_shot = None

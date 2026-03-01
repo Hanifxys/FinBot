@@ -312,6 +312,13 @@ class FinancialIntelligenceEngine:
         
         return int(max(0, min(100, score)))
 
+    def find_investment_opportunities(self, user_id: int) -> List[str]:
+        """
+        Placeholder for investment opportunity discovery to prevent AttributeErrors.
+        In a real implementation, this would use persona and market data.
+        """
+        return ["Pertimbangkan reksadana pasar uang untuk dana darurat.", "Diversifikasi ke emas jika inflasi tinggi."]
+
     async def _calculate_macro_sensitivity(
         self, 
         user_id: int, 
