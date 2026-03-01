@@ -365,9 +365,15 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def set_persona_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Switch AI persona mode.
-    Usage: /mode coach | buddy | analyst
+    Accessible via NLP: "ganti mode coach", "ubah ke buddy".
     """
     args = context.args or []
+
+    # If no args, check if value was extracted from NLP
+    if not args and "args" in context.user_data:
+         # Try to recover args from user_data if passed from NLP handler
+         # (though context.args is usually populated by message handler)
+         pass
 
     if not args:
         await update.message.reply_text(
@@ -505,25 +511,58 @@ async def memory_insight_command(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def realintel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Financial Command Centre: Unified Intelligence View.
+    """
     user_id = update.effective_user.id
-    user_db = db.get_or_create_user(user_id, update.effective_user.username)
-    result = personal_finance_ai.real_financial_intelligence(user_db.id)
-    if not result.get("ok"):
-        await _reply(update, result.get("msg", "Data belum cukup."))
-        return
-    msg = (
-        "Real Financial Intelligence\n"
-        f"- Annual inflation: {result['annual_inflation_pct']}%\n"
-        f"- Income growth (3m): {result['income_growth_3m_pct']}%\n"
-        f"- Expense growth (3m): {result['expense_growth_3m_pct']}%\n"
-        f"- Purchasing power change: {result['purchasing_power_change_pct']}%\n"
-        f"- Lifestyle creep: {'YES' if result['lifestyle_creep'] else 'NO'}\n"
-        f"- Income stagnation: {'YES' if result['income_stagnation'] else 'NO'}"
-    )
-    msg += "\n- Persona investment hint: " + personal_finance_ai.persona_investment_hint(user_id, user_db.id)
-    if result.get("alerts"):
-        msg += "\n\nAlerts:\n" + "\n".join(f"- {a}" for a in result["alerts"])
-    await _reply(update, msg)
+    from core import fin_intel, market_data
+
+    # Send typing action or loading message
+    status_msg = await update.message.reply_text("⏳ *Mengakses satelit data finansial...*", parse_mode=ParseMode.MARKDOWN)
+
+    try:
+        # Fetch Intelligence
+        intel = await fin_intel.get_financial_health_status(user_id, market_data)
+
+        score = intel["score"]
+        color = "🟢" if score >= 80 else "🟡" if score >= 50 else "🔴"
+        
+        survival = intel["survival_days"]
+        survival_str = f"{survival} hari" if survival < 999 else "∞ (Aman)"
+        
+        deficit = intel["deficit_probability"]
+        deficit_color = "🟢" if deficit < 20 else "🔴" if deficit > 50 else "🟡"
+
+        savings = intel["savings_rate"]
+        stress = intel["stress_index"]
+        stress_color = "🟢" if stress == "Low" else "🔴" if stress == "High" else "🟡"
+
+        macro = intel.get("macro_sensitivity", {})
+        
+        msg = (
+            f"🛡️ **FINANCIAL COMMAND CENTRE**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"**Financial Stability Score**\n"
+            f"__ {color} **{score}/100** {color} __\n\n"
+            f"📊 **Kondisi Saat Ini:**\n"
+            f"• **Survival Mode:** `{survival_str}`\n"
+            f"• **Deficit Prob:** {deficit_color} `{deficit}%`\n"
+            f"• **Savings Rate:** `{savings:.1f}%`\n"
+            f"• **Stress Level:** {stress_color} `{stress}`\n\n"
+            f"🌍 **Personal Macro Sensitivity:**\n"
+            f"🏦 **Suku Bunga:**\n_{macro.get('interest_rate', '-')}_\n\n"
+            f"📈 **Inflasi:**\n_{macro.get('inflation', '-')}_\n\n"
+            f"💸 **Kurs Rupiah:**\n_{macro.get('currency', '-')}_\n\n"
+            f"📉 **Market Crash:**\n_{macro.get('market_crash', '-')}_\n"
+        )
+        
+        # Delete loading message and send real report
+        await status_msg.delete()
+        await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+
+    except Exception as e:
+        logger.error(f"RealIntel failed: {e}")
+        await status_msg.edit_text("❌ Gagal mengakses data intelijen. Coba lagi nanti.")
 
 
 async def financial_persona_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

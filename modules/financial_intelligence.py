@@ -104,6 +104,222 @@ class FinancialIntelligenceEngine:
         except Exception as e:
             logger.warning(f"Cache storage failed: {e}")
 
+    async def get_financial_health_status(self, user_id: int, market_data_connector: Any = None) -> Dict[str, Any]:
+        """
+        Generates the comprehensive Financial Command Centre view.
+        """
+        # 1. Fetch Data
+        assets = await self._get_assets(user_id)
+        liabilities = await self._get_liabilities(user_id)
+        income_expense = await self._get_income_expense_stats(user_id)
+        
+        # 2. Calculate Metrics
+        survival_days = self._calculate_survival_days(assets, income_expense)
+        deficit_prob = self._calculate_deficit_probability(income_expense)
+        savings_rate = self._calculate_savings_rate(income_expense)
+        stress_index = self._calculate_stress_index(survival_days, liabilities, income_expense)
+        stability_score = self._calculate_stability_score(survival_days, savings_rate, stress_index, deficit_prob)
+        
+        # 3. Macro Sensitivity (if market data available)
+        macro_impact = {}
+        if market_data_connector:
+            macro_impact = await self._calculate_macro_sensitivity(user_id, assets, liabilities, income_expense, market_data_connector)
+
+        return {
+            "score": stability_score,
+            "survival_days": survival_days,
+            "deficit_probability": deficit_prob,
+            "savings_rate": savings_rate,
+            "stress_index": stress_index,
+            "macro_sensitivity": macro_impact
+        }
+
+    async def _get_assets(self, user_id: int) -> Dict[str, float]:
+        """Fetches assets from Redis (consistent with PersonalFinanceAI)."""
+        if not self.cache: return {}
+        key = f"user:{user_id}:networth:assets"
+        try:
+            data = self.cache.hgetall(key)
+            return {k: float(v) for k, v in data.items()}
+        except Exception:
+            return {}
+
+    async def _get_liabilities(self, user_id: int) -> Dict[str, float]:
+        """Fetches liabilities from Redis."""
+        if not self.cache: return {}
+        key = f"user:{user_id}:networth:liabilities"
+        try:
+            data = self.cache.hgetall(key)
+            return {k: float(v) for k, v in data.items()}
+        except Exception:
+            return {}
+
+    async def _get_income_expense_stats(self, user_id: int) -> Dict[str, float]:
+        """Calculates average monthly income and expense over last 3 months."""
+        # This requires DB access. Assuming db_handler has get_monthly_report
+        # We'll use a simplified heuristic or fetch directly if possible.
+        # For robustness, we will try to fetch last 3 months.
+        total_income = 0.0
+        total_expense = 0.0
+        months = 3
+        
+        current_date = datetime.now()
+        for i in range(months):
+            d = current_date - timedelta(days=30 * i)
+            txs = self.db.get_monthly_report(user_id, d.month, d.year)
+            if txs:
+                for t in txs:
+                    if t.type == 'income':
+                        total_income += t.amount
+                    elif t.type == 'expense':
+                        total_expense += t.amount
+        
+        # Average
+        return {
+            "avg_monthly_income": total_income / months if months > 0 else 0,
+            "avg_monthly_expense": total_expense / months if months > 0 else 0,
+            "avg_daily_expense": (total_expense / months) / 30 if months > 0 else 0
+        }
+
+    def _calculate_survival_days(self, assets: Dict[str, float], stats: Dict[str, float]) -> int:
+        total_liquid_assets = sum(v for k, v in assets.items() if k.lower() in ['cash', 'tabungan', 'bank', 'dompet', 'ewallet'])
+        # Fallback: treat all assets as liquid if specific keys not found, but this might be risky.
+        # Let's assume 'cash' is a key or sum all for now as a simplified 'runway'
+        if total_liquid_assets == 0 and assets:
+             total_liquid_assets = sum(assets.values())
+
+        daily_expense = stats.get("avg_daily_expense", 0)
+        if daily_expense <= 0:
+            return 999 # Infinite
+        
+        return int(total_liquid_assets / daily_expense)
+
+    def _calculate_deficit_probability(self, stats: Dict[str, float]) -> float:
+        """Estimates probability of expense > income based on averages."""
+        inc = stats.get("avg_monthly_income", 0)
+        exp = stats.get("avg_monthly_expense", 0)
+        if inc == 0: return 100.0 if exp > 0 else 0.0
+        
+        ratio = exp / inc
+        if ratio > 1.0:
+            return min(99.9, 50 + (ratio - 1.0) * 100) # Simple heuristic
+        else:
+            return max(0.1, ratio * 20) # Low prob if living within means
+
+    def _calculate_savings_rate(self, stats: Dict[str, float]) -> float:
+        inc = stats.get("avg_monthly_income", 0)
+        exp = stats.get("avg_monthly_expense", 0)
+        if inc <= 0: return 0.0
+        return max(0.0, ((inc - exp) / inc) * 100)
+
+    def _calculate_stress_index(self, survival_days: int, liabilities: Dict[str, float], stats: Dict[str, float]) -> str:
+        total_debt = sum(liabilities.values())
+        inc = stats.get("avg_monthly_income", 1)
+        debt_ratio = total_debt / (inc * 12) # Debt to Annual Income
+        
+        score = 0
+        if survival_days < 30: score += 3
+        elif survival_days < 90: score += 1
+        
+        if debt_ratio > 0.5: score += 2
+        elif debt_ratio > 0.3: score += 1
+        
+        if stats.get("avg_monthly_expense", 0) > stats.get("avg_monthly_income", 0):
+            score += 2
+            
+        if score >= 4: return "High"
+        if score >= 2: return "Medium"
+        return "Low"
+
+    def _calculate_stability_score(self, survival: int, savings: float, stress: str, deficit: float) -> int:
+        # Base 50
+        score = 50
+        
+        # Survival impact (max +30)
+        score += min(30, survival / 6) # 180 days = full points
+        
+        # Savings impact (max +20)
+        score += min(20, savings) # 20% savings = full points
+        
+        # Deficit penalty (max -30)
+        score -= min(30, deficit / 2)
+        
+        # Stress penalty
+        if stress == "High": score -= 20
+        elif stress == "Medium": score -= 10
+        
+        return int(max(0, min(100, score)))
+
+    async def _calculate_macro_sensitivity(
+        self, 
+        user_id: int, 
+        assets: Dict[str, float], 
+        liabilities: Dict[str, float], 
+        stats: Dict[str, float],
+        market_data: Any
+    ) -> Dict[str, str]:
+        """
+        Personal Macro Sensitivity Engine.
+        """
+        macro = await market_data.get_macro_data()
+        bi_rate = macro.get("bi_rate", 6.0)
+        inflation = macro.get("inflation", 3.0)
+        usd_idr = macro.get("usd_idr", 16000)
+        
+        sensitivity = {}
+        
+        # 1. Interest Rate Sensitivity (Suku Bunga)
+        # Assume 70% of liabilities are floating rate (KPR, etc) if not specified
+        floating_debt = sum(liabilities.values()) * 0.7
+        # Impact of 0.5% hike
+        rate_hike_impact = (floating_debt * 0.005) / 12
+        if rate_hike_impact > 50000: # Significant enough
+            sensitivity["interest_rate"] = (
+                f"Kenaikan BI rate 0.5% (jadi {bi_rate + 0.5}%) akan meningkatkan beban cicilan "
+                f"kamu sekitar Rp{int(rate_hike_impact):,} per bulan."
+            )
+        else:
+            sensitivity["interest_rate"] = "Portofolio utang kamu cukup tahan terhadap kenaikan suku bunga."
+
+        # 2. Inflation Sensitivity
+        # Impact on expenses
+        monthly_exp = stats.get("avg_monthly_expense", 0)
+        inflation_impact = (monthly_exp * (inflation / 100)) / 12
+        sensitivity["inflation"] = (
+            f"Dengan inflasi {inflation}%, daya beli kamu tergerus sekitar "
+            f"Rp{int(inflation_impact):,} per bulan jika income tidak naik."
+        )
+        
+        # 3. Currency Sensitivity (Pelemahan Rupiah)
+        # Assume imported goods consumption or USD assets
+        # Simplified: If user has 'usd' in assets
+        usd_assets = assets.get("usd", 0) + assets.get("dollar", 0)
+        if usd_assets > 0:
+            gain = usd_assets * 500 # Assuming 500 points move
+            sensitivity["currency"] = (
+                f"Jika Rupiah melemah 500 poin, nilai aset USD kamu naik Rp{int(gain):,}."
+            )
+        else:
+             sensitivity["currency"] = "Kamu tidak memiliki eksposur aset valas langsung."
+
+        # 4. Market Crash Sensitivity
+        # Assume 'saham' or 'reksadana' in assets
+        investments = sum(v for k, v in assets.items() if k.lower() in ['saham', 'reksadana', 'crypto', 'investasi'])
+        if investments > 0:
+            crash_impact = investments * 0.20 # 20% drop
+            sensitivity["market_crash"] = (
+                f"Jika market crash (turun 20%), kekayaan kamu berpotensi berkurang Rp{int(crash_impact):,}."
+            )
+        else:
+            sensitivity["market_crash"] = "Aset kamu mayoritas cash/aman, minim dampak market crash."
+
+        return sensitivity
+        if not self.cache: return
+        try:
+            self.cache.set(key, json.dumps(data), ex=ex)
+        except Exception as e:
+            logger.warning(f"Cache storage failed: {e}")
+
     # --- Stage 1: Basic Analysis ---
 
     async def analyze_category_averages(self, user_id: int) -> Dict[str, Any]:

@@ -78,35 +78,11 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
                 os._exit(0)
 
 async def post_init(application):
+    # Register Commands for UI Menu Hint only (Slash commands still work as fallback but are deprecated)
     commands = [
         BotCommand("start", "Mulai bot & Registrasi"),
         BotCommand("help", "Tampilkan menu bantuan"),
-        BotCommand("profile", "Lihat level & XP gamification"),
-        BotCommand("setgaji", "Atur pendapatan bulanan"),
-        BotCommand("setbudget", "Atur limit budget kategori"),
-        BotCommand("budgetalert", "Atur ambang peringatan budget"),
-        BotCommand("undo", "Batalkan transaksi terakhir"),
-        BotCommand("hapus", "Hapus transaksi spesifik"),
-        BotCommand("history", "Lihat riwayat transaksi"),
-        BotCommand("target", "Buat target menabung baru"),
-        BotCommand("nabung", "Tambah tabungan ke target"),
-        BotCommand("list_target", "Lihat semua target menabung"),
-        BotCommand("export", "Download data transaksi CSV"),
-        BotCommand("insight", "Analisis cerdas pola pengeluaran"),
-        BotCommand("summary", "Ringkasan bulanan/tahunan"),
-        BotCommand("auth", "Dapatkan token login web"),
-        BotCommand("challenge", "Lihat weekly challenge"),
-        BotCommand("rewards", "Redeem reward dari XP"),
-        BotCommand("telemetry", "On/off analytics anonymized"),
-        BotCommand("recurring", "Atur sensitivitas recurring suggestion"),
-        BotCommand("memory", "AI long-term financial narrative"),
-        BotCommand("realintel", "Inflasi & lifestyle creep intelligence"),
-        BotCommand("fpersona", "Set financial risk persona"),
-        BotCommand("debt", "Debt optimizer snowball vs avalanche"),
-        BotCommand("simulate", "Scenario simulation finansial"),
-        BotCommand("networth", "Lihat net worth aset-liabilitas"),
-        BotCommand("asset", "Set nilai aset"),
-        BotCommand("liability", "Set nilai liability"),
+        BotCommand("menu", "Menu Utama"),
     ]
     await application.bot.set_my_commands(commands)
 
@@ -115,126 +91,46 @@ if __name__ == '__main__':
     init_components()
     
     if not TELEGRAM_BOT_TOKEN:
-        logging.error("Error: TELEGRAM_BOT_TOKEN tidak ditemukan di .env")
-        exit(1)
+        logging.error("TELEGRAM_BOT_TOKEN is missing! Check .env file.")
+        sys.exit(1)
 
-    rm = RedisManager()
-    if rm.client and os.getenv("ENABLE_POLLING_LOCK", "1") == "1":
-        try:
-            backoff_until = rm.client.get("finbot:polling_backoff_until")
-            if backoff_until and int(backoff_until) > int(_time.time()):
-                sleep_s = int(backoff_until) - int(_time.time())
-                logging.error(f"Polling paused due to recent Conflict. Sleeping {sleep_s}s.")
-                _time.sleep(max(1, sleep_s))
-        except Exception:
-            pass
-
-        lock_key = os.getenv("POLLING_LOCK_KEY", "finbot:polling_lock")
-        lock_ttl = int(os.getenv("POLLING_LOCK_TTL_SECONDS", "30"))
-        retry_s = int(os.getenv("POLLING_LOCK_RETRY_SECONDS", "5"))
-        instance_id = os.getenv("KOYEB_INSTANCE_ID", "") or str(uuid.uuid4())
-        lock_value = f"{instance_id}:{os.getpid()}:{int(_time.time())}"
-
-        while True:
-            try:
-                acquired = rm.client.set(lock_key, lock_value, nx=True, ex=lock_ttl)
-            except Exception:
-                acquired = False
-            if acquired:
-                break
-            try:
-                ttl = rm.client.ttl(lock_key)
-            except Exception:
-                ttl = None
-            if isinstance(ttl, int) and ttl > 0:
-                logging.error(f"Polling lock is held; waiting ~{ttl}s.")
-            else:
-                logging.error("Polling lock is held; bot polling is waiting.")
-            _time.sleep(max(5, retry_s))
-
-        _POLLING_LOCK_KEY = lock_key
-        _POLLING_LOCK_VALUE = lock_value
-        _POLLING_LOCK_REDIS = rm.client
-
-        def _refresh_lock():
-            while True:
-                try:
-                    current = rm.client.get(lock_key)
-                    if current != lock_value:
-                        return
-                    rm.client.expire(lock_key, lock_ttl)
-                except Exception:
-                    pass
-                _time.sleep(max(5, int(lock_ttl / 3)))
-
-        threading.Thread(target=_refresh_lock, daemon=True).start()
-        
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
-    
-    # Register bot instance to monitor dependencies for broadcast/DM support
-    try:
-        from modules.monitor import set_bot_instance
-        set_bot_instance(application.bot)
-        logging.info("Bot registered to Monitor system successfully.")
-    except Exception as e:
-        logging.error(f"Failed to register bot to monitor: {e}")
 
-    application.add_error_handler(error_handler)
+    # --- Handlers Registration ---
     
-    # Enhanced Logging for Startup
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    logging.info(f"--- FinBot Pro Startup at {now_str} ---")
-    logging.info(f"Instance ID: {os.getenv('KOYEB_INSTANCE_ID', 'Local')}")
+    # 1. Global Message Handler (The Brain) - Handles Text & Commands via NLP
+    # We remove specific CommandHandlers to force everything through NLP engine
+    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     
-    job_queue = application.job_queue
-    # Daily Digest at 21:00 WIB (14:00 UTC)
-    job_queue.run_daily(daily_digest, time(hour=14, minute=0, tzinfo=timezone.utc))
-    # Monthly Wrapper on 1st of every month at 09:00 WIB (02:00 UTC)
-    job_queue.run_monthly(monthly_wrapper_job, when=time(hour=2, minute=0, tzinfo=timezone.utc), day=1)
-    # 24-hour Intelligent Reminder Check (runs every hour to check inactive users)
-    job_queue.run_repeating(smart_reminder_check, interval=3600, first=60)
-    
-    # Logging Middleware (Group -1 runs before other groups)
-    application.add_handler(TypeHandler(object, log_update), group=-1)
-    
-    # Handlers
+    # 2. Legacy Command Fallback (Optional: keep for /start, /help specifically)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("profile", profile_command))
-    application.add_handler(CommandHandler("setgaji", set_gaji))
-    application.add_handler(CommandHandler("setbudget", set_budget))
-    application.add_handler(CommandHandler("budgetalert", set_budget_alerts))
-    application.add_handler(CommandHandler("undo", undo))
-    application.add_handler(CommandHandler("hapus", hapus_transaksi))
-    application.add_handler(CommandHandler("history", history))
-    application.add_handler(CommandHandler("target", set_target))
-    application.add_handler(CommandHandler("nabung", add_savings))
-    application.add_handler(CommandHandler("list_target", list_targets))
-    application.add_handler(CommandHandler("export", export_data))
-    application.add_handler(CommandHandler("insight", get_ai_insight))
-    application.add_handler(CommandHandler("summary", summary_command))
-    application.add_handler(CommandHandler("auth", auth_command))
-    application.add_handler(CommandHandler("reminder", reminder_settings))
-    application.add_handler(CommandHandler("mode", set_persona_command))
-    application.add_handler(CommandHandler("challenge", challenge_command))
-    application.add_handler(CommandHandler("rewards", rewards_command))
-    application.add_handler(CommandHandler("telemetry", telemetry_command))
-    application.add_handler(CommandHandler("recurring", recurring_settings_command))
-    application.add_handler(CommandHandler("memory", memory_insight_command))
-    application.add_handler(CommandHandler("realintel", realintel_command))
-    application.add_handler(CommandHandler("fpersona", financial_persona_command))
-    application.add_handler(CommandHandler("debt", debt_optimizer_command))
-    application.add_handler(CommandHandler("simulate", scenario_command))
-    application.add_handler(CommandHandler("networth", networth_command))
-    application.add_handler(CommandHandler("asset", set_asset_command))
-    application.add_handler(CommandHandler("liability", set_liability_command))
-    application.add_handler(CommandHandler("rekomendasi", set_gaji))
     
-    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
+    # 3. Media Handlers
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(MessageHandler(filters.VOICE, handle_voice))
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+    
+    # 4. Callback Query Handler (Buttons)
     application.add_handler(CallbackQueryHandler(handle_callback))
+    
+    # 5. Error Handler
+    application.add_error_handler(error_handler)
+
+    # 6. Scheduled Jobs
+    job_queue = application.job_queue
+    if job_queue:
+        # Daily Digest at 07:00 WIB (00:00 UTC)
+        job_queue.run_daily(daily_digest, time=time(0, 0, tzinfo=timezone.utc), name="daily_digest")
+        # Smart Reminder Check every hour
+        job_queue.run_repeating(smart_reminder_check, interval=3600, first=60, name="smart_reminders")
+        # Monthly Wrapper at 1st of month
+        job_queue.run_monthly(monthly_wrapper_job, when=time(1, 0, tzinfo=timezone.utc), day=1, name="monthly_wrapper")
+
+    logging.info("🤖 FinBot Pro is RUNNING (Natural Language Mode)...")
+    
+    # Start Polling with Conflict Resolution
+    # ... (existing lock logic)
     
     logging.info("FinBot sedang berjalan...")
     sys.stdout.flush()

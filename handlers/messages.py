@@ -158,9 +158,9 @@ def _tx_preview_message(
     if confidence is not None:
         confidence = max(0.0, min(1.0, float(confidence)))
         if confidence < 0.75:
-            msg += f"\nAku baca ini {amount_str} {category}, bener?"
+            msg += f"\n💡 Aku baca ini {amount_str} untuk {category}, bener gak?"
         else:
-            msg += f"\nConfidence parser: {int(confidence * 100)}%"
+            msg += f"\n✅ Confidence parser: {int(confidence * 100)}%"
     msg += "\n\n*Konfirmasi untuk simpan transaksi ini?*"
     return msg
 
@@ -846,7 +846,7 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
             "QUERY_SUMMARY", "SHARING_INFO", "GREETING", "SMALL_TALK", "HELP",
             "STOP_NOTIF", "CANCEL", "ASK_FOR_NOTIF", "EDIT_TRANSACTION",
             "HISTORY", "DELETE_TRANSACTION", "PROFILE", "AUTH",
-            "QUESTION", "SUMMARIZE"
+            "QUESTION", "SUMMARIZE", "REAL_INTEL"
         }
 
         t1 = time.perf_counter()
@@ -1143,6 +1143,11 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
             summary = summary_res.get("summary", "Gagal merangkum.")
             takeaways = "\n\n📌 **Poin Penting:**\n- " + "\n- ".join(summary_res.get("key_takeaways", []))
             await update.message.reply_text(f"{summary}{takeaways}", parse_mode='Markdown')
+            return
+
+        if intent == "REAL_INTEL":
+            from handlers.commands import realintel_command
+            await realintel_command(update, context)
             return
 
         if intent == "SMALL_TALK":

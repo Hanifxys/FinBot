@@ -11,6 +11,7 @@ from config import GROQ_API_KEY
 from modules.amounts import parse_primary_amount_id
 from modules.transformer_nlp import TransformerNLPBackend, TransformerNLPConfig
 from modules.nlp_config_loader import NLPConfigLoader
+from modules.semantic_classifier import SemanticCategoryClassifier, split_activity_detail
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,9 @@ class NLPProcessor:
         self.intent_ensemble_enabled = os.getenv("NLP_ENABLE_INTENT_ENSEMBLE", "true").lower() in ("1", "true", "yes", "on")
         self.explainability_enabled = os.getenv("NLP_ENABLE_EXPLAINABILITY", "true").lower() in ("1", "true", "yes", "on")
         self.confidence_temperature = float(os.getenv("NLP_CONFIDENCE_TEMPERATURE", "0.85"))
+        self.category_conf_threshold = float(os.getenv("NLP_CATEGORY_CONF_THRESHOLD", "0.58"))
+        self.semantic_model_path = os.getenv("NLP_SEMANTIC_MODEL_PATH", "models/semantic_classifier_id.json")
+        self.semantic_classifier = SemanticCategoryClassifier.load(self.semantic_model_path)
 
         # Slang & Abbreviation Mapping (Indonesian)
         self.slang_map = {
@@ -119,6 +123,7 @@ class NLPProcessor:
             "elite_analysis": re.compile(r'\b(elite|intel|market|risk|prediksi pasar|investasi|analisis mendalam)\b', re.IGNORECASE),
             "investment_opps": re.compile(r'\b(peluang|opportunity|cuan|beli apa|investasi apa|rekomendasi)\b', re.IGNORECASE),
             "doc_analysis": re.compile(r'\b(analisis file|bedah laporan|parsing|baca laporan)\b', re.IGNORECASE),
+            "real_intel": re.compile(r'\b(status|kondisi|kesehatan|health|intel|macro|makro|sensitivity|sensitivitas|risk|risiko|command center|pusat komando)\b', re.IGNORECASE),
             "bulk_transaction": re.compile(r'(\n|,|;|:)', re.IGNORECASE), # Heuristic for multiple items
         }
 
@@ -187,6 +192,43 @@ class NLPProcessor:
         except Exception as e:
             logger.error(f"Transformer backend init failed: {e}")
             self.transformer_backend = None
+
+    def train_semantic_classifier(self, dataset_path: str) -> Dict[str, Any]:
+        """
+        Train lightweight semantic category classifier from JSONL dataset.
+        Expected row format: {"text": "...", "category": "..."}.
+        """
+        try:
+            rows: List[Dict[str, Any]] = []
+            with open(dataset_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        import json
+
+                        rows.append(json.loads(line))
+                    except Exception:
+                        continue
+            if len(rows) < 1000:
+                return {"ok": False, "error": "Dataset minimal 1000 sampel.", "rows": len(rows)}
+            self.semantic_classifier.train(rows)
+            self.semantic_classifier.save(self.semantic_model_path)
+            return {"ok": True, "rows": len(rows), "model_path": self.semantic_model_path}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def _semantic_category(self, text: str) -> Tuple[str, float]:
+        try:
+            if not self.semantic_classifier or not self.semantic_classifier.is_trained:
+                return "Lain-lain", 0.0
+            pred = self.semantic_classifier.predict(text)
+            if pred.confidence < self.category_conf_threshold:
+                return "Lain-lain", float(pred.confidence)
+            return pred.category, float(pred.confidence)
+        except Exception:
+            return "Lain-lain", 0.0
 
     def _rebuild_keyword_patterns(self) -> None:
         self._compiled_keywords = {}
@@ -636,6 +678,10 @@ class NLPProcessor:
         if self._intents_map["doc_analysis"].search(text):
             return {"intent": "DOC_ANALYSIS", "confidence": 0.9}
 
+        # Real Intel / Financial Command Center
+        if self._intents_map["real_intel"].search(text):
+            return {"intent": "REAL_INTEL", "confidence": 0.95}
+
         # Split Bill (makan bareng total 450rb bagi 3)
         if self._intents_map["split_bill"].search(text) and self._extract_amount(text) > 0:
             return {"intent": "SPLIT_BILL", "confidence": 0.9}
@@ -752,7 +798,7 @@ class NLPProcessor:
             import json
             return json.loads(chat_completion.choices[0].message.content)
         except Exception as e:
-            logging.error(f"LLM Intent Classification Error: {e}")
+            logger.error(f"LLM Intent Classification Error: {e}")
             return None
         finally:
             gc.collect()
@@ -945,6 +991,31 @@ class NLPProcessor:
         classification = self.classify_intent(text)
         forced_type = classification.get("type")
         intent = classification.get("intent")
+        
+        # Explicitly return intent
+        if intent and intent != "ADD_TRANSACTION":
+             return {
+                 "intent": intent, 
+                 "amount": None, 
+                 "confidence": classification.get("confidence", 0),
+                 "is_partial": intent != "UNKNOWN" # Keep context if it's a known intent but maybe partial args
+             }
+
+        # Special Case: Partial Transaction Detection (No Intent yet but looks like transaction)
+        # e.g. "makan siang" (no amount) -> Intent is UNKNOWN or generic
+        amount = self._extract_amount(text)
+        if amount == 0 and intent == "UNKNOWN":
+             # Check if it has a category keyword
+             cat, conf = self._detect_category(text)
+             if cat != "Lain-lain":
+                 return {
+                     "intent": "ADD_TRANSACTION",
+                     "amount": None,
+                     "category": cat,
+                     "merchant": self.extract_merchant(text),
+                     "is_partial": True,
+                     "confidence": conf
+                 }
 
         passthrough_intents = {
             "ROAST_WALLET",
@@ -957,6 +1028,7 @@ class NLPProcessor:
             "UNDO",
             "EXECUTIVE_MODE",
             "ELITE_ANALYSIS",
+            "REAL_INTEL",
             "INVESTMENT_OPPS",
             "DOC_ANALYSIS",
             "SET_BUDGET",
@@ -1062,7 +1134,10 @@ class NLPProcessor:
 
         # 4. Heuristic Extraction (Standard)
         category, cat_conf = self._detect_category(text_norm)
+        activity_title, detail_desc = split_activity_detail(text, category)
         merchant = self.extract_merchant(text_norm)
+        if merchant == "Transaksi" and activity_title != "Transaksi":
+            merchant = activity_title
         date = self._extract_date(text)
 
         if transformer_hint:
@@ -1084,6 +1159,8 @@ class NLPProcessor:
                 "type": forced_type,
                 "category": category if category != "Lain-lain" else None,
                 "merchant": merchant,
+                "title": activity_title,
+                "detail": detail_desc,
                 "date": date,
                 "confidence": self._calibrate_confidence(0.45 if merchant != "Transaksi" else 0.3, ceil=0.7),
                 "is_partial": True,
@@ -1105,6 +1182,8 @@ class NLPProcessor:
             "type": type_,
             "category": category,
             "merchant": merchant,
+            "title": activity_title,
+            "detail": detail_desc,
             "date": date,
             "confidence": self._calibrate_confidence(
                 min(0.95, cat_conf + 0.1) if is_complete else 0.5,
@@ -1294,11 +1373,16 @@ class NLPProcessor:
             if pattern.search(text):
                 return category, 0.95
         
-        # 3. Heuristic: if text contains "beli" or "bayar" but no category found
+        # 3. Semantic classifier
+        sem_cat, sem_conf = self._semantic_category(text)
+        if sem_cat != "Lain-lain":
+            return sem_cat, max(0.75, sem_conf)
+
+        # 4. Heuristic: if text contains "beli" or "bayar" but no category found
         if any(kw in text for kw in ["beli", "bayar", "pesan", "checkout"]):
             return "Belanja", 0.75
 
-        # 3. Fuzzy Match for Typos (e.g. "mkan" -> "makan")
+        # 5. Fuzzy Match for Typos (e.g. "mkan" -> "makan")
         all_keywords = []
         keyword_to_cat = {}
         for cat, kws in self.category_keywords.items():
@@ -1313,7 +1397,7 @@ class NLPProcessor:
                 if matches:
                     return keyword_to_cat[matches[0]], 0.7
 
-        # 4. Transformer semantic categorization fallback
+        # 6. Transformer semantic categorization fallback
         if self.transformer_backend and self.transformer_backend.is_ready:
             guess, tr_conf = self.transformer_backend.classify_category(
                 text,
@@ -1322,7 +1406,7 @@ class NLPProcessor:
             if guess != "Lain-lain":
                 return guess, tr_conf
 
-        # 5. LLM Deep Categorization Fallback
+        # 7. LLM Deep Categorization Fallback
         if self.groq_enabled and self.llm_category_enabled:
             guess, llm_conf = self._llm_guess_category(text)
             return guess, llm_conf
@@ -1409,6 +1493,22 @@ class NLPProcessor:
         Tries to extract merchant name from text.
         Example: "mixue 48rb" -> Mixue
         """
+        # 0) Try semantic split first for cleaner title/detail extraction.
+        try:
+            title, detail = split_activity_detail(text)
+            if detail:
+                # Prefer place/object phrase after preposition (di/ke/untuk)
+                m = re.search(r"\b(?:di|ke|untuk)\s+(.+)$", detail.lower())
+                if m:
+                    candidate = m.group(1).strip()
+                    candidate = re.sub(r"\d+", "", candidate).strip()
+                    if candidate:
+                        return candidate.title()
+            if title and title != "Transaksi":
+                return title
+        except Exception:
+            pass
+
         # 1. Remove amounts and suffixes
         clean_text = self.normalize_text(text)
         clean_text = re.sub(r'\d+', '', clean_text)

@@ -14,6 +14,19 @@ class MarketDataConnector:
         self.api_key = api_key
         self.base_url = "https://www.alphavantage.co/query"
 
+    async def get_macro_data(self) -> Dict[str, float]:
+        """
+        Fetches or simulates key macroeconomic indicators for Indonesia.
+        """
+        # In a real scenario, this would fetch from TradingEconomics or BI API
+        # For now, we simulate realistic current values
+        return {
+            "bi_rate": 6.25,      # Percent
+            "inflation": 2.84,    # Percent (YoY)
+            "usd_idr": 16250.0,   # Exchange rate
+            "ihsg_return": 4.5    # YTD Return %
+        }
+
     async def get_realtime_price(self, ticker: str) -> Dict[str, Any]:
         """
         Fetches real-time price for a ticker.
