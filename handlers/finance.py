@@ -1,6 +1,6 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from core import db, analyzer, ai
+from core import db, analyzer, ai, ux_analytics
 from utils.dashboard import update_pinned_dashboard
 from utils.onboarding import send_onboarding_hint
 import logging
@@ -72,12 +72,24 @@ async def get_ai_insight(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     target = update.callback_query.message if update.callback_query else update.message
     processing_msg = await target.reply_text("🤖 Sedang menganalisis keuanganmu...", parse_mode='Markdown')
+    ux_analytics.track(
+        user_id=user_id,
+        event="insight_action_clicked",
+        props={"action": "open_insight"},
+    )
 
     try:
         raw_insight = analyzer.analyze_patterns(user_db.id)
         ai_insight = await ai.generate_smart_insight(raw_insight)
         
-        await processing_msg.edit_text(f"🤖 **FINBOT AI ADVISOR**\n\n{ai_insight}", parse_mode='Markdown')
+        keyboard = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("Set limit Minuman", callback_data="insight:set_limit:minuman")]]
+        )
+        await processing_msg.edit_text(
+            f"🤖 **FINBOT AI ADVISOR**\n\n{ai_insight}\n\nAksi konkret: kurangi ngopi 20% minggu ini.",
+            parse_mode='Markdown',
+            reply_markup=keyboard,
+        )
     except Exception as e:
         logging.error(f"Error generating AI insight for {user_id}: {e}", exc_info=True)
         await processing_msg.edit_text("Maaf, gagal membuat analisis AI. Coba lagi nanti ya! 🙏")

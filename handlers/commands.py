@@ -25,7 +25,7 @@ from telegram import (
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
-from core import ai, analyzer, budget_mgr, db
+from core import ai, analyzer, budget_mgr, db, weekly_challenges, gamify, ux_analytics, recurring_mgr
 
 logger = logging.getLogger(__name__)
 
@@ -383,6 +383,90 @@ async def set_persona_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as exc:
         logger.exception("set_persona_command failed for user=%d", user_id)
         await update.message.reply_text("❌ Gagal mengganti mode. Coba lagi nanti.")
+
+
+async def challenge_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    item = weekly_challenges.get_current(user_id)
+    msg = (
+        f"Weekly Challenge: **{item.get('title', '-') }**\n"
+        f"{item.get('description', '-')}\n\n"
+        f"Progress: {item.get('progress', 0)}/{item.get('target', 1)}\n"
+        f"Reward: +{item.get('reward_xp', 0)} XP"
+    )
+    kb = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("Share progress", callback_data="challenge:share")]]
+    )
+    await _reply(update, msg, parse_mode=ParseMode.MARKDOWN, reply_markup=kb)
+
+
+async def rewards_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    market = weekly_challenges.get_marketplace()
+    profile = await gamify.get_user_profile(user_id)
+    xp = int(profile.get("xp", 0))
+    lines = [f"Reward Marketplace (XP kamu: {xp})", ""]
+    kb_rows = []
+    for item in market:
+        lines.append(f"- {item['name']} ({item['cost_xp']} XP)")
+        kb_rows.append([InlineKeyboardButton(item["name"], callback_data=f"reward:redeem:{item['id']}")])
+    await _reply(update, "\n".join(lines), reply_markup=InlineKeyboardMarkup(kb_rows))
+
+
+async def telemetry_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    args = context.args or []
+    if not args:
+        await _reply(
+            update,
+            "Telemetry status default: ON (minimal anonymized metrics).\nGunakan `/telemetry off` untuk opt-out, `/telemetry on` untuk aktifkan.",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+    action = args[0].strip().lower()
+    if action not in {"on", "off"}:
+        await _reply(update, "Gunakan `/telemetry on` atau `/telemetry off`.", parse_mode=ParseMode.MARKDOWN)
+        return
+    user_id = update.effective_user.id
+    ok = ux_analytics.set_consent(user_id, allowed=(action == "on"))
+    if ok:
+        await _reply(update, f"Telemetry {'diaktifkan' if action == 'on' else 'dinonaktifkan'} untuk akun kamu.")
+    else:
+        await _reply(update, "Gagal mengubah pengaturan telemetry saat ini.")
+
+
+async def recurring_settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Configure recurring suggestion sensitivity.
+    Usage: /recurring [2-6]
+    """
+    user_id = update.effective_user.id
+    args = context.args or []
+
+    if not args:
+        current = recurring_mgr.get_sensitivity(user_id)
+        await _reply(
+            update,
+            (
+                "Sensitivity recurring suggestion kamu saat ini: "
+                f"`{current}`\n"
+                "Gunakan `/recurring 2` (lebih sensitif) s.d. `/recurring 6` (lebih ketat)."
+            ),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+
+    try:
+        value = int(args[0])
+    except ValueError:
+        await _reply(update, "Gunakan angka 2 sampai 6. Contoh: `/recurring 3`.", parse_mode=ParseMode.MARKDOWN)
+        return
+
+    ok = recurring_mgr.set_sensitivity(user_id, value)
+    if not ok:
+        await _reply(update, "Gagal menyimpan pengaturan recurring saat ini.")
+        return
+    saved = recurring_mgr.get_sensitivity(user_id)
+    await _reply(update, f"Sensitivity recurring di-set ke `{saved}`.", parse_mode=ParseMode.MARKDOWN)
 
 
 # ---------------------------------------------------------------------------

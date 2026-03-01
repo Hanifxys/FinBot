@@ -1,8 +1,10 @@
 import time
+import asyncio
 from .models import get_supabase, Tables
 from datetime import datetime, timedelta
 import logging
 from modules.crypto import EncryptionManager
+from database.validation import validate_row
 
 # Cache TTL (seconds)
 CACHE_TTL_USER = 300
@@ -47,6 +49,15 @@ class DBHandler:
             return (dt - timedelta(days=1)).date()
         return dt.date()
 
+    @staticmethod
+    def _entity_from_row(table: str, row: dict, fallback_name: str):
+        try:
+            validated = validate_row(table, row)
+            data = validated.model_dump() if hasattr(validated, "model_dump") else row
+            return type(fallback_name, (object,), data)
+        except Exception:
+            return type(fallback_name, (object,), row)
+
     def _safe_execute(self, query_builder):
         """Execute a Supabase query with retry logic for connection errors."""
         max_retries = 5 # Increased retries
@@ -68,6 +79,33 @@ class DBHandler:
                 logging.error(f"Supabase Execution Error: {err_msg}")
                 raise e
 
+    async def _safe_execute_async(self, query_builder):
+        """
+        Async variant of _safe_execute for non-blocking retry loops.
+        Keep sync variant for backward compatibility while async call-sites are
+        migrated incrementally.
+        """
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                return query_builder.execute()
+            except Exception as e:
+                err_msg = str(e)
+                is_protocol_error = any(
+                    kw in err_msg for kw in ["RemoteProtocolError", "ConnectionTerminated", "PROTOCOL_ERROR"]
+                )
+                if is_protocol_error and attempt < max_retries - 1:
+                    logging.warning(
+                        "Supabase protocol error detected (%s), retrying async (%d/%d)...",
+                        err_msg,
+                        attempt + 1,
+                        max_retries,
+                    )
+                    await asyncio.sleep(1.0 * (attempt + 1))
+                    continue
+                logging.error(f"Supabase Execution Error: {err_msg}")
+                raise e
+
     def get_user(self, telegram_id):
         now = time.time()
         cached = self._user_cache.get(telegram_id)
@@ -76,7 +114,7 @@ class DBHandler:
 
         response = self._safe_execute(self.supabase.table(Tables.USERS).select("*").eq("telegram_id", telegram_id))
         if response.data:
-            user = type('User', (object,), response.data[0])
+            user = self._entity_from_row(Tables.USERS, response.data[0], "User")
             self._user_cache[telegram_id] = {'data': user, 'ts': now}
             return user
         return None
@@ -84,7 +122,7 @@ class DBHandler:
     def get_all_users(self):
         # Heavy query, consider pagination for scale
         response = self._safe_execute(self.supabase.table(Tables.USERS).select("*"))
-        return [type('User', (object,), item) for item in response.data]
+        return [self._entity_from_row(Tables.USERS, item, "User") for item in response.data]
 
     def get_daily_transactions(self, user_id, date_obj):
         start_time = datetime.combine(date_obj, datetime.min.time()).isoformat()
@@ -92,14 +130,14 @@ class DBHandler:
         
         response = self._safe_execute(self.supabase.table(Tables.TRANSACTIONS).select("*").eq("user_id", user_id)\
             .gte("date", start_time).lte("date", end_time))
-        return [type('Transaction', (object,), self._decrypt_tx(item)) for item in response.data]
+        return [self._entity_from_row(Tables.TRANSACTIONS, self._decrypt_tx(item), "Transaction") for item in response.data]
 
     def get_or_create_user(self, telegram_id, username):
         user = self.get_user(telegram_id)
         if not user:
             data = {"telegram_id": telegram_id, "username": username}
             response = self._safe_execute(self.supabase.table(Tables.USERS).insert(data))
-            new_user = type('User', (object,), response.data[0])
+            new_user = self._entity_from_row(Tables.USERS, response.data[0], "User")
             self._user_cache[telegram_id] = {'data': new_user, 'ts': time.time()}
             return new_user
         elif getattr(user, 'username', '') != username:
@@ -157,7 +195,7 @@ class DBHandler:
         if trans_type == 'expense':
             self.update_budget_usage(user_id, category, amount)
             
-        return type('Transaction', (object,), response.data[0])
+        return self._entity_from_row(Tables.TRANSACTIONS, response.data[0], "Transaction")
 
     def _update_balance_snapshot(self, user_id, amount, trans_type):
         """Optimized Snapshot Engine"""

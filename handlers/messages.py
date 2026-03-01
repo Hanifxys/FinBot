@@ -19,7 +19,21 @@ from telegram import (
 from telegram.ext import ContextTypes
 
 # Core Modules
-from core import db, premium_ai, ws_server, nlp, ocr, budget_mgr, analyzer, persona_mgr, fin_intel, multimodal_ai, doc_processor, market_data
+from core import (
+    db,
+    premium_ai,
+    ws_server,
+    nlp,
+    ocr,
+    budget_mgr,
+    analyzer,
+    persona_mgr,
+    fin_intel,
+    multimodal_ai,
+    doc_processor,
+    market_data,
+    ux_analytics,
+)
 from config import CATEGORIES
 
 # Handlers & Utils
@@ -479,6 +493,7 @@ async def _send_cancel_flow(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Premium: Handle Voice Notes using Groq Whisper"""
     user_id = update.effective_user.id
+    started = time.perf_counter()
     voice_path = f"temp_voice_{user_id}.ogg"
     
     try:
@@ -496,6 +511,11 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Process transcribed text
         await _process_text(update, context, text)
+        ux_analytics.track(
+            user_id=user_id,
+            event="voice_entry_processed",
+            props={"latency_ms": round((time.perf_counter() - started) * 1000.0, 2)},
+        )
         
     except Exception as e:
         logger.error(f"Voice handling error for {user_id}: {e}", exc_info=True)
@@ -651,6 +671,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 suggestions=_suggest_categories_from_text(merchant, pending.get("category")),
                 low_confidence=bool(review_required),
             )
+        )
+        ux_analytics.track(
+            user_id=user_id,
+            event="preview_shown",
+            props={"source": "ocr", "confidence": pending.get("confidence", 0.0)},
         )
         
     except Exception as e:
@@ -918,6 +943,11 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
 
         metrics_ms["total"] = round((time.perf_counter() - started_total) * 1000.0, 2)
         _log_nlp_metrics(user_id, text, extracted, metrics_ms)
+        ux_analytics.track(
+            user_id=user_id,
+            event="manual_entry_processed",
+            props={"latency_ms": metrics_ms["total"], "intent": intent or "UNKNOWN"},
+        )
         
         # --- Intent Routing (Fixed) ---
         if intent == "STOP_NOTIF":
@@ -1200,6 +1230,11 @@ async def _process_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text
                         suggestions=_suggest_categories_from_text(text, pending.get("category")),
                         low_confidence=bool((pending.get("confidence") or 0.0) < 0.75),
                     )
+                 )
+                 ux_analytics.track(
+                     user_id=user_id,
+                     event="preview_shown",
+                     props={"source": "text", "confidence": pending.get("confidence", 0.0)},
                  )
                  return
 
@@ -1699,6 +1734,11 @@ async def _handle_record_intent(update: Update, context: ContextTypes.DEFAULT_TY
             suggestions=_suggest_categories_from_text(text, pending.get("category")),
             low_confidence=bool((pending.get("confidence") or 0.0) < 0.75),
         )
+    )
+    ux_analytics.track(
+        user_id=user_id,
+        event="preview_shown",
+        props={"source": "premium_ai", "confidence": pending.get("confidence", 0.0)},
     )
 
 async def _handle_gamification_update(user_id: int, intent: str, text: str, premium_response, response_msg: str):

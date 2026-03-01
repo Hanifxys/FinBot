@@ -47,12 +47,27 @@ async def send_onboarding_hint(message_target, *, db_user_id: int, telegram_user
     has_tx = _has_first_tx(db_user_id)
 
     if not has_income:
+        try:
+            from core import ux_analytics
+            ux_analytics.track(user_id=telegram_user_id, event="onboarding_step_done", props={"step": "need_income"})
+        except Exception:
+            pass
         await message_target.reply_text("Onboarding 1/3: set gaji dulu ya. Contoh: /setgaji 7000000")
         return
     if not has_budget:
+        try:
+            from core import ux_analytics
+            ux_analytics.track(user_id=telegram_user_id, event="onboarding_step_done", props={"step": "need_budget"})
+        except Exception:
+            pass
         await message_target.reply_text("Onboarding 2/3: set budget utama. Contoh: /setbudget Makanan 1500000")
         return
     if not has_tx:
+        try:
+            from core import ux_analytics
+            ux_analytics.track(user_id=telegram_user_id, event="onboarding_step_done", props={"step": "need_first_tx"})
+        except Exception:
+            pass
         await message_target.reply_text("Onboarding 3/3: catat transaksi pertama. Contoh: kopi 25000")
         return
 
@@ -69,5 +84,9 @@ async def send_onboarding_hint(message_target, *, db_user_id: int, telegram_user
         except Exception:
             pass
     if should_send:
+        try:
+            from core import ux_analytics
+            ux_analytics.track(user_id=telegram_user_id, event="onboarding_step_done", props={"step": "first_win"})
+        except Exception:
+            pass
         await message_target.reply_text("First win unlocked: budget kamu sudah aktif dan transaksi pertama sudah tercatat.")
-

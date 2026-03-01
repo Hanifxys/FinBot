@@ -1,0 +1,15 @@
+{
+  "version": "1.0.0",
+  "updated_at": "2026-03-01T00:00:00Z",
+  "locale": "id-ID",
+  "slang_map": {
+    "mkn": "makan",
+    "ngopi": "kopi",
+    "gj": "gaji"
+  },
+  "category_keywords": {
+    "Makanan": ["makan", "warung", "resto", "gofood"],
+    "Transportasi": ["gojek", "grab", "bensin", "parkir"],
+    "Tagihan": ["listrik", "air", "internet", "cicilan"]
+  }
+}

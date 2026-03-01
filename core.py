@@ -17,6 +17,10 @@ from modules.financial_intelligence import FinancialIntelligenceEngine
 from modules.multimodal_engine import MultiModalEngine
 from modules.market_data import MarketDataConnector
 from modules.document_processor import DocumentProcessor
+from modules.ux_analytics import UXAnalytics
+from modules.recurring import RecurringManager
+from modules.budget_autopilot import BudgetAutopilot
+from modules.weekly_challenges import WeeklyChallengeManager
 
 # Initialize Shared instances properly
 db = DBHandler()
@@ -35,6 +39,10 @@ fin_intel = FinancialIntelligenceEngine(db)
 multimodal_ai = MultiModalEngine()
 market_data = MarketDataConnector(api_key=os.getenv("ALPHA_VANTAGE_KEY"))
 doc_processor = DocumentProcessor()
+ux_analytics = UXAnalytics()
+recurring_mgr = RecurringManager(db)
+autopilot_mgr = BudgetAutopilot(db)
+weekly_challenges = WeeklyChallengeManager()
 
 # Global WebSocket Server Instance
 ws_server = WebSocketServer(port=int(os.getenv("WS_PORT", 8001)))

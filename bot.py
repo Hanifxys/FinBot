@@ -15,12 +15,14 @@ from core import init_components, db, ocr, nlp, ai, budget_mgr, analyzer, rules,
 from modules.redis_mgr import RedisManager
 from handlers.commands import (
     start, help_command, auth_command, summary_command, profile_command,
-    reminder_settings, set_persona_command
+    reminder_settings, set_persona_command, challenge_command, rewards_command, telemetry_command,
+    recurring_settings_command,
 )
 from handlers.finance import set_gaji, set_budget, get_ai_insight, set_budget_alerts
 from handlers.transactions import undo, hapus_transaksi, history, export_data
 from handlers.saving import set_target, add_savings, list_targets
-from handlers.messages import handle_message, handle_photo, handle_voice, handle_document
+from handlers.text_handler import handle_text
+from handlers.media_handler import handle_photo, handle_voice, handle_document
 from handlers.callbacks import handle_callback
 from handlers.digest import daily_digest, smart_reminder_check, monthly_wrapper_job
 from middlewares.logging import log_update
@@ -90,6 +92,10 @@ async def post_init(application):
         BotCommand("insight", "Analisis cerdas pola pengeluaran"),
         BotCommand("summary", "Ringkasan bulanan/tahunan"),
         BotCommand("auth", "Dapatkan token login web"),
+        BotCommand("challenge", "Lihat weekly challenge"),
+        BotCommand("rewards", "Redeem reward dari XP"),
+        BotCommand("telemetry", "On/off analytics anonymized"),
+        BotCommand("recurring", "Atur sensitivitas recurring suggestion"),
     ]
     await application.bot.set_my_commands(commands)
 
@@ -199,9 +205,13 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler("auth", auth_command))
     application.add_handler(CommandHandler("reminder", reminder_settings))
     application.add_handler(CommandHandler("mode", set_persona_command))
+    application.add_handler(CommandHandler("challenge", challenge_command))
+    application.add_handler(CommandHandler("rewards", rewards_command))
+    application.add_handler(CommandHandler("telemetry", telemetry_command))
+    application.add_handler(CommandHandler("recurring", recurring_settings_command))
     application.add_handler(CommandHandler("rekomendasi", set_gaji))
     
-    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(MessageHandler(filters.VOICE, handle_voice))
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))

@@ -26,6 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from modules.redis_mgr import RedisManager
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -38,7 +39,7 @@ logger = logging.getLogger("finbot.web")
 
 
 # ---------------------------------------------------------------------------
-# App-level dependency container (replaces bare globals)
+# App-level d   ependency container (replaces bare globals)
 # ---------------------------------------------------------------------------
 @dataclass
 class AppDependencies:
@@ -88,6 +89,40 @@ _DEFAULT_TTL = 3_600  # 1 hour
 
 def _sign(secret: str, message: str) -> bytes:
     return hmac.new(secret.encode(), message.encode(), hashlib.sha256).digest()
+
+
+def _token_fingerprint(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:32]
+
+
+def _revoked_token_key(token: str) -> str:
+    return f"auth:revoked:{_token_fingerprint(token)}"
+
+
+def _is_token_revoked(token: str) -> bool:
+    try:
+        redis = RedisManager()
+        if not redis.client:
+            return False
+        return bool(redis.client.get(_revoked_token_key(token)))
+    except Exception:
+        return False
+
+
+def _revoke_token(token: str) -> bool:
+    try:
+        parts = token.split(".")
+        if len(parts) != 4:
+            return False
+        exp = int(parts[2])
+        ttl = max(1, exp - int(time.time()))
+        redis = RedisManager()
+        if not redis.client:
+            return False
+        redis.client.setex(_revoked_token_key(token), ttl, "1")
+        return True
+    except Exception:
+        return False
 
 
 def sign_token(
@@ -162,8 +197,12 @@ def get_current_user(
         logger.warning(f"Auth failed: Malformed Authorization header: {authorization}")
         raise HTTPException(status_code=401, detail="Malformed Authorization header")
 
-    # Backdoor: 'admin' static token
-    if token == "admin":
+    if _is_token_revoked(token):
+        logger.warning("Auth failed: revoked token")
+        raise HTTPException(status_code=401, detail="Token revoked")
+
+    # Backdoor: explicit opt-in only.
+    if token == "admin" and os.getenv("ALLOW_ADMIN_BACKDOOR", "false").lower() in ("1", "true", "yes", "on"):
         logger.info("Auth: Admin backdoor accessed")
         return 1512347775  # Muhamad Hanif (Superadmin)
 
@@ -237,6 +276,10 @@ class BroadcastPreviewRequest(BaseModel):
     sample_user: dict = Field(default_factory=dict)
 
 
+class TokenRevokeRequest(BaseModel):
+    token: str = Field(..., min_length=16, max_length=2048)
+
+
 # ---------------------------------------------------------------------------
 # App factory (enables testing with custom deps)
 # ---------------------------------------------------------------------------
@@ -287,6 +330,19 @@ except Exception as e:
 def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
     broadcast_history: list[dict] = []
     scheduled_broadcasts: dict[str, dict] = {}
+
+    def _audit_admin_action(actor_id: int, action: str, target_id: int = 0, reason: Optional[str] = None) -> None:
+        try:
+            if deps.db:
+                deps.db.log_admin_action(
+                    admin_id=actor_id,
+                    target_id=target_id,
+                    action=action,
+                    reason=reason,
+                    action_type="admin_api",
+                )
+        except Exception as exc:
+            logger.warning("admin audit log failed action=%s actor=%s: %s", action, actor_id, exc)
 
     # -----------------------------------------------------------------------
     # Health
@@ -350,6 +406,14 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
 
         logger.info(f"Auth verification: user_id={user_id}, role={role}")
         return {"user_id": user_id, "status": "ok", "role": role}
+
+    @app.post("/auth/revoke", tags=["auth"])
+    def revoke_token(payload: TokenRevokeRequest, user_id: int = Depends(get_current_user)):
+        ok = _revoke_token(payload.token)
+        if not ok:
+            raise HTTPException(status_code=400, detail="Invalid token or Redis unavailable")
+        _audit_admin_action(user_id, "auth_revoke_token", reason="manual revocation")
+        return {"status": "revoked"}
 
     # -----------------------------------------------------------------------
     # Admin
@@ -985,6 +1049,40 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
         if deps.premium_ai is None:
             raise HTTPException(status_code=503, detail="Premium AI not initialised")
         return deps.premium_ai.generate_comprehensive_test_report()
+
+    @app.get("/ops/ux-funnel", tags=["ops"])
+    def ux_funnel(days: int = Query(7, ge=1, le=90), user_id: int = Depends(get_current_user)):
+        if not deps.db.has_permission(user_id, "view_reports"):
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        from core import ux_analytics
+        return ux_analytics.funnel_summary(days=days)
+
+    @app.get("/ops/ux-report", tags=["ops"])
+    def ux_report(days: int = Query(7, ge=1, le=90), user_id: int = Depends(get_current_user)):
+        if not deps.db.has_permission(user_id, "view_reports"):
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        from core import ux_analytics
+        return ux_analytics.actionable_report(days=days)
+
+    @app.get("/ops/ux-alerts", tags=["ops"])
+    def ux_alerts(days: int = Query(2, ge=1, le=30), user_id: int = Depends(get_current_user)):
+        if not deps.db.has_permission(user_id, "view_reports"):
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        from core import ux_analytics
+        return {"alerts": ux_analytics.monitoring_alerts(days=days)}
+
+    @app.get("/ops/perf-alerts", tags=["ops"])
+    def perf_alerts(user_id: int = Depends(get_current_user)):
+        if not deps.db.has_permission(user_id, "view_reports"):
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        cpu = float(psutil.cpu_percent(interval=0.2))
+        mem = float(psutil.virtual_memory().percent)
+        alerts = []
+        if cpu > 85.0:
+            alerts.append({"level": "warning", "msg": f"CPU usage high: {cpu:.1f}%."})
+        if mem > 85.0:
+            alerts.append({"level": "warning", "msg": f"Memory usage high: {mem:.1f}%."})
+        return {"cpu_pct": cpu, "memory_pct": mem, "alerts": alerts}
 
     # -----------------------------------------------------------------------
     # Transactions

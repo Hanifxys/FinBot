@@ -8,7 +8,7 @@ import pandas as pd
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
-from core import budget_mgr, db, premium_ai, analyzer, persona_mgr
+from core import budget_mgr, db, premium_ai, analyzer, persona_mgr, recurring_mgr, ux_analytics
 from modules.redis_mgr import RedisManager
 
 logger = logging.getLogger(__name__)
@@ -137,7 +137,7 @@ async def daily_digest(context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     now = datetime.now()
     users = db.get_all_users()
-    logger.info("daily_digest started — processing %d users", len(users))
+    logger.info("daily_digest started - processing %d users", len(users))
 
     success = error = skipped = 0
 
@@ -153,11 +153,24 @@ async def daily_digest(context: ContextTypes.DEFAULT_TYPE) -> None:
             logger.exception("daily_digest failed for telegram_id=%s", user.telegram_id)
 
     logger.info(
-        "daily_digest done — sent=%d skipped=%d errors=%d",
+        "daily_digest done - sent=%d skipped=%d errors=%d",
         success, skipped, error,
     )
-
-
+    try:
+        flushed = ux_analytics.flush_offline_queue(max_rows=2000)
+        report = ux_analytics.actionable_report(days=7)
+        alerts = ux_analytics.monitoring_alerts(days=2)
+        logger.info(
+            "ux_daily_report flushed=%d conversion=%.2f dropoff=%.2f actions=%s",
+            flushed,
+            float(report.get("summary", {}).get("conversion_rate_preview_to_confirm_pct", 0.0)),
+            float(report.get("summary", {}).get("dropoff_pct", 0.0)),
+            report.get("actions", []),
+        )
+        for alert in alerts:
+            logger.warning("ux_alert level=%s msg=%s", alert.get("level"), alert.get("msg"))
+    except Exception:
+        logger.exception("daily_digest ux report hook failed")
 async def smart_reminder_check(context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Job that runs periodically to check for inactive users and send reminders.
@@ -168,6 +181,23 @@ async def smart_reminder_check(context: ContextTypes.DEFAULT_TYPE) -> None:
 
     for user in users:
         try:
+            # Recurring 24h due reminder
+            due_items = recurring_mgr.list_due_reminders(user.id, within_hours=24)
+            for item in due_items:
+                sig = item.get("signature", "")
+                if sig and recurring_mgr.recently_reminded(user.id, sig):
+                    continue
+                tpl = item.get("template", {})
+                await context.bot.send_message(
+                    chat_id=user.telegram_id,
+                    text=(
+                        f"Reminder recurring: besok ada transaksi {tpl.get('description', 'rutin')} "
+                        f"sekitar Rp{float(tpl.get('amount', 0) or 0):,.0f} ({tpl.get('category', '-')})."
+                    ),
+                )
+                if sig:
+                    recurring_mgr.mark_reminded(user.id, sig)
+
             last_dt = _get_last_interaction(user.id)
             if not last_dt:
                 continue
@@ -567,3 +597,4 @@ async def _build_reminder_message(user_id: int) -> str:
     
     # 2. Random fallback if no specific time match
     return random.choice(_FALLBACK_REMINDERS)
+

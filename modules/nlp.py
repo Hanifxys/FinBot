@@ -10,6 +10,7 @@ from typing import Dict, Any, Tuple, Optional, List, Sequence
 from config import GROQ_API_KEY
 from modules.amounts import parse_primary_amount_id
 from modules.transformer_nlp import TransformerNLPBackend, TransformerNLPConfig
+from modules.nlp_config_loader import NLPConfigLoader
 
 logger = logging.getLogger(__name__)
 
@@ -95,11 +96,10 @@ class NLPProcessor:
             "Gaji": ["gaji", "salary", "bonus", "transfer masuk", "income", "payroll", "pemasukan", "cashback", "refund", "jual"]
         }
         
-        # Pre-compile regex patterns for performance
+        self._config_loader = NLPConfigLoader()
         self._compiled_keywords = {}
-        for cat, keywords in self.category_keywords.items():
-            pattern = r'\b(' + '|'.join(map(re.escape, keywords)) + r')\b'
-            self._compiled_keywords[cat] = re.compile(pattern, re.IGNORECASE)
+        self._rebuild_keyword_patterns()
+        self._apply_external_config(force=True)
             
         # Fast path intent checks (compiled)
         self._intents_map = {
@@ -187,6 +187,28 @@ class NLPProcessor:
         except Exception as e:
             logger.error(f"Transformer backend init failed: {e}")
             self.transformer_backend = None
+
+    def _rebuild_keyword_patterns(self) -> None:
+        self._compiled_keywords = {}
+        for cat, keywords in self.category_keywords.items():
+            if not keywords:
+                continue
+            pattern = r'\b(' + '|'.join(map(re.escape, keywords)) + r')\b'
+            self._compiled_keywords[cat] = re.compile(pattern, re.IGNORECASE)
+
+    def _apply_external_config(self, force: bool = False) -> None:
+        cfg = self._config_loader.load(force=force)
+        if not cfg:
+            return
+        if cfg.slang_map:
+            self.slang_map.update(cfg.slang_map)
+        if cfg.category_keywords:
+            for cat, kws in cfg.category_keywords.items():
+                self.category_keywords[cat] = kws
+            self._rebuild_keyword_patterns()
+
+    def maybe_reload_external_config(self) -> None:
+        self._apply_external_config(force=False)
 
     def _calibrate_confidence(self, score: float, *, penalty: float = 0.0, floor: float = 0.0, ceil: float = 0.99) -> float:
         """Lightweight confidence calibration for more stable downstream gating."""
@@ -306,6 +328,7 @@ class NLPProcessor:
         Normalizes informal text like '2jt' -> '2000000', '50rb' -> '50000', etc.
         Also handles slang and common abbreviations using dictionary mapping.
         """
+        self.maybe_reload_external_config()
         if not text:
             return ""
             
@@ -977,6 +1000,7 @@ class NLPProcessor:
         return data
 
     def extract_transaction_data_simple(self, text: str, forced_type: str = None) -> Dict[str, Any]:
+        self.maybe_reload_external_config()
         """Standard single transaction extraction logic with granular confidence and validation."""
         # 0. Ambiguity & Intent Disambiguation Layer
         ambiguous_keywords = ["transfer", "bayar", "kirim", "masuk", "bayarin"]

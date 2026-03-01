@@ -22,7 +22,17 @@ from telegram import (
 from telegram.ext import ContextTypes
 
 from config import CATEGORIES
-from core import budget_mgr, db, rules, visual_reporter
+from core import (
+    budget_mgr,
+    db,
+    rules,
+    visual_reporter,
+    ux_analytics,
+    recurring_mgr,
+    autopilot_mgr,
+    weekly_challenges,
+    gamify,
+)
 from handlers import tutorial_mode
 from handlers.transactions import duplicate_transaction, history, load_pending_update
 from utils.dashboard import update_pinned_dashboard
@@ -594,6 +604,11 @@ async def _h_tx_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action:
         if new_tx:
             ctx.user_data["last_tx_id"] = new_tx.id
             ctx.user_data["last_tx_ts"] = datetime.now().timestamp()
+            ux_analytics.track(
+                user_id=user_id,
+                event="confirm",
+                props={"category": pending.get("category"), "amount": pending.get("amount", 0)},
+            )
             
     except Exception as exc:
         logger.error("add_transaction failed: %s", exc)
@@ -619,6 +634,73 @@ async def _h_tx_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action:
     await query.message.reply_text("Ada lagi yang bisa saya bantu?", reply_markup=get_main_menu_keyboard())
     await send_onboarding_hint(query.message, db_user_id=user_db.id, telegram_user_id=user_id)
 
+    # Recurring suggestion (>=3 occurrences in 7 days by default)
+    try:
+        sensitivity = recurring_mgr.get_sensitivity(user_id)
+        candidate = recurring_mgr.detect_candidate(
+            user_db.id,
+            category=pending.get("category", "Lain-lain"),
+            description=pending.get("merchant") or pending.get("description") or "Transaksi",
+            amount=float(pending.get("amount", 0) or 0),
+            min_occurrences=sensitivity,
+        )
+        if candidate:
+            recurring_mgr.save_template(user_id, candidate)
+            ux_analytics.track(
+                user_id=user_id,
+                event="recurring_suggestion_shown",
+                props={"hits": candidate.get("hits"), "interval_days": candidate.get("interval_days")},
+            )
+            kb = InlineKeyboardMarkup(
+                [[
+                    InlineKeyboardButton("Ya, jadikan recurring", callback_data=f"recurring:accept:{candidate['signature']}"),
+                    InlineKeyboardButton("Nanti aja", callback_data=f"recurring:dismiss:{candidate['signature']}"),
+                ]]
+            )
+            await query.message.reply_text(
+                "Aku lihat transaksi ini sering berulang. Mau dijadikan recurring?",
+                reply_markup=kb,
+            )
+    except Exception as exc:
+        logger.debug("Recurring suggestion failed: %s", exc)
+
+    # Budget autopilot proposal if overspending
+    try:
+        proposal = autopilot_mgr.suggest_rebalance(user_db.id)
+        if proposal:
+            autopilot_mgr.save_proposal(user_id, proposal)
+            ux_analytics.track(
+                user_id=user_id,
+                event="autopilot_suggested",
+                props={"from": proposal["from_category"], "to": proposal["to_category"]},
+            )
+            kb = InlineKeyboardMarkup(
+                [[
+                    InlineKeyboardButton("Approve", callback_data=f"autopilot:approve:{proposal['proposal_id']}"),
+                    InlineKeyboardButton("Tolak", callback_data=f"autopilot:reject:{proposal['proposal_id']}"),
+                ]]
+            )
+            await query.message.reply_text(
+                f"Autopilot saran: pindahkan Rp{proposal['transfer_amount']:,.0f} dari {proposal['from_category']} ke {proposal['to_category']}.",
+                reply_markup=kb,
+            )
+    except Exception as exc:
+        logger.debug("Autopilot suggestion failed: %s", exc)
+
+    # Weekly challenge progress + reward hint
+    try:
+        challenge = weekly_challenges.update_progress(user_id, increment=1)
+        if challenge.get("completed") and not challenge.get("awarded"):
+            xp = int(challenge.get("reward_xp", 0))
+            if gamify.redis.client:
+                gamify.redis.client.incrby(f"user:{user_id}:xp", xp)
+            weekly_challenges.mark_awarded(user_id)
+            await query.message.reply_text(
+                f"Challenge selesai: {challenge.get('title')}! Kamu dapat +{xp} XP."
+            )
+    except Exception as exc:
+        logger.debug("Weekly challenge update failed: %s", exc)
+
     ctx.user_data.pop("pending_tx", None)
     ctx.user_data.pop("state", None)
 
@@ -630,6 +712,7 @@ async def _h_tx_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action:
 
 @router.exact("tx_edit")
 async def _h_tx_edit(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    ux_analytics.track(user_id=update.effective_user.id, event="edit", props={"source": "tx_preview"})
     await update.callback_query.edit_message_text(
         "Pilih bagian yang ingin diubah:", reply_markup=_edit_field_kb()
     )
@@ -637,6 +720,7 @@ async def _h_tx_edit(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: st
 
 @router.exact("tx_ignore")
 async def _h_tx_ignore(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
+    ux_analytics.track(user_id=update.effective_user.id, event="cancel", props={"source": "tx_preview"})
     ctx.user_data.pop("pending_tx", None)
     ctx.user_data.pop("state", None)
     query = update.callback_query
@@ -731,12 +815,6 @@ async def _h_suggest_budget(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _act
 async def _h_suggest_insight(update: Update, ctx: ContextTypes.DEFAULT_TYPE, _action: str):
     from handlers.finance import get_ai_insight
     await get_ai_insight(update, ctx)
-    await update.callback_query.message.reply_text(
-        "Aksi konkret: kurangi ngopi 20% minggu ini.",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("Set limit Minuman", callback_data="insight:set_limit:minuman"),
-        ]]),
-    )
 
 
 @router.exact("open_history")
@@ -976,6 +1054,11 @@ async def _h_history_ux(update: Update, ctx: ContextTypes.DEFAULT_TYPE, action: 
         ctx.user_data["history_filter"] = parts[1]
         if parts[1] != "all":
             ctx.user_data.pop("history_category", None)
+        ux_analytics.track(
+            user_id=user_id,
+            event="history_filter_used",
+            props={"filter": parts[1]},
+        )
         await history(update, ctx)
         return
 
@@ -993,6 +1076,11 @@ async def _h_history_ux(update: Update, ctx: ContextTypes.DEFAULT_TYPE, action: 
     if len(parts) == 3 and parts[1] == "catset":
         ctx.user_data["history_filter"] = "all"
         ctx.user_data["history_category"] = parts[2]
+        ux_analytics.track(
+            user_id=user_id,
+            event="history_filter_used",
+            props={"filter": "category", "category": parts[2]},
+        )
         await history(update, ctx)
         return
 
@@ -1065,7 +1153,54 @@ async def _h_insight_set_limit(update: Update, ctx: ContextTypes.DEFAULT_TYPE, a
     current = float(getattr(budget, "limit_amount", 0) or 0)
     new_limit = max(100000, current * 0.8) if current > 0 else 300000
     db.set_budget(user_db.id, category, new_limit)
+    ux_analytics.track(
+        user_id=user_id,
+        event="insight_action_clicked",
+        props={"action": "set_limit", "category": category},
+    )
     await query.message.reply_text(f"Limit {category} di-set ke Rp{new_limit:,.0f}.")
+
+
+@router.prefix("recurring:")
+async def _h_recurring_action(update: Update, ctx: ContextTypes.DEFAULT_TYPE, action: str):
+    query = update.callback_query
+    user_id = update.effective_user.id
+    parts = action.split(":")
+    if len(parts) != 3:
+        return
+    decision = parts[1]
+    signature = parts[2]
+    if decision == "accept":
+        ux_analytics.track(user_id=user_id, event="recurring_suggestion_accepted", props={"signature": signature})
+        await query.message.reply_text("Oke, recurring diaktifkan. Nanti aku ingetin 24 jam sebelum due.")
+    else:
+        ux_analytics.track(user_id=user_id, event="recurring_suggestion_dismissed", props={"signature": signature})
+        await query.message.reply_text("Sip, recurring suggestion di-dismiss.")
+
+
+@router.prefix("autopilot:")
+async def _h_autopilot_action(update: Update, ctx: ContextTypes.DEFAULT_TYPE, action: str):
+    query = update.callback_query
+    user_id = update.effective_user.id
+    user_db = db.get_or_create_user(user_id, update.effective_user.username)
+    parts = action.split(":")
+    if len(parts) != 3:
+        return
+    decision = parts[1]
+    proposal_id = parts[2]
+    proposal = autopilot_mgr.get_proposal(user_id, proposal_id)
+    if not proposal:
+        await query.message.reply_text("Proposal tidak ditemukan / sudah kadaluarsa.")
+        return
+    if decision == "approve":
+        ok = autopilot_mgr.apply_proposal(user_db.id, proposal)
+        autopilot_mgr.record_decision(user_id, approved=bool(ok))
+        ux_analytics.track(user_id=user_id, event="autopilot_approved", props={"proposal_id": proposal_id, "ok": ok})
+        await query.message.reply_text("Autopilot diterapkan." if ok else "Gagal menerapkan autopilot.")
+    else:
+        autopilot_mgr.record_decision(user_id, approved=False)
+        ux_analytics.track(user_id=user_id, event="autopilot_rejected", props={"proposal_id": proposal_id})
+        await query.message.reply_text("Proposal autopilot ditolak.")
 
 
 @router.prefix("reminder:")
@@ -1119,11 +1254,42 @@ async def _h_reminder_personal(update: Update, ctx: ContextTypes.DEFAULT_TYPE, a
         if len(parts) == 3 and parts[1] == "snooze" and parts[2] == "1d":
             snooze_until = int(datetime.now(tz=timezone.utc).timestamp()) + 86400
             redis.client.set(f"user:{user_id}:reminder_snooze_until", str(snooze_until))
+            ux_analytics.track(
+                user_id=user_id,
+                event="reminder_snooze",
+                props={"duration_hours": 24},
+            )
             await query.message.reply_text("Reminder disnooze 1 hari.")
             return
     except Exception as exc:
         logger.error("reminder callback failed: %s", exc)
         await query.message.reply_text("Gagal mengatur reminder.")
+
+
+@router.prefix("reward:redeem:")
+async def _h_reward_redeem(update: Update, ctx: ContextTypes.DEFAULT_TYPE, action: str):
+    query = update.callback_query
+    user_id = update.effective_user.id
+    item_id = action.split(":")[-1]
+    result = weekly_challenges.redeem(user_id, item_id, gamify)
+    await query.message.reply_text(result.get("msg", "Gagal redeem reward."))
+
+
+@router.prefix("challenge:")
+async def _h_challenge_action(update: Update, ctx: ContextTypes.DEFAULT_TYPE, action: str):
+    query = update.callback_query
+    user_id = update.effective_user.id
+    if action != "challenge:share":
+        return
+    item = weekly_challenges.get_current(user_id)
+    text = (
+        "Aku lagi ikut #FinbotWeeklyChallenge!\n"
+        f"Challenge: {item.get('title', '-')}\n"
+        f"Progress: {item.get('progress', 0)}/{item.get('target', 1)}\n"
+        "Ayo bareng jaga budget minggu ini."
+    )
+    ux_analytics.track(user_id=user_id, event="insight_action_clicked", props={"action": "challenge_share"})
+    await query.message.reply_text(f"Tinggal copy/share ini ke temen kamu:\n\n{text}")
 
 
 # ---------------------------------------------------------------------------
