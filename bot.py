@@ -87,6 +87,38 @@ async def post_init(application):
     await application.bot.set_my_commands(commands)
 
 if __name__ == '__main__':
+    # --- 0. MULTI-INSTANCE CONFLICT PREVENTION (REDIS LOCK) ---
+    _POLLING_LOCK_REDIS = RedisManager().client
+    if _POLLING_LOCK_REDIS:
+        _POLLING_LOCK_KEY = "finbot:instance:polling_lock"
+        _POLLING_LOCK_VALUE = str(uuid.uuid4())
+        
+        # Check backoff first
+        backoff_until = _POLLING_LOCK_REDIS.get("finbot:polling_backoff_until")
+        if backoff_until:
+            wait_time = int(backoff_until) - int(_time.time())
+            if wait_time > 0:
+                logging.error(f"CRITICAL: Polling backoff active. Another instance recently crashed or is starting. Waiting {wait_time}s...")
+                _time.sleep(wait_time)
+        
+        # Try to acquire lock
+        acquired = _POLLING_LOCK_REDIS.set(_POLLING_LOCK_KEY, _POLLING_LOCK_VALUE, nx=True, ex=45)
+        if not acquired:
+            logging.error("CRITICAL: Another instance of FinBot is already running (Redis Lock active). Exiting to prevent Conflict.")
+            sys.exit(0) # Exit with 0 to prevent Koyeb from immediately restarting and looping
+            
+        # Background thread to refresh lock
+        def _refresh_lock():
+            while True:
+                try:
+                    _time.sleep(30)
+                    if _POLLING_LOCK_REDIS.get(_POLLING_LOCK_KEY) == _POLLING_LOCK_VALUE:
+                        _POLLING_LOCK_REDIS.expire(_POLLING_LOCK_KEY, 45)
+                except Exception:
+                    pass
+        
+        threading.Thread(target=_refresh_lock, daemon=True).start()
+
     # Initialize Core Components (includes Database, AI, and Monitoring Server)
     init_components()
     
