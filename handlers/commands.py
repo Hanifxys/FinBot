@@ -538,17 +538,39 @@ async def realintel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         stress_color = "🟢" if stress == "Low" else "🔴" if stress == "High" else "🟡"
 
         macro = intel.get("macro_sensitivity", {})
+        delta = intel.get("delta", 0)
+        delta_str = f"({'+' if delta >= 0 else ''}{delta})"
+        trajectory = intel.get("trajectory", "Stable")
+        risk = intel.get("risk_profile", [])
+        conf = intel.get("confidence", 0)
         
+        # Actionable Insight
+        action = "Pertahankan performa ini! 👍"
+        if score < 50:
+            action = "⚠️ **URGENT:** Kurangi pengeluaran non-esensial segera & lunasi utang berbunga tinggi."
+        elif score < 80:
+            action = "💡 **Saran:** Tingkatkan dana darurat hingga minimal 6 bulan pengeluaran."
+            
         msg = (
             f"🛡️ **FINANCIAL COMMAND CENTRE**\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"**Financial Stability Score**\n"
-            f"__ {color} **{score}/100** {color} __\n\n"
+            f"__ {color} **{score}/100** {color} __ {delta_str}\n"
+            f"📈 **Trajectory:** {trajectory}\n"
+            f"🔐 **Confidence:** {conf}%\n\n"
+            
             f"📊 **Kondisi Saat Ini:**\n"
             f"• **Survival Mode:** `{survival_str}`\n"
             f"• **Deficit Prob:** {deficit_color} `{deficit}%`\n"
             f"• **Savings Rate:** `{savings:.1f}%`\n"
             f"• **Stress Level:** {stress_color} `{stress}`\n\n"
+            
+            f"⚠️ **Risk Profile:**\n"
+            f"{', '.join(risk) if risk else '✅ Low Risk'}\n\n"
+            
+            f"🚀 **Executive Action:**\n"
+            f"{action}\n\n"
+            
             f"🌍 **Personal Macro Sensitivity:**\n"
             f"🏦 **Suku Bunga:**\n_{macro.get('interest_rate', '-')}_\n\n"
             f"📈 **Inflasi:**\n_{macro.get('inflation', '-')}_\n\n"

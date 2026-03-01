@@ -106,7 +106,7 @@ class FinancialIntelligenceEngine:
 
     async def get_financial_health_status(self, user_id: int, market_data_connector: Any = None) -> Dict[str, Any]:
         """
-        Generates the comprehensive Financial Command Centre view.
+        Generates the comprehensive Financial Command Centre view with Delta & Trajectory.
         """
         # 1. Fetch Data
         assets = await self._get_assets(user_id)
@@ -120,19 +120,81 @@ class FinancialIntelligenceEngine:
         stress_index = self._calculate_stress_index(survival_days, liabilities, income_expense)
         stability_score = self._calculate_stability_score(survival_days, savings_rate, stress_index, deficit_prob)
         
-        # 3. Macro Sensitivity (if market data available)
+        # 3. Macro Sensitivity
         macro_impact = {}
         if market_data_connector:
             macro_impact = await self._calculate_macro_sensitivity(user_id, assets, liabilities, income_expense, market_data_connector)
 
+        # 4. Delta & Trajectory Modelling
+        delta_data = await self._calculate_delta_modelling(user_id, stability_score)
+        trajectory = self._calculate_trajectory(delta_data["history"])
+        
+        # 5. Risk & Confidence
+        risk_profile = self._calculate_risk_profile(assets, liabilities, income_expense)
+        confidence_score = self._calculate_confidence_score(income_expense) # Data completeness
+
         return {
             "score": stability_score,
+            "delta": delta_data["delta"],
+            "trajectory": trajectory, # "Improving", "Declining", "Stable"
             "survival_days": survival_days,
             "deficit_probability": deficit_prob,
             "savings_rate": savings_rate,
             "stress_index": stress_index,
-            "macro_sensitivity": macro_impact
+            "macro_sensitivity": macro_impact,
+            "risk_profile": risk_profile,
+            "confidence": confidence_score
         }
+
+    async def _calculate_delta_modelling(self, user_id: int, current_score: int) -> Dict[str, Any]:
+        """Tracks score history and calculates change."""
+        key = f"user:{user_id}:stability_history"
+        history = []
+        if self.cache:
+            raw = self.cache.lrange(key, 0, 5) # Last 5 entries
+            history = [int(x) for x in raw]
+            
+            # Update history
+            self.cache.lpush(key, current_score)
+            self.cache.ltrim(key, 0, 30) # Keep 30 days
+        
+        prev_score = history[0] if history else current_score
+        delta = current_score - prev_score
+        
+        return {
+            "delta": delta,
+            "history": history
+        }
+
+    def _calculate_trajectory(self, history: List[int]) -> str:
+        if len(history) < 3: return "Stable"
+        # Simple trend
+        avg_old = sum(history[1:]) / len(history[1:])
+        curr = history[0]
+        if curr > avg_old + 2: return "Improving ↗️"
+        if curr < avg_old - 2: return "Declining ↘️"
+        return "Stable ➡️"
+
+    def _calculate_risk_profile(self, assets, liabilities, stats) -> List[str]:
+        risks = []
+        # Concentration Risk
+        total_assets = sum(assets.values())
+        if total_assets > 0:
+            crypto_ratio = assets.get("crypto", 0) / total_assets
+            if crypto_ratio > 0.3: risks.append("High Crypto Exposure")
+        
+        # Liquidity Risk
+        inc = stats.get("avg_monthly_income", 1)
+        debt_service = sum(liabilities.values()) * 0.05 # Assume 5% monthly service
+        if debt_service > inc * 0.4: risks.append("Debt Service Stress")
+        
+        return risks
+
+    def _calculate_confidence_score(self, stats) -> float:
+        """How reliable is this data? Based on transaction volume/consistency."""
+        if stats.get("avg_monthly_income", 0) > 0 and stats.get("avg_monthly_expense", 0) > 0:
+            return 95.0
+        return 50.0 # Low confidence if missing income/expense data
 
     async def _get_assets(self, user_id: int) -> Dict[str, float]:
         """Fetches assets from Redis (consistent with PersonalFinanceAI)."""
