@@ -17,6 +17,9 @@ from handlers.commands import (
     start, help_command, auth_command, summary_command, profile_command,
     reminder_settings, set_persona_command, challenge_command, rewards_command, telemetry_command,
     recurring_settings_command,
+    memory_insight_command, realintel_command, financial_persona_command,
+    debt_optimizer_command, scenario_command, networth_command,
+    set_asset_command, set_liability_command,
 )
 from handlers.finance import set_gaji, set_budget, get_ai_insight, set_budget_alerts
 from handlers.transactions import undo, hapus_transaksi, history, export_data
@@ -96,6 +99,14 @@ async def post_init(application):
         BotCommand("rewards", "Redeem reward dari XP"),
         BotCommand("telemetry", "On/off analytics anonymized"),
         BotCommand("recurring", "Atur sensitivitas recurring suggestion"),
+        BotCommand("memory", "AI long-term financial narrative"),
+        BotCommand("realintel", "Inflasi & lifestyle creep intelligence"),
+        BotCommand("fpersona", "Set financial risk persona"),
+        BotCommand("debt", "Debt optimizer snowball vs avalanche"),
+        BotCommand("simulate", "Scenario simulation finansial"),
+        BotCommand("networth", "Lihat net worth aset-liabilitas"),
+        BotCommand("asset", "Set nilai aset"),
+        BotCommand("liability", "Set nilai liability"),
     ]
     await application.bot.set_my_commands(commands)
 
@@ -209,6 +220,14 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler("rewards", rewards_command))
     application.add_handler(CommandHandler("telemetry", telemetry_command))
     application.add_handler(CommandHandler("recurring", recurring_settings_command))
+    application.add_handler(CommandHandler("memory", memory_insight_command))
+    application.add_handler(CommandHandler("realintel", realintel_command))
+    application.add_handler(CommandHandler("fpersona", financial_persona_command))
+    application.add_handler(CommandHandler("debt", debt_optimizer_command))
+    application.add_handler(CommandHandler("simulate", scenario_command))
+    application.add_handler(CommandHandler("networth", networth_command))
+    application.add_handler(CommandHandler("asset", set_asset_command))
+    application.add_handler(CommandHandler("liability", set_liability_command))
     application.add_handler(CommandHandler("rekomendasi", set_gaji))
     
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))

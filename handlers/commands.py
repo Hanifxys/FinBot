@@ -25,7 +25,18 @@ from telegram import (
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
-from core import ai, analyzer, budget_mgr, db, weekly_challenges, gamify, ux_analytics, recurring_mgr
+from core import (
+    ai,
+    analyzer,
+    budget_mgr,
+    db,
+    weekly_challenges,
+    gamify,
+    ux_analytics,
+    recurring_mgr,
+    personal_finance_ai,
+    premium_ai,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +58,13 @@ class PersonaMode(str, Enum):
             "• `/mode buddy` — Santai & Bestie 🥰\n"
             "• `/mode analyst` — Formal & Data 🧐"
         )
+
+
+class FinancialPersonaMode(str, Enum):
+    CONSERVATIVE = "conservative"
+    GROWTH_AGGRESSIVE = "growth_aggressive"
+    RISK_AVOIDER = "risk_avoider"
+    OVER_SPENDER = "over_spender"
 
 
 # ---------------------------------------------------------------------------
@@ -467,6 +485,174 @@ async def recurring_settings_command(update: Update, context: ContextTypes.DEFAU
         return
     saved = recurring_mgr.get_sensitivity(user_id)
     await _reply(update, f"Sensitivity recurring di-set ke `{saved}`.", parse_mode=ParseMode.MARKDOWN)
+
+
+async def memory_insight_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    user_db = db.get_or_create_user(user_id, update.effective_user.username)
+    result = personal_finance_ai.long_term_narrative(user_id, user_db.id)
+    lines = [
+        "AI Memory Insight",
+        f"- Save intent mentions: {result.get('save_intent_mentions', 0)}",
+        f"- Weekend spending (recent): {result.get('weekend_spend_ratio_recent', 0)}%",
+        f"- Weekend spending (previous): {result.get('weekend_spend_ratio_previous', 0)}%",
+        "",
+        "Narrative:",
+    ]
+    for n in result.get("narrative", []):
+        lines.append(f"- {n}")
+    await _reply(update, "\n".join(lines))
+
+
+async def realintel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    user_db = db.get_or_create_user(user_id, update.effective_user.username)
+    result = personal_finance_ai.real_financial_intelligence(user_db.id)
+    if not result.get("ok"):
+        await _reply(update, result.get("msg", "Data belum cukup."))
+        return
+    msg = (
+        "Real Financial Intelligence\n"
+        f"- Annual inflation: {result['annual_inflation_pct']}%\n"
+        f"- Income growth (3m): {result['income_growth_3m_pct']}%\n"
+        f"- Expense growth (3m): {result['expense_growth_3m_pct']}%\n"
+        f"- Purchasing power change: {result['purchasing_power_change_pct']}%\n"
+        f"- Lifestyle creep: {'YES' if result['lifestyle_creep'] else 'NO'}\n"
+        f"- Income stagnation: {'YES' if result['income_stagnation'] else 'NO'}"
+    )
+    msg += "\n- Persona investment hint: " + personal_finance_ai.persona_investment_hint(user_id, user_db.id)
+    if result.get("alerts"):
+        msg += "\n\nAlerts:\n" + "\n".join(f"- {a}" for a in result["alerts"])
+    await _reply(update, msg)
+
+
+async def financial_persona_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    args = context.args or []
+    if not args:
+        profile = premium_ai.persona_mgr.get_financial_profile(user_id=user_id)
+        await _reply(
+            update,
+            (
+                f"Financial Persona: {profile.get('persona')}\n"
+                f"Risk tolerance: {profile.get('risk_tolerance')}\n"
+                f"Strategy: {profile.get('strategy')}\n"
+                f"Guardrails: {', '.join(profile.get('guardrails', []))}\n\n"
+                "Gunakan `/fpersona conservative|growth_aggressive|risk_avoider|over_spender`"
+            ),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+    choice = args[0].strip().lower()
+    if choice not in {m.value for m in FinancialPersonaMode}:
+        await _reply(update, "Pilihan invalid. Gunakan conservative/growth_aggressive/risk_avoider/over_spender.")
+        return
+    profile = premium_ai.persona_mgr.set_financial_persona(user_id, choice)
+    await _reply(
+        update,
+        f"Financial persona di-set ke: {profile.get('persona')} (risk={profile.get('risk_tolerance')})",
+    )
+
+
+async def debt_optimizer_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    user_db = db.get_or_create_user(user_id, update.effective_user.username)
+    extra = 500000.0
+    if context.args:
+        try:
+            extra = float(context.args[0])
+        except Exception:
+            pass
+    result = personal_finance_ai.debt_optimizer(user_db.id, extra_payment=extra)
+    if not result.get("ok"):
+        await _reply(update, result.get("msg", "Tidak ada data utang."))
+        return
+    msg = (
+        "Debt Optimizer\n"
+        f"- Recommended: {result['recommended']}\n"
+        f"- Snowball: {result['snowball']['months']} bulan, interest ~{result['snowball']['interest_est']:.0f}\n"
+        f"- Avalanche: {result['avalanche']['months']} bulan, interest ~{result['avalanche']['interest_est']:.0f}\n"
+        f"- Est. interest savings: {result['interest_savings_est']:.0f}\n\n"
+        "Debts:"
+    )
+    for d in result.get("debts", []):
+        msg += f"\n- {d['name']}: balance {d['balance']:.0f}, APR {d['apr']*100:.1f}%, min {d['min_payment']:.0f}"
+    await _reply(update, msg)
+
+
+async def scenario_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    user_db = db.get_or_create_user(user_id, update.effective_user.username)
+    if not context.args:
+        await _reply(
+            update,
+            "Gunakan: `/simulate [skenario]`\nContoh: `/simulate resign 6 bulan lagi`\natau `/simulate cicilan motor 2 juta/bulan`",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+    text = " ".join(context.args)
+    result = personal_finance_ai.simulate_scenario(user_db.id, text)
+    if not result.get("ok"):
+        await _reply(update, result.get("msg", "Gagal simulasi."))
+        return
+    msg = (
+        "Scenario Simulation\n"
+        f"- Event: {result['event']}\n"
+        f"- Avg income: {result['avg_income']:.0f}\n"
+        f"- Avg expense: {result['avg_expense']:.0f}\n"
+        f"- Burn rate: {result['burn_rate']:.0f}\n"
+        f"- Income after scenario: {result['income_after']:.0f}\n"
+        f"- Expense after scenario: {result['expense_after']:.0f}\n"
+        f"- Emergency coverage: {result['emergency_coverage_months']} bulan\n"
+        f"- Risk probability: {result['risk_probability']}"
+    )
+    await _reply(update, msg)
+
+
+async def networth_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    user_db = db.get_or_create_user(user_id, update.effective_user.username)
+    result = personal_finance_ai.net_worth(user_db.id)
+    msg = (
+        "Net Worth Tracker\n"
+        f"- Total assets: {result['total_assets']:.0f}\n"
+        f"- Total liabilities: {result['total_liabilities']:.0f}\n"
+        f"- Net worth: {result['net_worth']:.0f}\n"
+        f"- Monthly delta: {result['monthly_delta']:.0f} ({result['monthly_delta_pct']}%)"
+    )
+    await _reply(update, msg)
+
+
+async def set_asset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    user_db = db.get_or_create_user(user_id, update.effective_user.username)
+    if len(context.args) < 2:
+        await _reply(update, "Gunakan `/asset [nama] [nominal]` contoh `/asset crypto 1500000`", parse_mode=ParseMode.MARKDOWN)
+        return
+    name = context.args[0]
+    try:
+        amount = float(context.args[1])
+    except Exception:
+        await _reply(update, "Nominal tidak valid.")
+        return
+    ok = personal_finance_ai.set_asset(user_db.id, name, amount)
+    await _reply(update, "Asset tersimpan." if ok else "Gagal simpan asset.")
+
+
+async def set_liability_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    user_db = db.get_or_create_user(user_id, update.effective_user.username)
+    if len(context.args) < 2:
+        await _reply(update, "Gunakan `/liability [nama] [nominal]` contoh `/liability cc 3000000`", parse_mode=ParseMode.MARKDOWN)
+        return
+    name = context.args[0]
+    try:
+        amount = float(context.args[1])
+    except Exception:
+        await _reply(update, "Nominal tidak valid.")
+        return
+    ok = personal_finance_ai.set_liability(user_db.id, name, amount)
+    await _reply(update, "Liability tersimpan." if ok else "Gagal simpan liability.")
 
 
 # ---------------------------------------------------------------------------

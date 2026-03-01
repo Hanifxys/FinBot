@@ -315,9 +315,14 @@ class PremiumAIEngine:
 
     def _build_system_prompt(self, user_id: int) -> str:
         persona = self.persona_mgr.get_persona(user_id)
+        fin_profile = self.persona_mgr.get_financial_profile(user_id=user_id)
         categories = ", ".join(CATEGORIES)
         return (
             f"{persona.system_prompt()}\n"
+            f"Financial strategy persona: {fin_profile.get('persona')} | "
+            f"Risk tolerance={fin_profile.get('risk_tolerance')} | "
+            f"Strategy={fin_profile.get('strategy')} | "
+            f"Guardrails={', '.join(fin_profile.get('guardrails', []))}\n"
             f"Available categories: {categories}\n"
             "Rules: respond ONLY in valid JSON. Be concise. Use provided context carefully."
         )
@@ -360,6 +365,20 @@ class PremiumAIEngine:
 
         memory = AIMemory(user_id)
         context_msgs: List[Dict[str, str]] = memory.get_context(limit=10)
+        try:
+            from core import personal_finance_ai, db
+
+            user_db = db.get_user(user_id)
+            if user_db:
+                narrative = personal_finance_ai.long_term_narrative(user_id, user_db.id)
+                context_msgs.append(
+                    {
+                        "role": "system",
+                        "content": "Long-term behavior narrative: " + "; ".join(narrative.get("narrative", [])),
+                    }
+                )
+        except Exception:
+            pass
         context_str = "\n".join(f"{m['role']}: {m['content']}" for m in context_msgs)
 
         system_prompt = self._build_system_prompt(user_id)

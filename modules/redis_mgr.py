@@ -3,7 +3,12 @@ import logging
 import os
 import time
 
-import redis
+try:
+    import redis
+    REDIS_LIB_AVAILABLE = True
+except Exception:
+    redis = None
+    REDIS_LIB_AVAILABLE = False
 
 from config import REDIS_URL
 
@@ -21,7 +26,7 @@ class RedisManager:
         self._cb_threshold = int(os.getenv("REDIS_CB_THRESHOLD", "3"))
         self._cb_cooldown_seconds = int(os.getenv("REDIS_CB_COOLDOWN_SECONDS", "15"))
 
-        if self.url:
+        if self.url and REDIS_LIB_AVAILABLE:
             try:
                 self.client = redis.from_url(self.url, decode_responses=True)
                 self.client.ping()
@@ -30,6 +35,8 @@ class RedisManager:
             except Exception as e:
                 logging.error("Redis connection failed: %s. Falling back to in-memory.", e)
                 self.client = None
+        elif self.url and not REDIS_LIB_AVAILABLE:
+            logging.warning("Redis package not installed. Using in-memory fallback.")
         else:
             logging.warning("REDIS_URL not found. Using in-memory cache (non-persistent).")
 

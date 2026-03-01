@@ -21,6 +21,7 @@ from modules.ux_analytics import UXAnalytics
 from modules.recurring import RecurringManager
 from modules.budget_autopilot import BudgetAutopilot
 from modules.weekly_challenges import WeeklyChallengeManager
+from modules.personal_finance_ai import PersonalFinanceAI
 
 # Initialize Shared instances properly
 db = DBHandler()
@@ -43,6 +44,7 @@ ux_analytics = UXAnalytics()
 recurring_mgr = RecurringManager(db)
 autopilot_mgr = BudgetAutopilot(db)
 weekly_challenges = WeeklyChallengeManager()
+personal_finance_ai = PersonalFinanceAI(db, persona_mgr)
 
 # Global WebSocket Server Instance
 ws_server = WebSocketServer(port=int(os.getenv("WS_PORT", 8001)))
