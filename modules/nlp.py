@@ -2049,7 +2049,10 @@ class NLPProcessor:
         words = text.split()
         if len(words) < 5:
             state["impulsivity_signal"] += 0.3
-        if amount > 1000000: # Threshold for 'high amount' heuristic
+        
+        # Safe check for amount
+        safe_amount = amount if amount is not None else 0.0
+        if safe_amount > 1000000: # Threshold for 'high amount' heuristic
             state["impulsivity_signal"] += 0.4
         if intent == "ADD_TRANSACTION" and len(words) < 3:
             state["impulsivity_signal"] += 0.3

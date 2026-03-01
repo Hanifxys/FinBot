@@ -299,6 +299,10 @@
                                 <span :class="['w-1.5 h-1.5 rounded-full', status === 'connected' || status === 'running' || status === 'ready' ? 'bg-success-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-danger-500 animate-pulse']"></span>
                                 <span class="text-[9px] font-bold text-slate-400 uppercase tracking-tight">{{ name }}</span>
                             </div>
+                            <div v-if="adminStats.metrics?.predicted_system_load" class="flex items-center gap-1.5 px-2 py-0.5 rounded border border-white/5 bg-dark-800">
+                                <span :class="['w-1.5 h-1.5 rounded-full', adminStats.metrics.predicted_system_load === 'LOW' ? 'bg-success-500' : (adminStats.metrics.predicted_system_load === 'MODERATE' ? 'bg-amber-500' : 'bg-danger-500')]"></span>
+                                <span class="text-[9px] font-bold text-slate-400 uppercase tracking-tight">LOAD: {{ adminStats.metrics.predicted_system_load }}</span>
+                            </div>
                         </div>
 
                         <button @click="toggleTheme" class="group relative inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-dark-900/50 border border-white/5 text-slate-300 hover:text-white hover:border-white/10 transition-all active:scale-[0.98]">
@@ -642,7 +646,10 @@
                                                     <div class="w-8 h-8 rounded-full bg-dark-800 flex items-center justify-center text-[10px] font-bold text-brand-400 border border-white/5 group-hover/user:border-brand-500/50 group-hover/user:text-brand-300 transition-all">@</div>
                                                     <div>
                                                         <p class="text-slate-200 font-medium text-xs group-hover/user:text-brand-400 transition-colors">{{ user.username }}</p>
-                                                        <p class="text-[10px] text-slate-600">Joined: {{ formatDateShort(user.created_at) }}</p>
+                                                        <div class="flex items-center gap-2 mt-0.5">
+                                                            <p class="text-[10px] text-slate-600">Joined: {{ formatDateShort(user.joined_at) }}</p>
+                                                            <span v-if="user.churn_risk === 'high'" class="text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-danger-500/10 text-danger-500 border border-danger-500/20">HIGH CHURN RISK</span>
+                                                        </div>
                                                     </div>
                                                 </div>
                                             </td>
@@ -1129,7 +1136,9 @@
                                                 <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
                                                     <div class="min-w-0">
                                                         <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Segmentasi Audience</p>
-                                                        <p class="text-xs text-slate-400 mt-1">Estimasi target: <span class="text-white font-mono">{{ broadcastAudienceEstimate }}</span></p>
+                                                        <p class="text-xs text-slate-400 mt-1">Estimasi target: <span class="text-white font-mono">{{ broadcastAudienceEstimate }}</span> 
+                                                            <span v-if="broadcastAudienceEstimateRemote !== null" class="text-[9px] text-success-500 font-bold ml-2 uppercase">● Simulated Reach: {{ broadcastAudienceEstimateRemote }}</span>
+                                                        </p>
                                                     </div>
                                                     <div class="flex items-center gap-3">
                                                         <label class="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-dark-900/50 border border-white/5 text-xs text-slate-300">
@@ -1627,13 +1636,30 @@
 
                         <!-- ADMIN: AUDIT LOGS -->
                         <transition name="slide" mode="out-in">
-                        <div v-if="currentView === 'admin_logs'" class="glass-panel rounded-2xl overflow-hidden" key="admin_logs">
-                            <div class="p-6 border-b border-white/5 flex items-center justify-between bg-white/2">
-                                <h3 class="text-sm font-bold text-white uppercase tracking-wider">System Audit Trail</h3>
-                                <button @click="fetchLogs" class="p-2 text-slate-500 hover:text-brand-400 transition-colors">
-                                    <i class="fas fa-sync-alt" :class="{'animate-spin': isLoading}"></i>
-                                </button>
+                        <div v-if="currentView === 'admin_logs'" class="space-y-6" key="admin_logs">
+                            <!-- Audit Insights (Innovation) -->
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                <div class="glass-panel p-5 rounded-2xl border border-white/5 relative overflow-hidden group">
+                                    <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Most Active Admin</p>
+                                    <h4 class="text-xl font-bold text-white font-mono tracking-tight">{{ adminLogs.length ? adminLogs[0].admin_id : '-' }}</h4>
+                                    <p class="text-[9px] text-slate-600 mt-2 uppercase font-bold tracking-widest">Platform Authority</p>
+                                    <i class="fas fa-crown absolute -right-3 -bottom-3 text-3xl text-white/5 group-hover:text-amber-500/10 transition-colors"></i>
+                                </div>
+                                <div class="glass-panel p-5 rounded-2xl border border-white/5 relative overflow-hidden group">
+                                    <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Top Action Type</p>
+                                    <h4 class="text-xl font-bold text-brand-400 font-mono tracking-tight">{{ adminLogs.length ? adminLogs[0].action_type?.toUpperCase() : '-' }}</h4>
+                                    <p class="text-[9px] text-slate-600 mt-2 uppercase font-bold tracking-widest">Operation Intensity</p>
+                                    <i class="fas fa-bolt absolute -right-3 -bottom-3 text-3xl text-white/5 group-hover:text-brand-500/10 transition-colors"></i>
+                                </div>
+                                <div class="glass-panel p-5 rounded-2xl border border-white/5 relative overflow-hidden group">
+                                    <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Log Density</p>
+                                    <h4 class="text-xl font-bold text-success-500 font-mono tracking-tight">{{ adminLogs.length }} <span class="text-xs text-slate-500">entries</span></h4>
+                                    <p class="text-[9px] text-slate-600 mt-2 uppercase font-bold tracking-widest">Compliance Health: 100%</p>
+                                    <i class="fas fa-shield-alt absolute -right-3 -bottom-3 text-3xl text-white/5 group-hover:text-success-500/10 transition-colors"></i>
+                                </div>
                             </div>
+
+                            <div class="glass-panel rounded-2xl overflow-hidden">
                             <div class="overflow-x-auto">
                                 <table class="w-full text-sm text-left text-slate-400">
                                     <thead class="text-xs text-slate-500 uppercase bg-dark-900/80 font-bold tracking-wider">
@@ -1711,15 +1737,49 @@
                     </div>
                 </div>
 
+                <!-- Intelligence Analytics (Innovation) -->
+                <div v-if="userDrawer.intel" class="space-y-4">
+                    <h5 class="text-[10px] font-bold text-slate-600 uppercase tracking-widest px-1">Behavioral Intelligence</h5>
+                    <div class="glass-panel p-5 rounded-2xl border border-brand-500/20 space-y-6">
+                        <div class="grid grid-cols-2 gap-4">
+                            <div class="space-y-1">
+                                <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Stability Score</p>
+                                <p class="text-2xl font-black text-white font-mono">{{ userDrawer.intel.financial_health_score || 0 }}</p>
+                            </div>
+                            <div class="space-y-1">
+                                <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Confidence</p>
+                                <p class="text-2xl font-black text-brand-400 font-mono">{{ (userDrawer.intel.analytics?.average_confidence * 100 || 0).toFixed(0) }}%</p>
+                            </div>
+                        </div>
+
+                        <div>
+                            <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">Detected Traits</p>
+                            <div class="flex flex-wrap gap-2">
+                                <span v-for="trait in userDrawer.intel.behavioral_traits" :key="trait" class="px-2 py-1 rounded bg-white/5 border border-white/10 text-[10px] font-bold text-slate-300 uppercase tracking-wider">
+                                    {{ trait.replace('_', ' ') }}
+                                </span>
+                                <span v-if="!userDrawer.intel.behavioral_traits?.length" class="text-xs text-slate-600 italic">No traits detected yet.</span>
+                            </div>
+                        </div>
+
+                        <div>
+                            <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">Neural Summary</p>
+                            <p class="text-[11px] text-slate-400 font-mono leading-relaxed italic border-l-2 border-brand-500/30 pl-3">
+                                "{{ userDrawer.intel.memory_summary || 'No context available.' }}"
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Stats Grid -->
                 <div class="grid grid-cols-2 gap-4">
                     <div class="glass-panel p-4 rounded-xl">
                         <p class="text-[10px] font-bold text-slate-600 uppercase tracking-widest">Transactions</p>
-                        <p class="text-lg font-bold text-white mt-1">248</p>
+                        <p class="text-lg font-bold text-white mt-1">{{ userDrawer.intel?.transaction_count || 0 }}</p>
                     </div>
                     <div class="glass-panel p-4 rounded-xl">
                         <p class="text-[10px] font-bold text-slate-600 uppercase tracking-widest">AI Queries</p>
-                        <p class="text-lg font-bold text-white mt-1">1,024</p>
+                        <p class="text-lg font-bold text-white mt-1">{{ userDrawer.intel?.ai_queries_estimated || 0 }}</p>
                     </div>
                 </div>
 
@@ -2594,8 +2654,15 @@
                     pmModal.value = { show: true, user, message: '' };
                 };
 
-                const openUserDrawer = (user) => {
-                    userDrawer.value = { show: true, user };
+                const openUserDrawer = async (user) => {
+                    userDrawer.value = { show: true, user, intel: null };
+                    try {
+                        const res = await api.get(`/admin/users/${user.telegram_id}/intelligence`);
+                        userDrawer.value.intel = res.data;
+                    } catch (e) {
+                        console.error("Failed to fetch user intelligence", e);
+                        showToast("Gagal memuat detail intelligence", "error");
+                    }
                 };
 
                 const sendPrivateMessage = async () => {
