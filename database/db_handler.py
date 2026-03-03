@@ -128,6 +128,24 @@ class DBHandler:
         users = [self._entity_from_row(Tables.USERS, item, "User") for item in response.data]
         return users, response.count
 
+    def get_filtered_user_count(self, active_only: bool = False, roles: List[str] = None, username_contains: str = None, include_ids: List[int] = None, exclude_ids: List[int] = None) -> int:
+        """Efficiently count users matching criteria without fetching data."""
+        query = self.supabase.table(Tables.USERS).select("*", count="exact").limit(0)
+        
+        if active_only:
+            query = query.eq("is_active", True)
+        if roles:
+            query = query.in_("role", roles)
+        if username_contains:
+            query = query.ilike("username", f"%{username_contains}%")
+        if include_ids:
+            query = query.in_("telegram_id", include_ids)
+        if exclude_ids:
+            query = query.not_.in_("telegram_id", exclude_ids)
+            
+        response = self._safe_execute(query)
+        return response.count
+
     def get_daily_transactions(self, user_id, date_obj):
         start_time = datetime.combine(date_obj, datetime.min.time()).isoformat()
         end_time = datetime.combine(date_obj, datetime.max.time()).isoformat()
