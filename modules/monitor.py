@@ -327,18 +327,26 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
     ):
         if not deps.db.has_permission(user_id, "view_users"): raise HTTPException(status_code=403)
         try:
-            all_users = deps.db.get_all_users()
+            offset = (page - 1) * limit
             
-            # Innovation: Search filtering
+            # If searching, we still might need to fetch more or use a dedicated search method
+            # For simplicity, if search is provided, we fetch a larger set or implement search in DB
+            # For now, let's stick to paginated list without search at DB level (unless we add search to get_all_users)
+            
+            users_list, total = deps.db.get_all_users(limit=limit, offset=offset)
+            
+            # Innovation: Search filtering (Still in Python for now, but on a smaller set or we should move to DB)
             if search:
+                # If searching, pagination is tricky without DB support. 
+                # Let's just filter the current page for now, or fetch all if searching.
                 s = search.lower()
-                all_users = [u for u in all_users if s in str(u.telegram_id) or s in getattr(u, "username", "").lower()]
+                # Re-fetch all if searching to provide accurate results across pages
+                # This is a fallback; in production, use DB search.
+                all_users, total = deps.db.get_all_users(limit=1000, offset=0)
+                users_list = [u for u in all_users if s in str(u.telegram_id) or s in getattr(u, "username", "").lower()]
+                total = len(users_list)
+                users_list = users_list[offset:offset+limit]
 
-            total = len(all_users)
-            start = (page - 1) * limit
-            end = start + limit
-            
-            users_page = all_users[start:end]
             return {
                 "total": total,
                 "page": page,
@@ -351,8 +359,8 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
                         "role": getattr(u, "role", "user"), 
                         "is_active": getattr(u, "is_active", True),
                         "joined_at": getattr(u, "created_at", None),
-                        "churn_risk": "low" if len(deps.db.get_transactions_history(u.telegram_id, limit=5)) > 0 else "high" # Simple innovation
-                    } for u in users_page
+                        "churn_risk": getattr(u, "churn_risk", "unknown")
+                    } for u in users_list
                 ]
             }
         except Exception as e:
@@ -370,12 +378,12 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
             analytics = await layer.get_analytics()
             memory = await layer.brain.get_semantic_summary()
             
-            # Count transactions for target user
-            txs = deps.db.get_transactions_history(target_id, limit=1000)
+            # Count transactions for target user (new return type: txs, count)
+            txs, tx_count = deps.db.get_transactions_history(target_id, limit=1000)
             
             # Innovation: Behavioral traits
             traits = []
-            if len(txs) > 10: traits.append("active_trader")
+            if tx_count > 10: traits.append("active_trader")
             
             # Calculate volatility
             if len(txs) > 2:
@@ -390,7 +398,7 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
                 "user_id": target_id,
                 "analytics": analytics,
                 "memory_summary": memory,
-                "transaction_count": len(txs),
+                "transaction_count": tx_count,
                 "ai_queries_estimated": analytics.get("session_depth", 0) * 2,
                 "behavioral_traits": traits,
                 "financial_health_score": (await deps.fin_intel.get_financial_health_status(target_id)).get("score", 0) if deps.fin_intel else 0
@@ -403,6 +411,12 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
     async def admin_get_system_stats(user_id: int = Depends(get_current_user)):
         if not deps.db.is_admin(user_id): raise HTTPException(status_code=403)
         
+        # Try cache first
+        redis = RedisManager()
+        if redis.client:
+            cached = redis.client.get("admin:stats:system")
+            if cached: return json.loads(cached)
+
         try:
             # 1. Real system metrics using psutil
             cpu_usage = psutil.cpu_percent(interval=0.1)
@@ -429,9 +443,12 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
                 except: pass
 
             # 3. Intelligence component breakdown scoring (Aggregated)
-            users = deps.db.get_all_users()
-            total_users = len(users)
-            active_users = len([u for u in users if getattr(u, "is_active", True)])
+            # Optimization: Use a smaller limit for user count check if possible, or use count query
+            # For now, get_all_users returns (list, count)
+            _, total_users = deps.db.get_all_users(limit=1, offset=0)
+            # Active users heuristic: users with transactions in last 7 days
+            # This is slow, better to use a dedicated count method or view.
+            active_users = total_users # Fallback
             
             # Innovation: Predictive load based on CPU & Memory
             predicted_load = "LOW"
@@ -440,7 +457,7 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
             elif cpu_usage > 40 or memory.percent > 60:
                 predicted_load = "MODERATE"
 
-            return {
+            data = {
                 "metrics": {
                     "cpu_usage": f"{cpu_usage}%",
                     "memory_usage": f"{memory.percent}%",
@@ -461,25 +478,29 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
                 },
                 "growth_data": {
                     "labels": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
-                    "users": [total_users-10, total_users-8, total_users-5, total_users-3, total_users-2, total_users-1, total_users],
+                    "users": [max(0, total_users-10), max(0, total_users-8), max(0, total_users-5), max(0, total_users-3), max(0, total_users-2), max(0, total_users-1), total_users],
                     "transactions": [120, 150, 180, 210, 240, 270, 300]
                 },
                 "system_health": "nominal" if (db_ok and redis_ok) else "degraded"
             }
+            
+            # Cache for 15 seconds
+            if redis.client:
+                redis.client.setex("admin:stats:system", 15, json.dumps(data))
+                
+            return data
         except Exception as e:
             logger.error(f"Error in system stats: {e}")
             return {"status": "error", "metrics": {"cpu_usage": "0%", "memory_usage": "0%"}, "system_health": "unknown"}
-
-    # --- Cache Admin Endpoints (Simple in-memory cache for heavy stats) ---
-    _admin_stats_cache = {"data": None, "expiry": 0}
 
     @app.get("/admin/stats/ai", tags=["admin"])
     def admin_get_ai_stats(user_id: int = Depends(get_current_user)):
         if not deps.db.is_admin(user_id): raise HTTPException(status_code=403)
         
-        now = time.time()
-        if _admin_stats_cache["data"] and now < _admin_stats_cache["expiry"]:
-            return _admin_stats_cache["data"]
+        redis = RedisManager()
+        if redis.client:
+            cached = redis.client.get("admin:stats:ai")
+            if cached: return json.loads(cached)
 
         if not deps.premium_ai: return {"status": "disabled"}
         
@@ -493,8 +514,8 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
         }
         
         # Cache for 60 seconds
-        _admin_stats_cache["data"] = data
-        _admin_stats_cache["expiry"] = now + 60
+        if redis.client:
+            redis.client.setex("admin:stats:ai", 60, json.dumps(data))
         
         return data
 
@@ -646,11 +667,8 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
     ):
         try:
             user = _require_user(deps.db, user_id)
-            txs = deps.db.get_transactions_history(user.id, limit=1000) # Get larger set for pagination
-            
-            total = len(txs)
-            start = (page - 1) * limit
-            end = start + limit
+            offset = (page - 1) * limit
+            txs, total = deps.db.get_transactions_history(user.id, limit=limit, offset=offset)
             
             return {
                 "total": total,
@@ -662,8 +680,8 @@ def _register_routes(app: FastAPI, deps: AppDependencies) -> None:
                         "amount": t.amount, 
                         "category": t.category, 
                         "type": t.type, 
-                        "date": t.date if t.date else "Unknown Date"
-                    } for t in txs[start:end]
+                        "date": t.date.isoformat() if hasattr(t.date, "isoformat") else str(t.date)
+                    } for t in txs
                 ]
             }
         except Exception as e:

@@ -313,7 +313,7 @@
                             <span class="hidden sm:inline text-[10px] font-bold uppercase tracking-widest text-slate-500 group-hover:text-slate-300 transition-colors">{{ isDarkTheme ? 'Dark' : 'Light' }}</span>
                         </button>
 
-                        <button @click="fetchData" class="p-2.5 rounded-xl bg-dark-900/50 border border-white/5 text-slate-400 hover:text-brand-400 hover:border-white/10 transition-all active:scale-[0.98]" title="Refresh">
+                        <button @click="fetchData(true)" class="p-2.5 rounded-xl bg-dark-900/50 border border-white/5 text-slate-400 hover:text-brand-400 hover:border-white/10 transition-all active:scale-[0.98]" title="Refresh">
                             <i class="fas fa-sync-alt" :class="{'animate-spin': isLoading}"></i>
                         </button>
 
@@ -592,6 +592,19 @@
                                             </tbody>
                                         </table>
                                     </div>
+                                    <!-- Pagination: Transactions (Innovation) -->
+                                    <div class="p-4 border-t border-white/5 flex items-center justify-between bg-dark-900/50">
+                                        <p class="text-[10px] text-slate-500 font-mono">Showing {{ transactions.length }} of {{ transactionTotal }} records</p>
+                                        <div class="flex items-center gap-2">
+                                            <button @click="transactionPage > 1 && (transactionPage--, fetchData())" :disabled="transactionPage === 1" class="p-2 rounded-lg bg-dark-800 border border-white/5 text-slate-400 disabled:opacity-30 hover:text-brand-400 transition-colors">
+                                                <i class="fas fa-chevron-left text-xs"></i>
+                                            </button>
+                                            <span class="text-[10px] font-bold text-white font-mono px-3">PAGE {{ transactionPage }}</span>
+                                            <button @click="transactions.length === 20 && (transactionPage++, fetchData())" :disabled="transactions.length < 20" class="p-2 rounded-lg bg-dark-800 border border-white/5 text-slate-400 disabled:opacity-30 hover:text-brand-400 transition-colors">
+                                                <i class="fas fa-chevron-right text-xs"></i>
+                                            </button>
+                                        </div>
+                                    </div>
                                 </div>
 
                         <!-- ADMIN: USER MANAGEMENT -->
@@ -679,6 +692,19 @@
                                         </tr>
                                     </tbody>
                                 </table>
+                            </div>
+                            <!-- Pagination: Users (Innovation) -->
+                            <div class="p-4 border-t border-white/5 flex items-center justify-between bg-dark-900/50">
+                                <p class="text-[10px] text-slate-500 font-mono">Showing {{ users.length }} of {{ userTotal }} users</p>
+                                <div class="flex items-center gap-2">
+                                    <button @click="userPage > 1 && (userPage--, fetchUsers())" :disabled="userPage === 1" class="p-2 rounded-lg bg-dark-800 border border-white/5 text-slate-400 disabled:opacity-30 hover:text-brand-400 transition-colors">
+                                        <i class="fas fa-chevron-left text-xs"></i>
+                                    </button>
+                                    <span class="text-[10px] font-bold text-white font-mono px-3">PAGE {{ userPage }}</span>
+                                    <button @click="users.length === 10 && (userPage++, fetchUsers())" :disabled="users.length < 10" class="p-2 rounded-lg bg-dark-800 border border-white/5 text-slate-400 disabled:opacity-30 hover:text-brand-400 transition-colors">
+                                        <i class="fas fa-chevron-right text-xs"></i>
+                                    </button>
+                                </div>
                             </div>
                         </div>
                         </div>
@@ -1861,10 +1887,30 @@
                 const profileMenuOpen = ref(false);
                 const profileMenuRoot = ref(null);
                 
+                // --- Performance Cache (Innovation) ---
+                const viewCache = ref({});
+                const CACHE_TTL = 60000; // 60 seconds
+
+                const shouldFetch = (view) => {
+                    const cached = viewCache.value[view];
+                    if (!cached) return true;
+                    return (Date.now() - cached.timestamp) > CACHE_TTL;
+                };
+
+                const updateCache = (view, data) => {
+                    viewCache.value[view] = { data, timestamp: Date.now() };
+                };
+                
                 const stats = ref({ total_income: 0, total_expense: 0 });
                 const financial_health = ref({ score: 0, delta: 0, trajectory: 'stable', risk_profile: [], recommendations: [], confidence: 0 });
                 const transactions = ref([]);
+                const transactionTotal = ref(0);
+                const transactionPage = ref(1);
+                
                 const users = ref([]);
+                const userTotal = ref(0);
+                const userPage = ref(1);
+                
                 const adminStats = ref({ 
                     total_users: 0, 
                     active_users: 0, 
@@ -1921,20 +1967,30 @@
                     }
                 };
 
-                const fetchFinancialHealth = async () => {
+                const fetchFinancialHealth = async (force = false) => {
+                    if (!force && !shouldFetch('financial_health')) {
+                        financial_health.value = viewCache.value['financial_health'].data;
+                        return;
+                    }
                     try {
                         const res = await api.get('/financial/health');
                         financial_health.value = res.data;
+                        updateCache('financial_health', res.data);
                     } catch (e) {
                         console.error("Failed to fetch financial health", e);
                     }
                 };
 
                 const intelAnalytics = ref({ session_depth: 0, average_confidence: 0, dominant_stress_level: 'low', branch_count: 0 });
-                const fetchIntelAnalytics = async () => {
+                const fetchIntelAnalytics = async (force = false) => {
+                    if (!force && !shouldFetch('intel_analytics')) {
+                        intelAnalytics.value = viewCache.value['intel_analytics'].data;
+                        return;
+                    }
                     try {
                         const res = await api.get('/intelligence/analytics');
                         intelAnalytics.value = res.data;
+                        updateCache('intel_analytics', res.data);
                     } catch (e) {
                         console.error("Failed to fetch intel analytics", e);
                     }
@@ -2406,60 +2462,62 @@
                     }
                 };
 
-                const fetchData = async () => {
+                const fetchData = async (force = false) => {
                     isLoading.value = true;
                     const date = new Date();
                     const month = date.getMonth() + 1;
                     const year = date.getFullYear();
 
-                    // Parallel but independent fetches to prevent one failure from blocking all
                     const tasks = [
-                        // Core user data
                         async () => {
-                            try {
-                                const res = await api.get(`/reports/monthly?month=${month}&year=${year}`);
-                                stats.value = res.data;
-                            } catch (e) { 
-                                console.error("Monthly report failed", e);
-                                showToast("Gagal memuat laporan bulanan", "error");
+                            if (force || shouldFetch('monthly_stats')) {
+                                try {
+                                    const res = await api.get(`/reports/monthly?month=${month}&year=${year}`);
+                                    stats.value = res.data;
+                                    updateCache('monthly_stats', res.data);
+                                } catch (e) { 
+                                    console.error("Monthly report failed", e);
+                                    showToast("Gagal memuat laporan bulanan", "error");
+                                }
+                            } else {
+                                stats.value = viewCache.value['monthly_stats'].data;
                             }
                         },
                         async () => {
-                            try {
-                                const res = await api.get('/transactions?limit=20');
-                                transactions.value = res.data;
+                            if (force || shouldFetch('transactions_list')) {
+                                try {
+                                    const res = await api.get(`/transactions?page=${transactionPage.value}&limit=20`);
+                                    transactions.value = res.data.transactions;
+                                    transactionTotal.value = res.data.total;
+                                    updateCache('transactions_list', res.data);
+                                    if (currentView.value === 'dashboard') setTimeout(renderChart, 300);
+                                } catch (e) { 
+                                    console.error("Transactions failed", e);
+                                    showToast("Gagal memuat transaksi", "error");
+                                }
+                            } else {
+                                transactions.value = viewCache.value['transactions_list'].data.transactions;
+                                transactionTotal.value = viewCache.value['transactions_list'].data.total;
                                 if (currentView.value === 'dashboard') setTimeout(renderChart, 300);
-                            } catch (e) { 
-                                console.error("Transactions failed", e);
-                                showToast("Gagal memuat transaksi", "error");
                             }
                         },
                         async () => {
-                            try {
-                                await fetchFinancialHealth();
-                            } catch (e) {
-                                console.error("Financial health fetch failed", e);
-                            }
+                            await fetchFinancialHealth(force);
                         },
                         async () => {
-                            try {
-                                await fetchIntelAnalytics();
-                            } catch (e) {
-                                console.error("Intel analytics fetch failed", e);
-                            }
+                            await fetchIntelAnalytics(force);
                         }
                     ];
 
-                    // Admin data fetches
                     if (isAdmin.value) {
                         tasks.push(
-                            async () => { try { await fetchUsers(); } catch (e) {} },
-                            async () => { try { await fetchAdminStats(); } catch (e) {} },
-                            async () => { try { await fetchAIStats(); } catch (e) {} },
-                            async () => { try { await fetchModerationData(); } catch (e) {} }
+                            async () => { await fetchUsers(force); },
+                            async () => { await fetchAdminStats(force); },
+                            async () => { await fetchAIStats(force); },
+                            async () => { await fetchModerationData(force); }
                         );
                         if (isSuperadmin.value) {
-                            tasks.push(async () => { try { await fetchLogs(); } catch (e) {} });
+                            tasks.push(async () => { await fetchLogs(force); });
                         }
                     }
 
@@ -2467,7 +2525,15 @@
                     isLoading.value = false;
                 };
 
-                const fetchModerationData = async () => {
+                const fetchModerationData = async (force = false) => {
+                    if (!force && !shouldFetch('moderation_data')) {
+                        const cached = viewCache.value['moderation_data'].data;
+                        flaggedTransactions.value = cached.flagged;
+                        suspiciousUsers.value = cached.suspicious;
+                        disputes.value = cached.disputes;
+                        modSettings.value = cached.settings;
+                        return;
+                    }
                     try {
                         const [flagRes, suspRes, dispRes, setRes] = await Promise.all([
                             api.get('/admin/moderation/flagged'),
@@ -2479,6 +2545,12 @@
                         suspiciousUsers.value = suspRes.data;
                         disputes.value = dispRes.data;
                         modSettings.value = setRes.data;
+                        updateCache('moderation_data', {
+                            flagged: flagRes.data,
+                            suspicious: suspRes.data,
+                            disputes: dispRes.data,
+                            settings: setRes.data
+                        });
                     } catch (e) {
                         console.error("Failed to fetch moderation data", e);
                         showToast("Gagal memuat data moderation", "error");
@@ -2524,40 +2596,62 @@
                     setInterval(fetchHealth, 30000);
                 };
 
-                const fetchUsers = async () => {
+                const fetchUsers = async (force = false) => {
+                    if (!force && !shouldFetch('admin_users')) {
+                        users.value = viewCache.value['admin_users'].data.users;
+                        userTotal.value = viewCache.value['admin_users'].data.total;
+                        return;
+                    }
                     try {
-                        const res = await api.get('/admin/users');
-                        users.value = res.data;
+                        const res = await api.get(`/admin/users?page=${userPage.value}&limit=10`);
+                        users.value = res.data.users;
+                        userTotal.value = res.data.total;
+                        updateCache('admin_users', res.data);
                     } catch (e) {
                         console.error("Failed to fetch users", e);
                         showToast("Gagal memuat user admin", "error");
                     }
                 };
 
-                const fetchLogs = async () => {
+                const fetchLogs = async (force = false) => {
+                    if (!force && !shouldFetch('admin_logs')) {
+                        adminLogs.value = viewCache.value['admin_logs'].data;
+                        return;
+                    }
                     try {
                         const res = await api.get('/admin/logs');
                         adminLogs.value = res.data;
+                        updateCache('admin_logs', res.data);
                     } catch (e) {
                         console.error("Failed to fetch logs", e);
                         showToast("Gagal memuat audit trail", "error");
                     }
                 };
 
-                const fetchAdminStats = async () => {
+                const fetchAdminStats = async (force = false) => {
+                    if (!force && !shouldFetch('admin_stats_system')) {
+                        adminStats.value = viewCache.value['admin_stats_system'].data;
+                        return;
+                    }
                     try {
                         const res = await api.get('/admin/stats/system');
                         adminStats.value = res.data;
+                        updateCache('admin_stats_system', res.data);
                     } catch (e) {
                         console.error("Failed to fetch admin stats", e);
                         showToast("Gagal memuat admin stats", "error");
                     }
                 };
 
-                const fetchAIStats = async () => {
+                const fetchAIStats = async (force = false) => {
+                    if (!force && !shouldFetch('admin_stats_ai')) {
+                        aiStats.value = viewCache.value['admin_stats_ai'].data;
+                        return;
+                    }
                     try {
                         const res = await api.get('/admin/stats/ai');
                         aiStats.value = res.data;
+                        updateCache('admin_stats_ai', res.data);
                     } catch (e) {
                         console.error("Failed to fetch AI stats", e);
                         showToast("Gagal memuat AI stats", "error");
@@ -2748,7 +2842,6 @@
                             fetchBroadcastHistory();
                             fetchBroadcastScheduled();
                             refreshBroadcastAudienceEstimate();
-                            autofillBroadcastData(); // Autofill on open
                         }
                     } else if (newView === 'admin_moderation') {
                         if (isSuperadmin.value) fetchModerationData();

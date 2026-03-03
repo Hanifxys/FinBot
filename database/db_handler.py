@@ -119,10 +119,14 @@ class DBHandler:
             return user
         return None
 
-    def get_all_users(self):
-        # Heavy query, consider pagination for scale
-        response = self._safe_execute(self.supabase.table(Tables.USERS).select("*"))
-        return [self._entity_from_row(Tables.USERS, item, "User") for item in response.data]
+    def get_all_users(self, limit: int = 100, offset: int = 0):
+        """Fetch all users with pagination support."""
+        query = self.supabase.table(Tables.USERS).select("*", count="exact")\
+            .order("created_at", desc=True)\
+            .range(offset, offset + limit - 1)
+        response = self._safe_execute(query)
+        users = [self._entity_from_row(Tables.USERS, item, "User") for item in response.data]
+        return users, response.count
 
     def get_daily_transactions(self, user_id, date_obj):
         start_time = datetime.combine(date_obj, datetime.min.time()).isoformat()
@@ -279,8 +283,8 @@ class DBHandler:
             .eq("user_id", user_id).eq("month", now.month).eq("year", now.year))
         return [type('Budget', (object,), item) for item in response.data]
 
-    def get_transactions_history(self, user_id, limit=50, category=None, start_date=None, end_date=None, min_amount=None):
-        query = self.supabase.table(Tables.TRANSACTIONS).select("*").eq("user_id", user_id)
+    def get_transactions_history(self, user_id, limit=50, offset=0, category=None, start_date=None, end_date=None, min_amount=None):
+        query = self.supabase.table(Tables.TRANSACTIONS).select("*", count="exact").eq("user_id", user_id)
         
         if category:
             query = query.ilike("category", f"%{category}%")
@@ -291,8 +295,9 @@ class DBHandler:
         if min_amount:
             query = query.gte("amount", float(min_amount))
             
-        response = self._safe_execute(query.order("date", desc=True).limit(limit))
-        return [type('Transaction', (object,), self._decrypt_tx(item)) for item in response.data]
+        response = self._safe_execute(query.order("date", desc=True).range(offset, offset + limit - 1))
+        txs = [type('Transaction', (object,), self._decrypt_tx(item)) for item in response.data]
+        return txs, response.count
 
     def delete_transaction(self, user_id, transaction_id):
         response = self._safe_execute(self.supabase.table(Tables.TRANSACTIONS).select("*")\
