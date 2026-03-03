@@ -1,5 +1,6 @@
 import time
 import asyncio
+from typing import List, Optional, Dict, Any
 from .models import get_supabase, Tables
 from datetime import datetime, timedelta
 import logging
